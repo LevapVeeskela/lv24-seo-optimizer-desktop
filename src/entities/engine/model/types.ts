@@ -24,6 +24,8 @@ export interface ShellPaths {
   appConfigDir?: string;
   appDataDir?: string;
   logDir?: string;
+  /** App-owned export directory accepted by `write_text_file`. */
+  exportDir?: string;
 }
 
 export interface ShellStatus {
@@ -34,6 +36,8 @@ export interface ShellStatus {
   dataDir?: string | null;
   platform?: string;
   arch?: string;
+  /** Installed bundle type reported by the shell: deb, rpm, appimage, msi, nsis, app or unknown. */
+  bundleKind?: string | null;
   paths?: ShellPaths;
 }
 

@@ -18,7 +18,7 @@ Desktop shell and sidecar work additionally needs Rust stable, Python 3.12 and
 
 ```bash
 npm run tauri dev
-python scripts/build-sidecar.py --engine-version 0.5.0
+python scripts/build-sidecar.py --engine-version 0.5.1
 node scripts/check-contracts.mjs
 cd src-tauri && cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test
 ```
@@ -69,8 +69,8 @@ cd src-tauri && cargo fmt --check && cargo clippy --all-targets -- -D warnings &
 - `contracts/config.schema.json` and `contracts/cli-v1/*.json` are generated from the pinned
   `lv24-seo`; never hand-edit them.
 - Change the pin in `scripts/cli-checksums.json` and run `node scripts/check-contracts.mjs --update`.
-- `contracts/stats-v1.md` is a draft until the engine ships `lv24-seo stats`. Do not generate a
-  fixture for a command that does not exist.
+- `contracts/stats-v1.md` documents the shipped `lv24-seo stats --json` shape. Keep its fixture
+  in sync when the engine changes the command.
 - Fixtures must be synthetic, deterministic and free of secrets, personal data and real queries.
 
 ## Sidecar

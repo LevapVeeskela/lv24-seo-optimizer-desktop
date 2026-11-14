@@ -3,6 +3,7 @@
     "missing": [
       "gsc",
       "yandex",
+      "metrika",
       "bing",
       "crux",
       "psi",
@@ -23,6 +24,13 @@
         "present": false,
         "provider": "yandex",
         "secret": "yandex_webmaster_token",
+        "source": "missing"
+      },
+      {
+        "expires_at": null,
+        "present": false,
+        "provider": "metrika",
+        "secret": "yandex_metrika_token",
         "source": "missing"
       },
       {
@@ -63,7 +71,7 @@
     ]
   },
   "meta": {
-    "version": "0.5.0"
+    "version": "0.5.1"
   },
   "ok": true,
   "warnings": []

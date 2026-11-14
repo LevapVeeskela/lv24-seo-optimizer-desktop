@@ -21,6 +21,7 @@ import {
   type ReportLocale,
 } from "@/entities/config";
 import { SaveConfigBar } from "@/features/save-config";
+import { UpdatePanel } from "@/features/update";
 import { pickConfigFile } from "@/shared/desktop/settings";
 import {
   SecretModal,
@@ -281,6 +282,7 @@ export const SettingsPage = observer(function SettingsPage() {
             }
           />
         </Card>
+        <UpdatePanel />
       </section>
     );
   }
@@ -886,6 +888,8 @@ export const SettingsPage = observer(function SettingsPage() {
               )}
             </div>
           </Card>
+
+          <UpdatePanel />
 
           {warnings.length ? (
             <Card>

@@ -12,7 +12,7 @@ The generator is intentionally boring and deterministic:
 Run it with the pinned environment, for example::
 
     uv run --python 3.12 \
-      --with 'lv24-seo[secrets]==0.5.0' \
+      --with 'lv24-seo[secrets]==0.5.1' \
       --with 'pydantic==2.14.3' \
       python scripts/gen-contracts.py --check
 

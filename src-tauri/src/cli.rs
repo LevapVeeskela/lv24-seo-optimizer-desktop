@@ -526,6 +526,14 @@ fn is_inherited_env(key: &str) -> bool {
         "SSL_CERT_DIR",
         "REQUESTS_CA_BUNDLE",
         "CURL_CA_BUNDLE",
+        // Secret Service (keyring) needs the session bus and the XDG/TMP paths
+        // on Linux. Without them `auth set` cannot reach the OS keychain.
+        "DBUS_SESSION_BUS_ADDRESS",
+        "XDG_RUNTIME_DIR",
+        "XDG_CONFIG_HOME",
+        "XDG_DATA_HOME",
+        "XDG_CACHE_HOME",
+        "TMPDIR",
     ];
     let upper = key.to_ascii_uppercase();
     ALLOWED.contains(&upper.as_str()) || upper.starts_with("LV24_SEO_")
@@ -1056,6 +1064,25 @@ mod tests {
         assert!(is_inherited_env("LV24_SEO_GSC_TOKEN"));
         assert!(!is_inherited_env("AWS_SECRET_ACCESS_KEY"));
         assert!(!is_inherited_env("GITHUB_TOKEN"));
+    }
+
+    #[test]
+    fn linux_keyring_environment_survives_the_allow_list() {
+        // Secret Service lives on the session bus and resolves sockets under
+        // XDG_RUNTIME_DIR; TMPDIR is used by the keyring crate for its socket.
+        for key in [
+            "DBUS_SESSION_BUS_ADDRESS",
+            "XDG_RUNTIME_DIR",
+            "XDG_CONFIG_HOME",
+            "XDG_DATA_HOME",
+            "XDG_CACHE_HOME",
+            "TMPDIR",
+        ] {
+            assert!(is_inherited_env(key), "{key} must reach the engine");
+        }
+        // The list stays minimal: unrelated credentials are still dropped.
+        assert!(!is_inherited_env("SSH_AUTH_SOCK"));
+        assert!(!is_inherited_env("NPM_TOKEN"));
     }
 
     #[test]

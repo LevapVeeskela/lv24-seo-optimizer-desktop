@@ -55,4 +55,18 @@ export class ReportsStore {
     this.state = "error";
     return false;
   }
+
+  /**
+   * Drop the previous workspace's report. `meta` carries `artifacts.html`, so
+   * clearing it also drops the stale report HTML path shown on the page.
+   */
+  reset(): void {
+    this.generation += 1;
+    this.state = "idle";
+    this.report = null;
+    this.meta = {};
+    this.warnings = [];
+    this.error = null;
+    this.builtAt = null;
+  }
 }

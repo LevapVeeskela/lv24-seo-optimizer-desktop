@@ -134,20 +134,21 @@ export const RecommendationsPage = observer(function RecommendationsPage({
     notify(copy.addedToQueue);
   };
 
-  const exportTask = (id: string) => {
+  const exportTask = async (id: string) => {
     const recommendation = recommendations.find((item) => item.id === id);
     if (!recommendation) {
       return;
     }
-    const ok = exportRecommendationPrompt(
+    const outcome = await exportRecommendationPrompt(
       recommendation,
       context.property,
       context.period,
+      { defaultDir: engine.status?.paths?.exportDir ?? null },
     );
-    if (ok) {
+    if (outcome === "exported") {
       queue.markExported(id);
       notify(copy.exported);
-    } else {
+    } else if (outcome === "failed") {
       notify(copy.exportFailed, "error");
     }
   };
@@ -383,13 +384,16 @@ export const RecommendationsPage = observer(function RecommendationsPage({
               inQueue={queue.has(recommendation.id)}
               onCopy={() => void copyPrompt(recommendation.id)}
               onAdd={() => addToQueue(recommendation.id)}
-              onExport={() => exportTask(recommendation.id)}
+              onExport={() => void exportTask(recommendation.id)}
             />
           ))}
         </div>
       ) : null}
 
-      <AgentQueue store={queue} />
+      <AgentQueue
+        store={queue}
+        exportDir={engine.status?.paths?.exportDir ?? null}
+      />
 
       <ConfirmDialog
         open={confirmOpen}

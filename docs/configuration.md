@@ -1,9 +1,11 @@
 # Configuration
 
-Status: **desktop configuration contract.** The settings screens implement this contract; the
-engine-side `seo.toml` semantics below are those of the pinned `lv24-seo 0.5.0`. When the desktop
-and the engine disagree, the engine is authoritative and the desktop must show its validation error
-instead of silently “fixing” the file.
+Status: **desktop configuration contract for `0.2.0`.** The settings screens implement this
+contract; the engine-side `seo.toml` semantics below are those of the pinned `lv24-seo 0.5.1`. When
+the desktop and the engine disagree, the engine is authoritative and the desktop must show its
+validation error instead of silently “fixing” the file. The desktop's `ConfigModel` mirrors the
+subset of `lv24_seo.core.config.SeoConfig` used by the forms for `0.5.1`; the engine still validates
+the whole file.
 
 ## 1. What owns what
 
@@ -21,12 +23,19 @@ edit, and it shows the effective result from `lv24-seo config show --json`.
 
 The engine resolves configuration in this order:
 
-1. CLI flags (`--config`, command-specific options);
+1. CLI flags (`--config`, command-specific options); an explicit path must exist;
 2. `LV24_SEO_*` environment variables;
 3. `./seo.toml` in the current working directory;
-4. the user config (`~/.config/lv24-seo/config.toml` on Linux/macOS,
-   `%APPDATA%\lv24-seo\config.toml` on Windows);
+4. the platform user config file returned by `platformdirs.user_config_dir("lv24-seo")`:
+   `%LOCALAPPDATA%\lv24-seo\lv24-seo\config.toml` on Windows,
+   `~/Library/Application Support/lv24-seo/config.toml` on macOS, and
+   `$XDG_CONFIG_HOME/lv24-seo/config.toml` or `~/.config/lv24-seo/config.toml` on Linux;
 5. built-in defaults.
+
+The Windows path really does contain `lv24-seo` twice: `platformdirs` uses the app name as the
+default author segment when no author is passed. Do not “correct” it by hand; let the engine resolve
+it. The desktop always passes an absolute `--config`, so this path matters mainly for terminal runs
+and for finding an existing file to select.
 
 `.env` files are **not** loaded automatically. Use `--env-file .env` explicitly or export the
 variables.
@@ -48,9 +57,16 @@ my-seo-workspace/
     reports/
 ```
 
-The desktop asks for a workspace during onboarding, writes `seo.toml` with
-`lv24-seo init --property ... --data-dir ...`, and then reads it back through the engine. The
-desktop's own preferences are separate and never contain provider secrets.
+The desktop asks you to select an existing `seo.toml` from Settings or Configuration; there is no
+separate onboarding wizard and the desktop does not silently create a project file. To create a new
+workspace, run the engine command shown in the empty state and then select the file:
+
+```bash
+lv24-seo init --property https://example.com --data-dir ./data
+```
+
+The desktop reads the file back through the engine. Its own preferences are separate and never
+contain provider secrets.
 
 ## 4. `seo.toml` reference
 
@@ -192,6 +208,9 @@ Rules:
   the value.
 - On Windows, file fallback relies on directory/file ACLs; POSIX `0600` cannot enforce Windows
   permissions. Prefer the keychain.
+- On Linux the desktop's CLI runner inherits the session-bus and XDG runtime variables Secret
+  Service needs (`DBUS_SESSION_BUS_ADDRESS`, `XDG_RUNTIME_DIR`, `TMPDIR` and related paths). The
+  secret value itself is still sent only over stdin; it is never passed as an argument.
 - Removing an environment-provided secret from the file does not remove the variable. The UI must
   explain this.
 
@@ -220,9 +239,9 @@ display values and does not copy the process environment into logs.
 
 ## 7. Desktop preferences
 
-Desktop-only preferences are stored in the Tauri app-config directory for the bundle identifier in
-`src-tauri/tauri.conf.json`. They include UI language (`en`, `ru`, `zh`), theme, last workspace and
-window state. They never contain provider secrets, report content or SQLite data.
+The desktop-only preferences are stored in the Tauri app-config directory for
+`by.lv24.seo.desktop`. They include UI language (`en`, `ru`, `zh`), theme, last workspace and window
+state. They never contain provider secrets, report content or SQLite data.
 
 The UI language and `report.locale` are independent:
 
@@ -230,24 +249,24 @@ The UI language and `report.locale` are independent:
 - `report.locale` changes the language of the weekly report and delivery.
 - Machine codes (`metric`, `severity`, `engine`, `kind`, `status`, `reason`) are never translated.
 
-The scaffold still carries the template bundle identifier and product metadata. They must be
-changed to the SEO desktop values before a release; see [`docs/release.md`](release.md).
-
 ## 8. Configuration outputs
 
-The Configuration screen exposes seven views, all read-only except the form and advanced TOML:
+The **Settings** screen is the editable form. The **Configuration** screen is read-only and exposes
+seven tabs:
 
-1. **Form** — structured fields, dirty/valid/warning state.
-2. **Effective JSON** — `lv24-seo config show --json`; `meta.redacted = true`; copy/download.
-3. **TOML** — raw `seo.toml`, comments preserved; read-only view.
+1. **Overview** — config path, resolved path, data directory, engine version, last load/validation,
+   backups and a copyable diagnostics summary.
+2. **Effective** — `lv24-seo config show --json`; `meta.redacted = true`; copy.
+3. **Source TOML** — the file as stored on disk, comments preserved, secret-looking values redacted;
+   read-only.
 4. **Diff** — saved vs draft, field-level; destructive changes highlighted.
 5. **Validation** — TOML syntax, schema errors, unknown keys and reserved fields.
-6. **Environment** — variable names, override status and secret source; no values.
-7. **Diagnostics** — doctor checks, versions, config/data/SQLite paths, sidecar path and a
-   copyable redacted diagnostics summary.
+6. **Doctor** — the read-only engine environment checks and warnings.
+7. **Environment** — variable names, override status and secret source; no values.
 
-The relevant outputs have copy buttons and a “Reveal file” action restricted by the path allow-list.
-The page never shows token values, SMTP passwords or bot tokens.
+There is no raw TOML editor and no “advanced mode” that writes the file directly. Edits go through
+the Settings form. The relevant outputs have copy buttons and a “Reveal file” action restricted by
+the path allow-list. The page never shows token values, SMTP passwords or bot tokens.
 
 ## 9. Save and validation
 
@@ -263,8 +282,8 @@ The page never shows token values, SMTP passwords or bot tokens.
 5. If the file changed externally, reload before saving so the form reflects the current file. The
    diff tab shows the saved-vs-draft fields before a save.
 
-A failed validation leaves the original file untouched. A parse error blocks switching between form
-and raw mode.
+A failed validation leaves the original file untouched. A parse error blocks the form save and names
+the line and column; the Source TOML tab remains available read-only.
 
 ## 10. Common commands
 
@@ -290,5 +309,5 @@ The desktop calls the same commands with an absolute `--config` and parses the e
 | `no_data` | provider reachable but no rows for the window | neutral empty state with data age |
 | `truncated: true` | provider row cap | warning; totals are not presented as complete |
 | report is a no-data fallback | no provider rows | neutral report, `complete: false` |
-| engine version mismatch | sidecar and desktop pins disagree | blocking dialog with both versions |
+| engine version mismatch | sidecar and desktop pins disagree | engine marked offline with the standard notice; footer shows the detected engine version when available; no blocking dialog |
 | relative data dir differs from terminal | cwd differs | desktop launches with `cwd = config parent`; prefer absolute path |

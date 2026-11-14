@@ -8,7 +8,7 @@ on:
       engine_version:
         description: "Pinned lv24-seo engine version (must match scripts/cli-checksums.json)"
         required: true
-        default: "0.5.0"
+        default: "0.5.1"
         type: string
       signed:
         description: "Request OS code signing/notarization (requires paid certificates; leave false)"
@@ -34,10 +34,123 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  preflight:
+    name: Release preflight
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          # Tags are needed to prove an existing release tag points at this commit.
+          fetch-depth: 0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: "24"
+
+      - name: Validate versions and tag
+        shell: bash
+        env:
+          TAG: ${{ inputs.tag }}
+          PUBLISH: ${{ inputs.publish }}
+        run: |
+          set -euo pipefail
+          node - <<'NODE'
+          const fs = require("fs");
+          const { execFileSync } = require("child_process");
+
+          const tag = (process.env.TAG || "").trim();
+          const publish = process.env.PUBLISH === "true";
+          const readJson = (path) => JSON.parse(fs.readFileSync(path, "utf8"));
+          const problems = [];
+
+          const packageVersion = String(readJson("package.json").version);
+          const tauriVersion = String(readJson("src-tauri/tauri.conf.json").version);
+          const cargoLines = fs
+            .readFileSync("src-tauri/Cargo.toml", "utf8")
+            .replace(/\r\n/g, "\n")
+            .split("\n");
+          const packageIndex = cargoLines.indexOf("[package]");
+          let cargoVersion;
+          if (packageIndex >= 0) {
+            for (let i = packageIndex + 1; i < cargoLines.length; i += 1) {
+              if (cargoLines[i].startsWith("[")) break;
+              const match = /^version\s*=\s*"([^"]+)"/.exec(cargoLines[i]);
+              if (match) {
+                cargoVersion = match[1];
+                break;
+              }
+            }
+          }
+
+          if (!cargoVersion) {
+            problems.push("could not read [package] version from src-tauri/Cargo.toml");
+          }
+          for (const [name, value] of [
+            ["package.json", packageVersion],
+            ["src-tauri/tauri.conf.json", tauriVersion],
+            ["src-tauri/Cargo.toml", cargoVersion],
+          ]) {
+            if (!value || !/^\d+\.\d+\.\d+([.-][0-9A-Za-z.-]+)?$/.test(value)) {
+              problems.push(`${name}: invalid semver version ${JSON.stringify(value)}`);
+            }
+          }
+          if (packageVersion !== tauriVersion || packageVersion !== cargoVersion) {
+            problems.push(
+              `versions disagree: package.json=${packageVersion}, tauri.conf.json=${tauriVersion}, Cargo.toml=${cargoVersion}`,
+            );
+          }
+
+          if (publish && !tag) {
+            problems.push("publish=true requires a vX.Y.Z tag");
+          }
+
+          if (tag) {
+            if (!/^v\d+\.\d+\.\d+([.-][0-9A-Za-z.-]+)?$/.test(tag)) {
+              problems.push(`tag must look like vX.Y.Z; got ${JSON.stringify(tag)}`);
+            } else if (tag.slice(1) !== packageVersion) {
+              problems.push(`tag ${tag} does not match package.json version ${packageVersion}`);
+            }
+
+            let tagCommit = "";
+            try {
+              tagCommit = execFileSync(
+                "git",
+                ["rev-parse", "--verify", "--quiet", `refs/tags/${tag}^{commit}`],
+                { encoding: "utf8" },
+              ).trim();
+            } catch {
+              tagCommit = "";
+            }
+            if (tagCommit && tagCommit !== process.env.GITHUB_SHA) {
+              problems.push(
+                `tag ${tag} points at ${tagCommit}, but this workflow runs at ${process.env.GITHUB_SHA}`,
+              );
+            }
+            if (!tagCommit) {
+              console.log(
+                `::notice::tag ${tag} does not exist yet; the release job will create it at ${process.env.GITHUB_SHA}`,
+              );
+            }
+          }
+
+          if (problems.length > 0) {
+            for (const problem of problems) console.error(`::error::${problem}`);
+            process.exit(1);
+          }
+          console.log(
+            `versions: package.json=${packageVersion}, tauri.conf.json=${tauriVersion}, Cargo.toml=${cargoVersion}`,
+          );
+          if (tag) console.log(`tag: ${tag}`);
+          NODE
+
   build:
     name: Build ${{ matrix.name }}
+    needs: preflight
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 120
+    timeout-minutes: 180
     strategy:
       fail-fast: false
       matrix:
@@ -54,7 +167,7 @@ jobs:
             bundles: appimage,deb,rpm
           - name: macos-arm64
             artifact: macos-arm64
-            os: macos-latest
+            os: macos-15
             target: aarch64-apple-darwin
             bundles: dmg
           - name: macos-x64
@@ -67,8 +180,6 @@ jobs:
       RUST_BACKTRACE: "1"
       PYTHONUTF8: "1"
       PYTHONIOENCODING: utf-8
-      TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-      TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -101,7 +212,7 @@ jobs:
           sudo apt-get install -y \
             build-essential curl wget file libssl-dev libxdo-dev \
             libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev \
-            libfuse2 rpm
+            libfuse2 patchelf rpm
 
       - name: Warn about Windows signing
         if: inputs.signed && runner.os == 'Windows'
@@ -115,6 +226,17 @@ jobs:
         run: |
           if [ -z "$APPLE_CERTIFICATE" ]; then
             echo "::error::signed=true but APPLE_CERTIFICATE is not configured; refusing to claim a signed build"
+            exit 1
+          fi
+
+      - name: Require updater signing key for publish
+        if: inputs.publish
+        shell: bash
+        env:
+          UPDATER_SIGNING_ENABLED: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY != '' }}
+        run: |
+          if [ "$UPDATER_SIGNING_ENABLED" != "true" ]; then
+            echo "::error::publish=true requires TAURI_SIGNING_PRIVATE_KEY; refusing to publish without updater artifacts"
             exit 1
           fi
 
@@ -143,15 +265,47 @@ jobs:
           --no-hash
           --report "release/sidecar-checksums-${{ matrix.target }}.json"
 
+      - name: Ad-hoc sign bundled macOS sidecar
+        # Tauri copies engine/lv24-seo as a resource, not as nested code, so the
+        # PyInstaller Mach-O tree must already carry an ad-hoc signature before
+        # the app bundle is sealed. Non-Mach-O files (scripts, .pyc, JSON) are
+        # left untouched.
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          set -euo pipefail
+          root="src-tauri/engine/lv24-seo"
+          signed=0
+          while IFS= read -r -d '' file; do
+            if file -b "$file" | grep -q 'Mach-O'; then
+              codesign --force --sign - "$file"
+              signed=$((signed + 1))
+            fi
+          done < <(find "$root" -type f -print0)
+          if [ "$signed" -eq 0 ]; then
+            echo "::error::no Mach-O files found under $root; the sidecar tree looks wrong"
+            exit 1
+          fi
+          echo "ad-hoc signed $signed Mach-O files under $root"
+
       - name: Write CI Tauri config
+        # The committed config enables updater artifacts. The CI override keeps
+        # that true when the updater key exists and disables it for build-only
+        # runs without the key, so forks and local CI can still bundle. Tauri
+        # 2.12.4 boolean mode signs the NSIS setup .exe (and the AppImage on
+        # Linux) directly; the staging script also accepts v1Compatible
+        # .nsis.zip/.AppImage.tar.gz artifacts from other Tauri versions.
         env:
           TAURI_CI_CONFIG: ${{ runner.temp }}/tauri.ci.json
           UNSIGNED_MAC: ${{ runner.os == 'macOS' && inputs.signed == false }}
+          UPDATER_SIGNING_ENABLED: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY != '' }}
         run: |
-          node -e "const fs=require('fs'); const p=process.env.TAURI_CI_CONFIG; const cfg={bundle:{resources:{'engine/lv24-seo/':'engine/lv24-seo/'}}}; if (process.env.UNSIGNED_MAC === 'true') { cfg.bundle.macOS={signingIdentity:'-'}; } if (!process.env.TAURI_SIGNING_PRIVATE_KEY) { cfg.bundle.createUpdaterArtifacts=false; } fs.writeFileSync(p, JSON.stringify(cfg));"
+          node -e "const fs=require('fs'); const p=process.env.TAURI_CI_CONFIG; const base=JSON.parse(fs.readFileSync('src-tauri/tauri.conf.json','utf8')); const cfg={bundle:{resources:{'engine/lv24-seo/':'engine/lv24-seo/'},createUpdaterArtifacts:process.env.UPDATER_SIGNING_ENABLED==='true'}}; if (process.env.UNSIGNED_MAC === 'true') { cfg.bundle.macOS={...(base.bundle.macOS||{}),signingIdentity:'-',hardenedRuntime:false}; } fs.writeFileSync(p, JSON.stringify(cfg));"
 
       - name: Build Tauri installers
         env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
           APPLE_CERTIFICATE: ${{ inputs.signed && secrets.APPLE_CERTIFICATE || '' }}
           APPLE_CERTIFICATE_PASSWORD: ${{ inputs.signed && secrets.APPLE_CERTIFICATE_PASSWORD || '' }}
           APPLE_SIGNING_IDENTITY: ${{ inputs.signed && secrets.APPLE_SIGNING_IDENTITY || '' }}
@@ -170,43 +324,20 @@ jobs:
 
       - name: Stage release assets
         # upload-artifact stores files relative to the least common ancestor of
-        # all `path` entries. Mixing src-tauri/target/... with release/* made the
-        # artifact root the repository root, so the release job could not find
-        # the checksum reports or the portable ZIP. Everything now goes through
-        # release/ so the artifact root is flat.
+        # all `path` entries. Everything goes through release/ so the artifact
+        # root is flat. The staging script also normalizes spaces to dots and
+        # writes updater-<platform>.json for the release job.
         shell: bash
+        env:
+          UPDATER_SIGNING_ENABLED: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY != '' }}
+          PUBLISH: ${{ inputs.publish }}
         run: |
           set -euo pipefail
-          mkdir -p release
-          shopt -s nullglob
-          copied=0
-          for bundle in nsis dmg appimage deb rpm; do
-            for file in "src-tauri/target/${{ matrix.target }}/release/bundle/$bundle"/*; do
-              [ -f "$file" ] || continue
-              case "$file" in
-                *.exe|*.msi|*.dmg|*.AppImage|*.deb|*.rpm|*.sig)
-                  cp "$file" release/
-                  copied=$((copied + 1))
-                  ;;
-                *)
-                  echo "note: not a release asset, skipping $file"
-                  ;;
-              esac
-            done
-          done
-          if [ "$copied" -eq 0 ]; then
-            echo "::error::no installer bundles found under src-tauri/target/${{ matrix.target }}/release/bundle"
-            exit 1
+          args=(--target "${{ matrix.target }}")
+          if [ "$UPDATER_SIGNING_ENABLED" = "true" ] || [ "$PUBLISH" = "true" ]; then
+            args+=(--require-updater)
           fi
-          latest="src-tauri/target/${{ matrix.target }}/release/bundle/latest.json"
-          if [ -f "$latest" ]; then
-            cp "$latest" release/
-          fi
-          cp src-tauri/engine/build-info.json "release/build-info-${{ matrix.target }}.json"
-          # package-portable.mjs stages a full copy of the app under
-          # release/portable; upload-artifact recurses into directories, so drop
-          # the staging tree to avoid uploading the payload twice.
-          rm -rf "release/portable"
+          node scripts/stage-release-assets.mjs "${args[@]}"
           ls -la release
 
       - name: Upload release assets
@@ -219,16 +350,21 @@ jobs:
 
   release:
     name: Owner-gated release
-    needs: build
+    needs: [preflight, build]
     if: inputs.publish && github.actor == github.repository_owner
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 30
     environment: desktop-release
     permissions:
       contents: write
     steps:
       - name: Checkout
         uses: actions/checkout@v7
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: "24"
 
       - name: Download all build artifacts
         uses: actions/download-artifact@v8
@@ -245,7 +381,9 @@ jobs:
             echo "::error::tag must look like vX.Y.Z; got '$TAG'"
             exit 1
           fi
+          VERSION="${TAG#v}"
           echo "TAG=$TAG" >> "$GITHUB_ENV"
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
 
       - name: Require a sidecar checksum report for every shipped target
         # Rebuild-aware gate. PyInstaller onedir output is not byte-reproducible,
@@ -338,31 +476,249 @@ jobs:
           }
           NODE
 
-      - name: Generate checksums
+      - name: Normalize and flatten release asset names
+        # GitHub rewrites spaces in release asset names. Normalize before
+        # checksums/upload so SHA256SUMS.txt and latest.json always reference the
+        # name GitHub actually stores. This is also a collision gate: arm64 and
+        # x64 macOS updater archives must have different basenames.
         shell: bash
         run: |
           set -euo pipefail
-          # download-artifact flattens the tree with merge-multiple, but hash by
-          # path and publish by basename so nested artifact paths still work.
-          mapfile -d '' -t assets < <(find dist -type f \( -name '*.exe' -o -name '*.zip' -o -name '*.dmg' -o -name '*.AppImage' -o -name '*.deb' -o -name '*.rpm' -o -name '*.sig' \) -print0 | sort -z)
-          if [ "${#assets[@]}" -eq 0 ]; then
-            echo "::error::no release assets found in dist/"
-            exit 1
-          fi
-          declare -A by_basename=()
-          for file in "${assets[@]}"; do
-            base="$(basename "$file")"
-            if [ -n "${by_basename[$base]:-}" ]; then
-              echo "::error::duplicate asset basename '$base' (${by_basename[$base]} and $file); SHA256SUMS.txt lines would be ambiguous"
-              exit 1
-            fi
-            by_basename[$base]="$file"
-          done
-          : > dist/SHA256SUMS.txt
-          for file in "${assets[@]}"; do
-            printf '%s  %s\n' "$(sha256sum "$file" | cut -d' ' -f1)" "$(basename "$file")" >> dist/SHA256SUMS.txt
-          done
-          cat dist/SHA256SUMS.txt
+          node - <<'NODE'
+          const fs = require("fs");
+          const path = require("path");
+          const dist = path.resolve("dist");
+
+          function walk(dir) {
+            const result = [];
+            for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+              const full = path.join(dir, entry.name);
+              if (entry.isDirectory()) result.push(...walk(full));
+              else if (entry.isFile()) result.push(full);
+            }
+            return result;
+          }
+
+          const files = walk(dist);
+          const seen = new Map();
+          const problems = [];
+          for (const file of files) {
+            const base = path.basename(file).replace(/\s+/g, ".");
+            if (!/^[A-Za-z0-9._-]+$/.test(base)) {
+              problems.push(`${file}: name contains characters GitHub may rewrite`);
+              continue;
+            }
+            if (seen.has(base)) {
+              problems.push(`duplicate asset basename ${base}: ${seen.get(base)} and ${file}`);
+              continue;
+            }
+            seen.set(base, file);
+          }
+          if (problems.length > 0) {
+            for (const problem of problems) console.error(`::error::${problem}`);
+            process.exit(1);
+          }
+
+          for (const [base, file] of seen) {
+            const target = path.join(dist, base);
+            if (path.resolve(file) !== path.resolve(target)) {
+              if (fs.existsSync(target)) {
+                console.error(`::error::refusing to overwrite ${target} while flattening ${file}`);
+                process.exit(1);
+              }
+              fs.renameSync(file, target);
+            }
+          }
+
+          function prune(dir) {
+            for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+              if (!entry.isDirectory()) continue;
+              const full = path.join(dir, entry.name);
+              prune(full);
+              if (fs.readdirSync(full).length === 0) fs.rmdirSync(full);
+            }
+          }
+          prune(dist);
+
+          const flat = fs.readdirSync(dist).filter((name) => fs.statSync(path.join(dist, name)).isFile()).sort();
+          console.log(`flat release files: ${flat.length}`);
+          for (const name of flat) console.log(`  ${name}`);
+          NODE
+
+      - name: Merge latest.json
+        shell: bash
+        run: |
+          set -euo pipefail
+          node scripts/merge-latest-json.mjs \
+            --dist dist \
+            --version "$VERSION" \
+            --tag "$TAG" \
+            --repo "$GITHUB_REPOSITORY" \
+            --notes-file "docs/releases/${VERSION}-update.md"
+
+      - name: Verify expected release assets
+        # Explicit gate independent of the merge script: the release must contain
+        # every installer and updater signature for all four platforms, and
+        # latest.json must reference only files that exist under their published
+        # dotted names.
+        shell: bash
+        run: |
+          set -euo pipefail
+          node - <<'NODE'
+          const fs = require("fs");
+          const path = require("path");
+          const dist = "dist";
+          const files = fs.readdirSync(dist).filter((name) => fs.statSync(path.join(dist, name)).isFile());
+          const problems = [];
+          const by = (regex) => files.filter((name) => regex.test(name));
+          const exactly = (regex, count, label) => {
+            const matches = by(regex);
+            if (matches.length !== count) {
+              problems.push(`${label}: expected ${count}, found ${matches.length} (${matches.join(", ") || "none"})`);
+            }
+            return matches;
+          };
+
+          const setup = exactly(/-setup\.exe$/, 1, "Windows NSIS installer");
+          const nsis = by(/\.nsis\.zip$/);
+          const nsisSig = by(/\.nsis\.zip\.sig$/);
+          const exeSig = by(/-setup\.exe\.sig$/);
+          let windowsVariant;
+          if (setup.length === 1 && exeSig.length === 1) {
+            windowsVariant = "setup.exe";
+          } else if (nsis.length === 1 && nsisSig.length === 1) {
+            windowsVariant = "nsis.zip";
+          } else {
+            problems.push(`Windows updater: found neither setup.exe+.exe.sig nor .nsis.zip+.nsis.zip.sig`);
+          }
+
+          exactly(/\.AppImage$/, 1, "Linux AppImage");
+          exactly(/\.deb$/, 1, "Linux deb package");
+          exactly(/\.rpm$/, 1, "Linux rpm package");
+          const appImageTar = by(/\.AppImage\.tar\.gz$/);
+          const appImageTarSig = by(/\.AppImage\.tar\.gz\.sig$/);
+          const appImageSig = by(/\.AppImage\.sig$/);
+          let linuxVariant;
+          if (appImageSig.length === 1) {
+            linuxVariant = "AppImage";
+          } else if (appImageTar.length === 1 && appImageTarSig.length === 1) {
+            linuxVariant = "AppImage.tar.gz";
+          } else {
+            problems.push(`Linux updater: found neither AppImage+.sig nor .AppImage.tar.gz+.sig`);
+          }
+
+          const dmgs = exactly(/\.dmg$/, 2, "macOS DMG");
+          exactly(/\.app\.tar\.gz$/, 2, "macOS updater archive");
+          exactly(/\.app\.tar\.gz\.sig$/, 2, "macOS updater signature");
+          if (!dmgs.some((name) => name.includes("_aarch64.dmg"))) problems.push("macOS DMGs: no arm64 DMG");
+          if (!dmgs.some((name) => name.includes("_x64.dmg"))) problems.push("macOS DMGs: no x64 DMG");
+
+          let latest;
+          try {
+            latest = JSON.parse(fs.readFileSync(path.join(dist, "latest.json"), "utf8"));
+          } catch (error) {
+            problems.push(`latest.json: ${error.message}`);
+          }
+          if (latest) {
+            for (const key of ["windows-x86_64", "linux-x86_64", "darwin-aarch64", "darwin-x86_64"]) {
+              if (!latest.platforms || !latest.platforms[key]) problems.push(`latest.json: missing platform ${key}`);
+            }
+            for (const key of ["windows-x86_64-nsis", "linux-x86_64-appimage", "darwin-aarch64-app", "darwin-x86_64-app"]) {
+              if (!latest.platforms || !latest.platforms[key]) problems.push(`latest.json: missing bundle alias ${key}`);
+            }
+            const prefix = `https://github.com/${process.env.GITHUB_REPOSITORY}/releases/download/${process.env.TAG}/`;
+            for (const [key, entry] of Object.entries(latest.platforms || {})) {
+              if (typeof entry.signature !== "string" || entry.signature.length < 64) {
+                problems.push(`latest.json: ${key} signature is missing or too short`);
+              }
+              if (typeof entry.url !== "string" || !entry.url.startsWith(prefix)) {
+                problems.push(`latest.json: ${key} URL is not under ${prefix}`);
+                continue;
+              }
+              const asset = entry.url.slice(prefix.length);
+              if (asset.includes("/") || !files.includes(asset)) {
+                problems.push(`latest.json: ${key} references missing asset ${asset}`);
+              }
+            }
+            if (latest.version !== process.env.VERSION) {
+              problems.push(`latest.json: version ${latest.version} != ${process.env.VERSION}`);
+            }
+            if (typeof latest.pub_date !== "string" || !latest.pub_date.endsWith("Z")) {
+              problems.push("latest.json: pub_date is not RFC3339 UTC");
+            }
+          }
+
+          if (problems.length > 0) {
+            for (const problem of problems) console.error(`::error::${problem}`);
+            process.exit(1);
+          }
+          console.log(`windows variant: ${windowsVariant}`);
+          console.log(`linux variant:   ${linuxVariant}`);
+          console.log(`platforms:       ${Object.keys(latest.platforms).join(", ")}`);
+          NODE
+
+      - name: Generate checksums
+        # Hash exactly the assets that will be uploaded, by basename. Internal
+        # build-info/sidecar-report JSON stays in dist/ but is not published.
+        shell: bash
+        run: |
+          set -euo pipefail
+          node - <<'NODE'
+          const fs = require("fs");
+          const path = require("path");
+          const crypto = require("crypto");
+          const dist = "dist";
+
+          function isPublished(name) {
+            if (name === "latest.json") return true;
+            if (name === "SHA256SUMS.txt") return false;
+            return (
+              /-setup\.exe(\.sig)?$/.test(name) ||
+              /\.nsis\.zip(\.sig)?$/.test(name) ||
+              /\.dmg$/.test(name) ||
+              /\.app\.tar\.gz(\.sig)?$/.test(name) ||
+              /\.AppImage(\.tar\.gz)?(\.sig)?$/.test(name) ||
+              /\.deb(\.sig)?$/.test(name) ||
+              /\.rpm(\.sig)?$/.test(name) ||
+              /-portable\.zip$/.test(name)
+            );
+          }
+
+          const files = fs
+            .readdirSync(dist)
+            .filter((name) => fs.statSync(path.join(dist, name)).isFile())
+            .filter(isPublished)
+            .sort();
+          if (files.length === 0) {
+            console.error("::error::no publishable release assets found");
+            process.exit(1);
+          }
+          if (new Set(files).size !== files.length) {
+            console.error("::error::duplicate asset basenames in dist/");
+            process.exit(1);
+          }
+
+          const latest = JSON.parse(fs.readFileSync(path.join(dist, "latest.json"), "utf8"));
+          for (const [platform, entry] of Object.entries(latest.platforms)) {
+            const asset = entry.url.split("/").pop();
+            if (!files.includes(asset)) {
+              console.error(`::error::latest.json ${platform} references ${asset}, which is not in SHA256SUMS.txt`);
+              process.exit(1);
+            }
+          }
+
+          const lines = [];
+          for (const name of files) {
+            if (/\s/.test(name)) {
+              console.error(`::error::asset name contains whitespace: ${name}`);
+              process.exit(1);
+            }
+            const hash = crypto.createHash("sha256").update(fs.readFileSync(path.join(dist, name))).digest("hex");
+            lines.push(`${hash}  ${name}`);
+          }
+          fs.writeFileSync(path.join(dist, "SHA256SUMS.txt"), `${lines.join("\n")}\n`, "utf8");
+          console.log(lines.join("\n"));
+          NODE
 
       - name: Write release notes
         shell: bash
@@ -379,20 +735,107 @@ jobs:
           Gatekeeper, SmartScreen and Smart App Control may warn. Verify SHA256SUMS.txt before installing.
           See the README for the documented first-launch flow. No paid signing or notarization is used.
 
-          Auto-update: not available in this release. Install/upgrade manually from the assets below.
+          Auto-update: latest.json and signed updater assets are attached for Windows NSIS (setup .exe), macOS arm64/x64 (.app.tar.gz) and Linux AppImage.
+          Linux deb/rpm entries are included when Tauri produced their signatures; otherwise upgrade those packages manually.
+          Updater manifest: ${{ github.server_url }}/${{ github.repository }}/releases/latest/download/latest.json
 
           Workflow run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           EOF
           cat release-notes.md
 
-      - name: Create GitHub release
+      - name: Create draft release
         env:
           GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
           set -euo pipefail
-          gh release create "$TAG" \
-            --target "$GITHUB_SHA" \
-            --title "LV24 SEO Optimizer Desktop $TAG" \
-            --notes-file release-notes.md
-          find dist -type f -print0 | sort -z | xargs -0 -r gh release upload "$TAG" --clobber
+          if gh release view "$TAG" --json isDraft --jq '.isDraft' > draft-state 2>/dev/null; then
+            if [ "$(cat draft-state)" != "true" ]; then
+              echo "::error::release $TAG already exists and is published; refusing to overwrite it"
+              exit 1
+            fi
+            echo "Reusing existing draft release $TAG"
+          else
+            gh release create "$TAG" \
+              --draft \
+              --target "$GITHUB_SHA" \
+              --title "LV24 SEO Optimizer Desktop $TAG" \
+              --notes-file release-notes.md
+          fi
+
+      - name: Upload release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          # The release is still a draft here. Clear assets from a previous
+          # attempt so a rerun publishes exactly the current allowlist.
+          while IFS= read -r asset; do
+            if [ -n "$asset" ]; then
+              gh release delete-asset "$TAG" "$asset" --yes
+            fi
+          done < <(gh release view "$TAG" --json assets --jq '.assets[].name')
+          files=()
+          while IFS= read -r -d '' file; do
+            base="$(basename "$file")"
+            case "$base" in
+              latest.json|SHA256SUMS.txt|*-setup.exe|*-setup.exe.sig|*.nsis.zip|*.nsis.zip.sig|*.dmg|*.app.tar.gz|*.app.tar.gz.sig|*.AppImage|*.AppImage.sig|*.AppImage.tar.gz|*.AppImage.tar.gz.sig|*.deb|*.deb.sig|*.rpm|*.rpm.sig|*-portable.zip)
+                files+=("$file")
+                ;;
+              *)
+                echo "skip internal asset: $base"
+                ;;
+            esac
+          done < <(find dist -maxdepth 1 -type f -print0 | sort -z)
+          if [ "${#files[@]}" -eq 0 ]; then
+            echo "::error::no publishable assets found in dist/"
+            exit 1
+          fi
+          gh release upload "$TAG" "${files[@]}" --clobber
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: gh release edit "$TAG" --draft=false
+
+      - name: Verify published asset names
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          node - <<'NODE'
+          const { execFileSync } = require("child_process");
+          const fs = require("fs");
+
+          const release = JSON.parse(
+            execFileSync("gh", ["release", "view", process.env.TAG, "--json", "isDraft,assets"], {
+              encoding: "utf8",
+            }),
+          );
+          if (release.isDraft) {
+            console.error("::error::release is still a draft");
+            process.exit(1);
+          }
+
+          const remote = release.assets.map((asset) => asset.name).sort();
+          const expected = fs
+            .readFileSync("dist/SHA256SUMS.txt", "utf8")
+            .trim()
+            .split("\n")
+            .map((line) => line.split("  ").slice(1).join("  "));
+          expected.push("SHA256SUMS.txt");
+          expected.sort();
+
+          const missing = expected.filter((name) => !remote.includes(name));
+          const extra = remote.filter((name) => !expected.includes(name));
+          if (missing.length > 0 || extra.length > 0) {
+            if (missing.length) console.error(`::error::release is missing: ${missing.join(", ")}`);
+            if (extra.length) console.error(`::error::release has unpublished extras: ${extra.join(", ")}`);
+            process.exit(1);
+          }
+          console.log(`published assets (${remote.length}):`);
+          for (const name of remote) console.log(`  ${name}`);
+          NODE

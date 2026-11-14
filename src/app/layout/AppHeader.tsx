@@ -1,6 +1,7 @@
 import { observer } from "mobx-react-lite";
 import { useLocation } from "react-router-dom";
 import { useRootStore } from "@/app/providers/StoreProvider";
+import { UpdateBadge } from "@/features/update";
 import {
   LOCALES,
   useI18n,
@@ -47,6 +48,7 @@ export const AppHeader = observer(function AppHeader() {
               ? t("engine.online")
               : t("engine.offline")}
         </span>
+        <UpdateBadge />
         <div className="locale-switch" role="group" aria-label={t("locale.label")}>
           {LOCALES.map((item) => (
             <button

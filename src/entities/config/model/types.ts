@@ -4,7 +4,7 @@ import type { MessageKey, MessageParams } from "@/shared/i18n";
 
 /**
  * The subset of `seo.toml` the desktop edits. Field names and defaults mirror
- * `lv24_seo.core.config.SeoConfig` in the pinned engine (0.4.0). Unknown keys
+ * `lv24_seo.core.config.SeoConfig` in the pinned engine (0.5.1). Unknown keys
  * are deliberately not modelled: the engine rejects them, so inventing fields
  * here would only produce a file the engine refuses.
  */
@@ -159,7 +159,7 @@ export function cloneConfig(model: ConfigModel): ConfigModel {
   return JSON.parse(JSON.stringify(model)) as ConfigModel;
 }
 
-/** Fields that exist in the schema but have no effect in engine 0.4.0. */
+/** Fields that exist in the schema but have no effect in engine 0.5.1. */
 export const RESERVED_PATHS = {
   "providers.gsc.auth": "settings.reserved.gscAuth",
   "providers.yandex_metrika.goals": "settings.reserved.metrikaGoals",

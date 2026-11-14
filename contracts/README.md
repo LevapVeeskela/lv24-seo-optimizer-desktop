@@ -10,7 +10,7 @@ engine. The desktop must not guess at engine fields; a contract change is review
 | `config.schema.json` | generated | `SeoConfig.model_json_schema()` from the pinned engine |
 | `cli-v1/*.json` | generated | normalized `--json` envelopes from the pinned CLI |
 | `cli-v1/manifest.json` | generated | commands, exit codes, engine pin and fixture list |
-| `stats-v1.md` | hand-written contract note | `lv24-seo stats --json` shape, shipped by 0.5.0 |
+| `stats-v1.md` | hand-written contract note | `lv24-seo stats --json` shape, shipped by 0.5.1 |
 | `cli-v1/stats.json` | generated | normalized `stats` envelope from the pinned CLI |
 
 `stats-v1.md` explains the stats fields; the machine-readable fixture is generated like every other

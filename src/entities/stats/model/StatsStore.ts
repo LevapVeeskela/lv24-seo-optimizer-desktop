@@ -51,4 +51,18 @@ export class StatsStore {
     this.state = "error";
     return false;
   }
+
+  /**
+   * Drop everything that belongs to the previous workspace. Bumping the
+   * generation also discards a refresh that is still in flight.
+   */
+  reset(): void {
+    this.generation += 1;
+    this.state = "idle";
+    this.data = null;
+    this.meta = {};
+    this.warnings = [];
+    this.error = null;
+    this.lastUpdated = null;
+  }
 }

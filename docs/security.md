@@ -1,9 +1,10 @@
 # Security model
 
-Status: **security contract for `0.1.0`.** The Rust bridge and screens are implemented in this
+Status: **security contract for `0.2.0`.** The Rust bridge and screens are implemented in this
 repository. This page states the controls the implementation must enforce and the residual risks
-accepted for the preview; where a control is future work, the text says so. See
-[`SECURITY.md`](../SECURITY.md) for reporting a vulnerability.
+accepted for the preview; where a control is future work, the text says so. `0.2.0` adds signed
+auto-update for Windows NSIS, macOS `.app` and Linux AppImage. See [`SECURITY.md`](../SECURITY.md)
+for reporting a vulnerability.
 
 ## 1. Assets and adversaries
 
@@ -41,6 +42,10 @@ engine via `LV24_SEO_BIN`, and provider-side breaches.
 4. **Engine → disk.** The engine writes only to the configured data directory and report output
    paths. The desktop must not silently override `LV24_SEO_DATA_DIR`; doing so would change which
    database a terminal run sees.
+5. **Desktop → GitHub (updates only).** The desktop requests `latest.json` and, after the user
+   confirms, the signed package it names. The manifest and package are authenticated by a minisign
+   signature with an embedded public key; HTTPS protects transport, and the signature is the trust
+   anchor. No provider data or telemetry is sent.
 
 ## 3. Secrets never enter the webview
 
@@ -52,6 +57,10 @@ engine via `LV24_SEO_BIN`, and provider-side breaches.
   `auth status --json`.
 - Environment-provided secrets are read-only in the UI. Removing one from the file does not remove
   the environment variable; the UI must say so.
+- On Linux the CLI runner inherits the session-bus and XDG runtime variables that Secret Service
+  needs (`DBUS_SESSION_BUS_ADDRESS`, `XDG_RUNTIME_DIR`, `TMPDIR` and related paths) while still
+  filtering unrelated host variables. This makes the OS keychain reachable from the desktop process;
+  the secret value itself still travels only over stdin.
 - `seo.toml` never contains tokens, passwords or bot tokens. `config show` is redacted by the
   engine; the desktop must not “unredact” it.
 - MCP client installation may return the full merged host configuration, which can contain other
@@ -76,8 +85,9 @@ opt-in file. The desktop must show which source is active.
   canonicalized before use.
 - Write flags (`--send`, `--allow-write`, confirmation tokens) are never accepted from a read
   command and require an explicit confirmation dialog naming the target.
-- Cancellation kills the exact child process handle/PID. It never uses a wildcard process name;
-  several LV24 applications can run concurrently.
+- A timeout or dropped child handle kills the exact child process handle/PID. It never uses a
+  wildcard process name; several LV24 applications can run concurrently. There is no user-facing
+  cancel button in `0.2.0`.
 
 ## 5. Configuration files
 
@@ -86,7 +96,8 @@ opt-in file. The desktop must show which source is active.
 - Writes are atomic: temp file in the same directory, validation, backup, rename. A failed
   validation leaves the original mtime and contents unchanged.
 - Backups are timestamped and capped at five. They inherit restrictive permissions.
-- The raw TOML editor is advanced mode. It cannot save unvalidated TOML.
+- Source TOML is displayed read-only with secret-looking values redacted. There is no raw editor;
+  edits go through the validated Settings form and a field-level patch.
 - Environment overrides are displayed as names and status only. The UI explains that the desktop's
   own process environment may differ from a terminal's environment.
 
@@ -99,6 +110,7 @@ default-src 'self';
 base-uri 'self';
 object-src 'none';
 frame-ancestors 'none';
+form-action 'none';
 img-src 'self' asset: http://asset.localhost data:;
 style-src 'self' 'unsafe-inline';
 font-src 'self';
@@ -125,24 +137,43 @@ connect-src ipc: http://ipc.localhost
   `--collect-submodules`/`--collect-data`/`--add-data` flags and disables UPX.
 - `scripts/verify-sidecar.mjs` checks the executable exists, runs `version --json`, requires the
   pinned version and compares SHA-256 with `scripts/cli-checksums.json` when a hash is pinned.
-- A placeholder checksum (`null`) is allowed for local development but must be replaced with a
-  64-hex SHA-256 before a public release. The release runbook requires this.
-- The runtime does not re-hash the sidecar on every launch. Auto-update is not initialized in
-  `0.1.0`, so no updater signature covers the bundle: the checksum manifest is a build control, and
-  users must verify the downloaded asset against `SHA256SUMS.txt`.
+- The checksum policy is rebuild-aware. PyInstaller onedir output is not byte-reproducible, so CI
+  runs the verifier with `--no-hash` and records the actual SHA-256 in
+  `sidecar-checksums-<target>.json`. The release gate requires a valid report for every shipped
+  target (`hashPolicy: "rebuild"`, `ok: true`, 64-hex hash, positive size, exact engine version).
+  A `null` pin means “not reviewed yet”, not “verified”.
+- Sidecar checksum reports are CI evidence, not release assets. The published `SHA256SUMS.txt`
+  covers the installers, updater packages, signatures and `latest.json`; the sidecar executable is
+  inside those packages and is not listed separately.
+- The runtime does not re-hash the sidecar on every launch. The updater signature authenticates the
+  package that contains the sidecar; users who install manually must verify the downloaded asset
+  against `SHA256SUMS.txt`.
 - `LV24_SEO_BIN` is a deliberate escape hatch for development and advanced users. Release builds do
-  not use it unless the user sets it explicitly, and the UI labels the engine as external.
+  not use it unless the user sets it explicitly; the shell records the source as `env`. The current
+  UI shows the engine version, not a separate path/source panel.
 
 ## 8. Updates
 
-- Auto-update is **disabled** in the committed scaffold: `createUpdaterArtifacts` is `false` and
-  there is no updater endpoint or public key. The zero-spend default is a manual install/upgrade.
-- If the owner enables it later, Tauri's updater must use Ed25519/minisign signatures. The public
-  key belongs in `src-tauri/tauri.conf.json`; the private key is a CI secret and never in the
-  repository. `requireSignedVersion` must be enabled, and an update without a valid signature must
-  be rejected.
-- Enabling the feature requires a deliberate config change; a signing key alone does not turn it on.
-- Linux auto-update is supported for AppImage only; deb/rpm are manual upgrades.
+- Auto-update is **enabled** in the committed config. The updater endpoint is
+  `https://github.com/LevapVeeskela/lv24-seo-optimizer-desktop/releases/latest/download/latest.json`;
+  the public minisign key is embedded in `src-tauri/tauri.conf.json`.
+- `requireSignedVersion` is enabled. The updater verifies the package signature and binds the
+  announced version to the signed package. A signature failure blocks that artifact and points to
+  the release page; it is never downgraded to an offline warning or retried automatically.
+- The updater only accepts a version greater than the running one, so it cannot downgrade. It never
+  downloads or installs on its own; the user presses **Download and install**. An unsaved
+  configuration draft disables the install button.
+- The private key (`TAURI_SIGNING_PRIVATE_KEY`, optionally with
+  `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`) is passed only to the release build step. It is never
+  committed, logged, shipped or given to the staging, `latest.json`, checksum or upload steps.
+- `publish=true` requires the key. A build-only run without the key produces no updater artifacts.
+  Local builds without the key use `--no-sign` or a config override with
+  `createUpdaterArtifacts: false`.
+- Windows NSIS, macOS `.app` and Linux AppImage update in place. deb, rpm, MSI and the portable ZIP
+  are manual-only: the UI disables the in-app installer for those bundle types and links to the
+  release page.
+- `0.1.0` has no updater, endpoint or public key. Its users must install `0.2.0` manually once;
+  auto-update works from `0.2.0` onward.
 - OS code signing/notarization is separate. The default build is unsigned; see section 11.
 
 ## 9. No telemetry and diagnostics
@@ -150,7 +181,7 @@ connect-src ipc: http://ipc.localhost
 - The desktop has no analytics, crash-reporting endpoint or “phone home” call.
 - Provider calls are made by the engine, only when the user runs a command.
 - The diagnostics bundle is user-triggered and contains versions, paths, doctor checks, redacted
-  effective config, environment variable **names**, and recent non-secret job errors. It is never
+  effective config, environment variable **names**, and recent non-secret command errors. It is never
   uploaded automatically.
 - Logs redact secret-looking keys and bounded stderr. Users are told to review a bundle before
   sharing it.
@@ -197,8 +228,10 @@ paid certificate, notarization or paid runner without explicit owner approval.
 - Contract fixtures are generated from a pinned engine and contain no credentials or customer data.
 - `gitleaks` or an equivalent secret scan should run locally and in review; a detected secret is
   rotated, not just deleted from the latest commit.
-- Release artifacts are checksum-pinned before publication. The release job is owner-gated and
-  manual; there are no push/tag triggers.
+- Release artifacts are checksummed before publication. The release job is owner-gated and manual;
+  there are no push/tag triggers. The updater private key is scoped to the build step.
+- `SHA256SUMS.txt` covers every published asset, including updater signatures and `latest.json`.
+  Sidecar checksum reports stay in CI as rebuild-aware evidence and are not published.
 
 ## 13. Residual risks
 
@@ -206,9 +239,16 @@ paid certificate, notarization or paid runner without explicit owner approval.
 - HTTP rate limiting in the engine is process-local and cannot guarantee account-wide quotas.
 - Delivery is at-least-once, not exactly-once; a crash after remote acceptance can duplicate a
   message.
-- A user-supplied `LV24_SEO_BIN` is trusted by definition. The UI labels it, but cannot sandbox it.
-- Unsigned builds can be tampered with between download and execution; checksums reduce but do not
-  eliminate that risk.
+- A user-supplied `LV24_SEO_BIN` is trusted by definition. The shell records it as source `env`, but
+  cannot sandbox it; the current UI shows the version, not the source label.
+- Unsigned OS packages can be tampered with between download and execution; `SHA256SUMS.txt`
+  reduces but does not eliminate that risk. The updater signature authenticates updates, not the
+  first manual download.
+- The updater depends on GitHub and the embedded public key. A compromised GitHub release account or
+  a stolen updater private key is a high-impact supply-chain risk; the private key is therefore
+  build-step-only and rotating it requires a manual release with the new public key.
+- deb, rpm, MSI and portable ZIP installs are manual by design; a user can run an older package
+  without the updater's no-downgrade check.
 - A compromised OS keychain or a malicious local process with the same user privileges is outside
   the desktop's control.
 
@@ -220,7 +260,11 @@ paid certificate, notarization or paid runner without explicit owner approval.
 - [ ] CSP is production-safe, and report HTML opens externally through `open_path` (approved root
       plus extension allow-list) instead of being embedded in the webview.
 - [ ] Write actions require confirmation and preserve engine `WRITE_DISABLED` semantics.
-- [ ] Cancel kills only the exact child process.
-- [ ] Sidecar version and checksum are verified before release.
+- [ ] A timeout kills only the exact child process; no wildcard process cleanup exists.
+- [ ] Sidecar version is verified before release, and the rebuild-aware checksum report exists for
+      every shipped target.
+- [ ] Updater signatures verify, `requireSignedVersion` is on, downgrades are refused and the
+      private key reaches only the build step.
+- [ ] Manual-only bundle types disable the in-app installer and link to the release page.
 - [ ] Unsigned-build warnings are present in the README and release notes.
 - [ ] New dependencies are free-tier compatible and reviewed.

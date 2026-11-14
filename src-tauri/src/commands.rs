@@ -13,7 +13,7 @@ use crate::error::{AppError, AppResult, ErrorInfo};
 use crate::paths;
 use crate::settings::{Settings, SettingsPatch, SettingsStore};
 
-pub const MIN_ENGINE_VERSION: &str = "0.5.0";
+pub const MIN_ENGINE_VERSION: &str = "0.5.1";
 
 pub struct AppState {
     pub paths: paths::AppPaths,
@@ -73,6 +73,8 @@ pub struct ShellStatus {
     pub data_dir: Option<String>,
     pub platform: String,
     pub arch: String,
+    /// Installed bundle type: deb, rpm, appimage, msi, nsis, app or unknown.
+    pub bundle_kind: String,
     pub paths: PathsStatus,
 }
 
@@ -183,6 +185,9 @@ pub async fn shell_status(
         data_dir: data_dir.map(|path| path.display().to_string()),
         platform: std::env::consts::OS.to_string(),
         arch: std::env::consts::ARCH.to_string(),
+        bundle_kind: tauri::utils::platform::bundle_type()
+            .map(|kind| kind.to_string())
+            .unwrap_or_else(|| "unknown".to_string()),
         paths: PathsStatus {
             app_config_dir: app_paths.config_dir.display().to_string(),
             app_data_dir: app_paths.data_dir.display().to_string(),
@@ -532,6 +537,9 @@ pub async fn config_read(
                                 .to_string(),
                         );
                     }
+                    if let Some(error) = envelope_error(&run.envelope) {
+                        result.engine_error = Some(error);
+                    }
                     result.envelope = Some(run.envelope);
                 }
                 Err(err) => result.engine_error = Some(err.info()),
@@ -878,6 +886,28 @@ fn envelope_warnings(envelope: &serde_json::Value) -> Vec<String> {
         .unwrap_or_default()
 }
 
+/// A `{ok:false}` CLI envelope is a rejection, not a ready configuration.
+/// Surface the engine's own code/message so Settings can render it immediately.
+fn envelope_error(envelope: &serde_json::Value) -> Option<ErrorInfo> {
+    if envelope.get("ok").and_then(serde_json::Value::as_bool) != Some(false) {
+        return None;
+    }
+    let error = envelope.get("error");
+    let code = error
+        .and_then(|value| value.get("code"))
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("ENGINE_ERROR");
+    let message = error
+        .and_then(|value| value.get("message"))
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("the engine rejected the configuration");
+    Some(ErrorInfo {
+        code: code.to_string(),
+        message: message.to_string(),
+        details: error.cloned(),
+    })
+}
+
 fn version_at_least(candidate: &str, minimum: &str) -> bool {
     match (parse_semver(candidate), parse_semver(minimum)) {
         (Some(candidate), Some(minimum)) => candidate >= minimum,
@@ -1026,6 +1056,40 @@ mod tests {
         });
         assert_eq!(envelope_warnings(&envelope), vec!["one", "two"]);
         assert!(envelope_warnings(&serde_json::json!({"ok": true})).is_empty());
+    }
+
+    #[test]
+    fn rejected_envelope_becomes_an_engine_error() {
+        let envelope = serde_json::json!({
+            "ok": false,
+            "error": {
+                "code": "CONFIG_INVALID",
+                "message": "project.base_url: must be an absolute URL",
+                "retryable": false
+            },
+            "meta": {},
+            "warnings": []
+        });
+        let error = envelope_error(&envelope).expect("rejection must be surfaced");
+        assert_eq!(error.code, "CONFIG_INVALID");
+        assert_eq!(error.message, "project.base_url: must be an absolute URL");
+        assert_eq!(error.details.unwrap()["code"], "CONFIG_INVALID");
+    }
+
+    #[test]
+    fn accepted_or_malformed_envelopes_have_no_engine_error() {
+        assert!(envelope_error(&serde_json::json!({
+            "ok": true,
+            "data": {},
+            "meta": {},
+            "warnings": []
+        }))
+        .is_none());
+        assert!(envelope_error(&serde_json::json!({"data": {}})).is_none());
+
+        let fallback = envelope_error(&serde_json::json!({"ok": false})).unwrap();
+        assert_eq!(fallback.code, "ENGINE_ERROR");
+        assert!(fallback.message.contains("rejected"));
     }
 
     #[test]

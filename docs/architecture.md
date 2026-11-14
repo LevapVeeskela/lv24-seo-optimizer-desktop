@@ -1,31 +1,35 @@
 # Architecture
 
-Status: **implementation contract.** The Rust command bridge and product screens are implemented in
-this repository. Where this document describes a control, it is the requirement that
-implementation must satisfy. The pinned engine is `lv24-seo 0.5.0`.
+Status: **implementation contract for `0.2.0`.** The Rust command bridge and product screens are
+implemented in this repository. Where this document describes a control, it is the requirement that
+implementation must satisfy. The pinned engine is `lv24-seo 0.5.1`.
 
 ## 1. Shape
 
 ```
 ┌──────────────────────────────────────────────────────────────┐
 │ Webview: React 19 + TypeScript + Vite + MobX                 │
-│  app / pages / widgets / features / entities / shared        │
-│  settings forms · configuration outputs · reports · jobs     │
+│  app / pages / features / entities / shared                  │
+│  settings forms · configuration outputs · reports · updates  │
 │  invoke("config_read") · invoke("cli_run") · events          │
 └───────────────────────────┬──────────────────────────────────┘
                             │ Tauri IPC, allow-listed commands
 ┌───────────────────────────▼──────────────────────────────────┐
 │ Rust shell                                                   │
 │  config read / validate / write (toml_edit)                  │
-│  CLI runner: argv array, stdin, timeout, cancel              │
-│  job manager + bounded log events                            │
-│  path allow-list · secret stdin bridge · manual updates      │
+│  CLI runner: argv array, stdin, timeout, bounded output      │
+│  path allow-list · secret stdin bridge · updater plugin      │
 └───────────────────────────┬──────────────────────────────────┘
                             │ child process, one workspace at a time
 ┌───────────────────────────▼──────────────────────────────────┐
 │ lv24-seo Python CLI (PyInstaller onedir sidecar)             │
 │  --json envelopes · reports · crawl · SQLite · MCP server    │
 │  keychain / env / opt-in file secrets                        │
+└──────────────────────────────────────────────────────────────┘
+                            │
+┌───────────────────────────▼──────────────────────────────────┐
+│ GitHub Releases                                              │
+│  latest.json + signed NSIS / .app.tar.gz / AppImage          │
 └──────────────────────────────────────────────────────────────┘
 ```
 
@@ -41,7 +45,7 @@ record and the only component that talks to provider APIs.
 | Rust → engine | argv array, optional stdin, config path, cwd | absolute `--config`, `--json`, path allow-list, per-command timeout |
 | Engine → provider | user credentials, queries, site URLs | engine-owned HTTP clients, rate limits, read-only defaults |
 | Engine → local disk | SQLite, reports, snapshots | configured data directory; desktop does not invent paths |
-| Desktop → GitHub | manual update metadata and checksums | SHA-256 manifest; no telemetry |
+| Desktop → GitHub | `latest.json`, signed update package | HTTPS, embedded minisign public key, `requireSignedVersion`, no downgrades |
 
 The webview is untrusted input. It can request a known operation with validated arguments; it cannot
 choose an executable, construct a shell command, read arbitrary files, or write outside the approved
@@ -50,7 +54,7 @@ semantics and its own write gates.
 
 ## 3. No local HTTP API
 
-There is **no local HTTP API** in v0.1. The CLI already returns stable `--json` envelopes, and a
+There is **no local HTTP API** in v0.2. The CLI already returns stable `--json` envelopes, and a
 loopback server would add authentication, CSRF/proxy handling and another lifecycle to secure for
 little gain. The desktop uses a direct child-process bridge.
 
@@ -62,9 +66,9 @@ loopback binding. It is not a dependency of the current architecture.
 All engine calls use:
 
 - an **argument array**, never a shell string;
-- an absolute `--config` path (or an explicit onboarding workspace);
+- an absolute `--config` path (or an explicit workspace selected in Settings);
 - `--json` and one parsed envelope;
-- a bounded timeout and an exact child handle for cancellation;
+- a bounded timeout and an exact child handle;
 - `cwd = config parent` so a relative `storage.data_dir` resolves like a terminal run.
 
 The envelope is:
@@ -88,32 +92,23 @@ Rules:
   pages.
 - On Windows, launch with `CREATE_NO_WINDOW`; capture stdout/stderr as UTF-8 with a bounded buffer.
 
-The command table is intentionally small and fixed. A representative set:
+The command surface is fixed. The generic `cli_run` allow-list is:
 
 | Desktop command | Engine call | Class |
 |---|---|---|
-| `desktop_status` | `version --json` | read |
-| `config_read` | `config show --json` | read |
-| `config_init` | `init --property ... --data-dir ...` | write |
-| `config_validate` | `config show --config <temp> --json` | read |
+| `version` | `version --json` | read |
+| `stats` | `stats --days <n> --lag-days <n> --json` | read |
+| `config_show` | `config show --config <path> --json` | read |
 | `doctor` | `doctor --json` | read |
-| `providers` | `properties --json` | read |
+| `properties` | `properties --json` | read |
 | `auth_status` | `auth status --json` | read |
-| `auth_set` | `auth set --provider <p> --stdin` | write, secret stdin |
-| `auth_delete` | `auth logout --provider <p> --json` | write, confirm |
-| `gsc_query` | `gsc query ... --json` | read |
-| `yandex_queries` | `yandex queries --json` | read |
-| `crawl_run` | `crawl ... --json` | local write, cancellable |
-| `report_weekly` | `report weekly --out <app data>/exports/reports --json` | read/write snapshot |
-| `report_send` | `report weekly --send --json` | external send, confirm |
+| `report_weekly` | `report weekly --out <app data>/exports/reports --json` | local write |
 | `report_diff` | `report diff ... --json` | read |
-| `schedule_preview` | `schedule print ... --json` | read |
-| `schedule_install` | `schedule install ... --json` | host write, confirm |
-| `mcp_install` | `install --client ... --json` | host write, confirm |
-| `export_skills` | `export skills --out ... --json` | file write, path picker |
+| `crawl` | `crawl ... --json` | local write |
 
-Adding a command requires a reviewed Rust change, an argument schema, a fixture and a test. The
-webview cannot add one at runtime.
+Dedicated Tauri commands cover the rest: `shell_status`, `config_read`, `config_validate`,
+`config_write`, `config_patch`, `auth_set` (secret over stdin), `auth_delete`, `write_text_file`,
+`settings_get`, `settings_set` and `open_path`. The webview cannot add a command at runtime.
 
 ## 5. Engine discovery and version gate
 
@@ -121,19 +116,24 @@ Resolution order:
 
 1. `LV24_SEO_BIN` (absolute path; development or an explicitly chosen system engine);
 2. the bundled resource `engine/lv24-seo/lv24-seo[.exe]`;
-3. a sibling `lv24-seo/` directory next to the app;
-4. `PATH`, only when `LV24_SEO_ALLOW_PATH_ENGINE=1` is set (opt-in; only the value `1` enables it,
+3. a flat resource `lv24-seo/lv24-seo[.exe]` (portable layout);
+4. a sibling `lv24-seo/` directory next to the app (portable layout);
+5. `PATH`, only when `LV24_SEO_ALLOW_PATH_ENGINE=1` is set (opt-in; only the value `1` enables it,
    and a stray `lv24-seo` on `PATH` is otherwise ignored).
 
-Nothing is downloaded automatically.
+Nothing is downloaded automatically. The shell runs `lv24-seo version --json`, records the path,
+source and version, and compares the version with `MIN_ENGINE_VERSION`. An older engine is marked
+`compatible: false`; the UI treats the engine as offline and shows the standard offline notice. It
+does not silently downgrade or run the command. A newer engine passes the gate but is not the
+release-tested pin.
 
-A release build never downloads or executes code from the webview. On startup the shell runs
-`lv24-seo version --json`, requires at least the pinned version, and shows both desktop and engine
-versions. An older engine is a blocking, actionable dialog, not a silent downgrade.
+The `source` labels are `env`, `bundled`, `bundled-flat`, `sibling` and `PATH`. The portable ZIP uses
+a sibling or flat resource layout, which is how the updater recognizes that the build cannot replace
+itself.
 
 ## 6. Configuration write model
 
-Structured forms edit a draft model. The save flow is:
+Structured Settings forms edit a draft model. The save flow is:
 
 1. build a TOML patch with `toml_edit` so comments and key order survive;
 2. write a temporary file next to the target;
@@ -144,23 +144,25 @@ Structured forms edit a draft model. The save flow is:
 
 Form saves are field-level patches, so comments, key order and unrelated external edits survive. If
 another process changed the file, reload before saving so the form reflects the current file; the
-diff tab shows saved-vs-draft fields. Windows file locks produce a retry message, not a partial write.
+Diff tab shows saved-vs-draft fields. Windows file locks produce a retry message, not a partial write.
 
-Raw TOML is shown read-only in the configuration output. Edits go through the form draft, which is
-validated by the engine before a patch is written. A parse error blocks the form and names the line
-and column. Environment overrides are read-only badges: the UI shows the variable name and explains
-that the environment wins over the file. Values are never displayed.
+Source TOML is shown read-only in the Configuration screen, with secret-looking values redacted.
+There is no raw editor. Edits go through the Settings form, which is validated by the engine before a
+patch is written. A parse error blocks the form and names the line and column. Environment overrides
+are read-only badges: the UI shows the variable name and explains that the environment wins over the
+file. Values are never displayed.
 
-## 7. Jobs and failure model
+## 7. Long-running calls and failure model
 
-A job has a kind, parameters, status (`queued`, `running`, `succeeded`, `partial`, `failed`,
-`cancelled`), timestamps, exit code, envelope and bounded log tail. Jobs are serialized per
-workspace/data directory because the SQLite writer and delivery can block.
+Engine calls are synchronous from the UI's perspective. Each command has a fixed timeout: `crawl`
+600 seconds; `stats`, `report weekly` and `report diff` 120 seconds; `version`, `config show`,
+`doctor`, `properties` and `auth status` 30 seconds; `auth set`/`auth delete` 120 seconds. A timeout
+kills the exact child process and returns a typed error.
 
-- No fake percentages. Until the engine emits `--progress ndjson`, the UI shows an indeterminate
-  bar, elapsed time and a phase label marked as an estimate.
-- Cancel kills the exact child process tree. A cancelled crawl stores nothing (the engine persists
-  at the end); a cancelled delivery can leave an unknown send state, which the UI must say.
+- There is no job queue, no percentage progress and no user-facing cancel button yet. The UI shows
+  an indeterminate busy state and waits for the call to finish.
+- `stdout` is capped at 4 MiB and `stderr` at 128 KiB; an oversized response is an error, not a
+  truncated success.
 - Partial failure (`ok=true` with incomplete meta, or exit `5`) is “completed with warnings”, never
   a clean success.
 - A missing token is configuration, not an outage. A no-data report is neutral, not an error.
@@ -171,16 +173,15 @@ workspace/data directory because the SQLite writer and delivery can block.
 Feature-Sliced Design, dependencies pointing downward:
 
 ```
-app/        root store, providers, router, layout, global styles
-pages/      onboarding, dashboard, project, providers, report settings,
-            crawl settings, storage, configuration, reports, crawl,
-            queries, automation, settings, diagnostics
-widgets/    app header/nav, health strip, report summary, config panel
-features/   save-config, validate-config, set-secret, run-report, run-crawl,
-            schedule-preview, mcp-install, export-skills, update-check
-entities/   config, provider, secret, report, crawl, schedule, job, settings
-shared/     envelope parser, Tauri transport, i18n, UI primitives, formatting
+app/        root store, providers, router, layout, styles
+pages/      dashboard, reports, settings, configuration, recommendations, not-found
+features/   save-config, secret-set, update, agent-task
+entities/   config, engine, report, stats, recommendation, update
+shared/     CLI transport, desktop settings/files, i18n, UI primitives, formatting
 ```
+
+There is no `widgets/` layer today. The header, navigation and update badge live in `app/layout` and
+`features/update`; a widget layer is added only when a slice is genuinely reused across pages.
 
 - One public API per slice; no imports of another slice's internals.
 - The envelope parser and error mapping live in `shared`; screens never parse raw process output.
@@ -193,15 +194,15 @@ shared/     envelope parser, Tauri transport, i18n, UI primitives, formatting
 
 - `contracts/config.schema.json` is generated from the pinned engine's `SeoConfig` JSON schema.
 - `contracts/cli-v1/*.json` are normalized envelopes recorded from the pinned engine.
-- `contracts/stats-v1.md` explains the stats fields; `contracts/cli-v1/stats.json` is generated
-  from the pinned engine's `stats` command.
+- `contracts/stats-v1.md` documents the shipped `stats` contract; `contracts/cli-v1/stats.json` is
+  generated from the pinned engine's `stats` command. It is a shipped contract, not a draft.
 - `scripts/gen-contracts.py` regenerates; `scripts/check-contracts.mjs` fails on drift.
-- The desktop pins the engine version and refuses an unknown major/minor combination rather than
-  guessing at field semantics.
+- The desktop pins the engine version and refuses an engine below its minimum rather than guessing at
+  field semantics.
 
 See [`contracts/README.md`](../contracts/README.md).
 
-## 10. Packaging
+## 10. Packaging and updates
 
 The release sidecar is a **PyInstaller onedir** tree, not onefile:
 
@@ -210,13 +211,15 @@ The release sidecar is a **PyInstaller onedir** tree, not onefile:
   signing;
 - the tree is placed under `src-tauri/engine/lv24-seo/` and mapped into Tauri resources as
   `engine/lv24-seo/`;
-- the shell resolves `<resource_dir>/engine/lv24-seo/lv24-seo[.exe]` (with a flat
-  `<resource_dir>/lv24-seo/` fallback);
+- the shell resolves `<resource_dir>/engine/lv24-seo/lv24-seo[.exe]` (with flat and sibling
+  fallbacks);
 - `scripts/build-sidecar.py` builds it with `uv` and explicit collect flags;
-- `scripts/verify-sidecar.mjs` checks the executable version and SHA-256 against
-  `scripts/cli-checksums.json`;
-- auto-update is not initialized (`createUpdaterArtifacts: false`, no updater endpoint or plugin);
-  if enabled later, it uses Tauri's Ed25519/minisign key, separate from OS code signing and
-  notarization, which are currently not purchased.
+- `scripts/verify-sidecar.mjs` checks the executable version and records the rebuild-aware SHA-256;
+  `scripts/cli-checksums.json` holds the reviewed local pin where one exists.
+
+Auto-update is enabled for Windows NSIS, macOS `.app` and Linux AppImage. The updater reads a signed
+`latest.json` from GitHub Releases, verifies the package with an embedded minisign key, refuses
+downgrades and never installs without user confirmation. deb, rpm, MSI and the portable ZIP are
+manual-only. The updater private key is scoped to the release build step and is never shipped.
 
 See [`docs/release.md`](release.md) and [`docs/security.md`](security.md).

@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "LV24 SEO Optimizer",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "identifier": "by.lv24.seo.desktop",
   "build": {
     "beforeDevCommand": "npm run dev",
@@ -41,7 +41,7 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ],
-    "createUpdaterArtifacts": false,
+    "createUpdaterArtifacts": true,
     "resources": {
       "engine/lv24-seo/": "engine/lv24-seo/"
     },
@@ -51,6 +51,18 @@
     "windows": {
       "nsis": {
         "installMode": "currentUser"
+      }
+    }
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEUxMTVBOTFCQzVCRjkyN0EKUldSNmtyL0ZHNmtWNFFKSzJZOVY3c25oVTZnUUJlb1FpNUtHVjdIenZZeE5nelFsb21vaWNGZ0gK",
+      "endpoints": [
+        "https://github.com/LevapVeeskela/lv24-seo-optimizer-desktop/releases/latest/download/latest.json"
+      ],
+      "requireSignedVersion": true,
+      "windows": {
+        "installMode": "passive"
       }
     }
   }

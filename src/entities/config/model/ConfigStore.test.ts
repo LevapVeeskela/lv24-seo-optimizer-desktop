@@ -107,6 +107,36 @@ describe("ConfigStore", () => {
     expect(store.loadError?.message).toContain("unterminated");
   });
 
+  it("surfaces an engine rejection from config_read immediately", async () => {
+    readMock.mockResolvedValue({
+      ...readResult("C:\\w\\seo.toml", RAW),
+      config: null,
+      envelope: {
+        ok: false,
+        error: {
+          code: "CONFIG_INVALID",
+          message: "project.base_url: must be an absolute URL",
+          retryable: false,
+        },
+        meta: {},
+        warnings: [],
+      },
+      engineError: {
+        code: "CONFIG_INVALID",
+        message: "project.base_url: must be an absolute URL",
+        retryable: false,
+      },
+    });
+    const store = new ConfigStore();
+
+    expect(await store.load("C:\\w\\seo.toml")).toBe(true);
+
+    expect(store.engineError?.code).toBe("CONFIG_INVALID");
+    expect(store.engineError?.message).toContain("base_url");
+    // The raw file still loads so the user can fix the rejected field.
+    expect(store.draft?.project.name).toBe("example");
+  });
+
   it("refuses to save a locally invalid draft", async () => {
     readMock.mockResolvedValue(readResult("C:\\w\\seo.toml", RAW));
     const store = new ConfigStore();

@@ -28,8 +28,11 @@ function statusTone(
 
 export const AgentQueue = observer(function AgentQueue({
   store,
+  exportDir = null,
 }: {
   store: AgentTaskStore;
+  /** Default directory for the native save dialog (app export root). */
+  exportDir?: string | null;
 }) {
   const { locale } = useI18n();
   const copy = useRecommendationCopy();
@@ -49,16 +52,17 @@ export const AgentQueue = observer(function AgentQueue({
     }
   };
 
-  const exportTask = (task: AgentTask) => {
-    const ok = exportRecommendationPrompt(
+  const exportTask = async (task: AgentTask) => {
+    const outcome = await exportRecommendationPrompt(
       task.recommendation,
       task.property,
       task.period,
+      { defaultDir: exportDir },
     );
-    if (ok) {
+    if (outcome === "exported") {
       store.markExported(task.id);
       notify(copy.exported);
-    } else {
+    } else if (outcome === "failed") {
       notify(copy.exportFailed, "error");
     }
   };
@@ -120,7 +124,7 @@ export const AgentQueue = observer(function AgentQueue({
                 <Button
                   variant="secondary"
                   className="btn-small"
-                  onClick={() => exportTask(task)}
+                  onClick={() => void exportTask(task)}
                 >
                   {copy.exportMd}
                 </Button>

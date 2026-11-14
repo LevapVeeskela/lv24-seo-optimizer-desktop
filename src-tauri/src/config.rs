@@ -552,16 +552,19 @@ pub(crate) fn atomic_replace(temp: &Path, target: &Path) -> AppResult<()> {
                             let _ = fs::remove_file(&old);
                             Ok(())
                         }
-                        Err(second) => {
-                            let _ = fs::rename(&old, target);
-                            Err(AppError::new(
+                        Err(second) => match fs::rename(&old, target) {
+                            Ok(()) => Err(AppError::new(
                                 "CONFIG_WRITE",
                                 format!(
                                     "cannot replace {}: {second} (restored the previous file)",
                                     target.display()
                                 ),
-                            ))
-                        }
+                            )),
+                            // Never claim a restoration that did not happen: the
+                            // previous file is still at `old` and the caller (and
+                            // the user) must be told exactly where it is.
+                            Err(restore) => Err(restore_failure(&old, target, &second, &restore)),
+                        },
                     }
                 } else {
                     Err(AppError::new(
@@ -585,6 +588,32 @@ pub(crate) fn atomic_replace(temp: &Path, target: &Path) -> AppResult<()> {
             }
         }
     }
+}
+
+/// A failed Windows fallback could not put the previous file back. Report the
+/// replacement error, the restore error and the exact `.old` path; the caller
+/// must never treat this as a successful rollback.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn restore_failure(
+    old: &Path,
+    target: &Path,
+    replace: &std::io::Error,
+    restore: &std::io::Error,
+) -> AppError {
+    AppError::new(
+        "CONFIG_WRITE",
+        format!(
+            "cannot replace {}: {replace}; restoring the previous file failed ({restore}); \
+             the previous file is kept at {}",
+            target.display(),
+            old.display()
+        ),
+    )
+    .with_details(serde_json::json!({
+        "path": target.display().to_string(),
+        "oldPath": old.display().to_string(),
+        "restoreError": restore.to_string(),
+    }))
 }
 
 fn backup_path(target: &Path) -> AppResult<PathBuf> {
@@ -771,6 +800,24 @@ mod tests {
         let error = commit_temp(&temp, &target).unwrap_err();
         assert_eq!(error.code(), "CONFIG_WRITE");
         assert_eq!(fs::read_to_string(&target).unwrap(), "version = 1\n");
+    }
+
+    #[test]
+    fn failed_restore_reports_the_old_path_instead_of_claiming_success() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("seo.toml");
+        let old = dir.path().join(".seo.toml.old-1-1");
+        let replace = std::io::Error::new(std::io::ErrorKind::PermissionDenied, "locked");
+        let restore = std::io::Error::new(std::io::ErrorKind::NotFound, "gone");
+
+        let error = restore_failure(&old, &target, &replace, &restore);
+
+        assert_eq!(error.code(), "CONFIG_WRITE");
+        assert!(!error.message().contains("restored the previous file"));
+        assert!(error.message().contains(&old.display().to_string()));
+        let details = error.details().unwrap();
+        assert_eq!(details["oldPath"], old.display().to_string());
+        assert_eq!(details["restoreError"], "gone");
     }
 
     #[test]

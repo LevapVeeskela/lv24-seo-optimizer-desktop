@@ -1,10 +1,10 @@
 [package]
 name = "lv24-seo-desktop"
-version = "0.1.0"
+version = "0.2.0"
 description = "LV24 SEO Optimizer desktop shell"
 authors = ["LV24"]
 edition = "2021"
-rust-version = "1.85"
+rust-version = "1.90"
 license = "Apache-2.0"
 repository = "https://github.com/LevapVeeskela/lv24-seo-optimizer-desktop"
 
@@ -23,6 +23,8 @@ tauri = { version = "2", features = [] }
 tauri-plugin-dialog = "2"
 tauri-plugin-log = "2"
 tauri-plugin-opener = "2"
+tauri-plugin-process = "2.4.0"
+tauri-plugin-updater = "2.14.1"
 thiserror = "2"
 tokio = { version = "1", features = ["io-util", "process", "rt", "time"] }
 toml_edit = "0.25"
