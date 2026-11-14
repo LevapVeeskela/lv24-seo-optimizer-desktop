@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { observer } from "mobx-react-lite";
 import { Link, useNavigate } from "react-router-dom";
 import { useRootStore } from "@/app/providers/StoreProvider";
@@ -6,6 +6,7 @@ import { useI18n } from "@/shared/i18n";
 import { formatDateTime } from "@/shared/lib/format";
 import { Button } from "@/shared/ui/Button";
 import { Card } from "@/shared/ui/Card";
+import { ConfirmDialog } from "@/shared/ui/ConfirmDialog";
 import { EmptyState } from "@/shared/ui/EmptyState";
 import { Loading } from "@/shared/ui/Loading";
 import { Notice } from "@/shared/ui/Notice";
@@ -19,16 +20,20 @@ export const DashboardPage = observer(function DashboardPage() {
   const { engine, stats, reports } = useRootStore();
   const navigate = useNavigate();
   const { notify } = useFeedback();
+  const [confirmOpen, setConfirmOpen] = useState(false);
+  const configPath = engine.status?.configPath ?? null;
 
   useEffect(() => {
-    if (!engine.loading && !engine.offline && stats.state === "idle") {
+    // Without a workspace configuration `stats` is a guaranteed failure.
+    if (!engine.loading && !engine.offline && configPath && stats.state === "idle") {
       void stats.refresh();
     }
-  }, [engine.loading, engine.offline, stats]);
+  }, [engine.loading, engine.offline, configPath, stats]);
 
   const reconnect = async () => {
     await engine.load();
-    if (!engine.offline) {
+    // Read the fresh status: the shell may have reported a config path.
+    if (!engine.offline && engine.status?.configPath) {
       await stats.refresh();
     }
   };
@@ -42,6 +47,8 @@ export const DashboardPage = observer(function DashboardPage() {
     }
     notify(reports.error?.message ?? t("reports.buildFailed"), "error");
   };
+
+  const requestBuild = () => setConfirmOpen(true);
 
   const data = stats.data;
   const services = data?.services ?? [];
@@ -64,7 +71,7 @@ export const DashboardPage = observer(function DashboardPage() {
             variant="secondary"
             loading={stats.loading}
             onClick={() => void stats.refresh()}
-            disabled={engine.offline}
+            disabled={engine.offline || !configPath}
           >
             {stats.loading
               ? t("actions.refreshing")
@@ -73,8 +80,8 @@ export const DashboardPage = observer(function DashboardPage() {
           <Button
             variant="primary"
             loading={reports.loading}
-            onClick={() => void buildWeekly()}
-            disabled={engine.offline}
+            onClick={requestBuild}
+            disabled={engine.offline || !configPath}
           >
             {reports.loading
               ? t("actions.building")
@@ -119,7 +126,21 @@ export const DashboardPage = observer(function DashboardPage() {
 
       {stats.loading && !data ? <Loading label={t("dashboard.loading")} /> : null}
 
-      {!data && !stats.loading && !stats.error && !engine.offline ? (
+      {!configPath && !engine.loading && !engine.offline ? (
+        <Card>
+          <EmptyState
+            title={t("dashboard.noConfigTitle")}
+            hint={t("dashboard.noConfigHint")}
+            action={
+              <Link className="btn btn-primary" to="/settings">
+                {t("dashboard.openSettings")}
+              </Link>
+            }
+          />
+        </Card>
+      ) : null}
+
+      {configPath && !data && !stats.loading && !stats.error && !engine.offline ? (
         <Card>
           <EmptyState
             title={t("dashboard.emptyTitle")}
@@ -208,6 +229,21 @@ export const DashboardPage = observer(function DashboardPage() {
           ) : null}
         </>
       ) : null}
+
+      <ConfirmDialog
+        open={confirmOpen}
+        title={t("reports.confirm.title")}
+        confirmLabel={t("reports.confirm.confirm")}
+        cancelLabel={t("common.cancel")}
+        busy={reports.loading}
+        onCancel={() => setConfirmOpen(false)}
+        onConfirm={() => {
+          setConfirmOpen(false);
+          void buildWeekly();
+        }}
+      >
+        <p>{t("reports.confirm.body")}</p>
+      </ConfirmDialog>
     </section>
   );
 });

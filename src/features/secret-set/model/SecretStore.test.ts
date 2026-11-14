@@ -60,6 +60,22 @@ describe("secret actions", () => {
     });
   });
 
+  it("marks a missing shell command as unsupported", async () => {
+    invokeMock.mockRejectedValue("Command auth_set not found");
+    const result = await storeSecret("gsc", "secret-value", null);
+    expect(result.ok).toBe(false);
+    expect(result.unsupported).toBe(true);
+    expect(result.message).toContain("auth_set");
+  });
+
+  it("keeps a normal engine failure as an error", async () => {
+    invokeMock.mockRejectedValue(new Error("keyring is locked"));
+    const result = await removeSecret("gsc", null);
+    expect(result.ok).toBe(false);
+    expect(result.unsupported).toBe(false);
+    expect(result.message).toContain("keyring is locked");
+  });
+
   it("quotes the config path in the CLI fallback commands", () => {
     expect(authSetCommand("gsc", "C:\\w\\seo.toml")).toBe(
       'lv24-seo auth set --provider gsc --stdin --config "C:\\w\\seo.toml"',

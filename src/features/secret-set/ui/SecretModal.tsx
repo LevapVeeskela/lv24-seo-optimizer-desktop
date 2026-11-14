@@ -62,13 +62,16 @@ export function SecretModal({
   const [secret, setSecret] = useState("");
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<ModalMessage | null>(null);
+  const [unsupported, setUnsupported] = useState(false);
   const status = entries.find((entry) => entry.provider === selected);
+  const authAvailable = AUTH_SET_AVAILABLE && !unsupported;
 
   useEffect(() => {
     if (open) {
       setSelected(provider ?? "gsc");
       setSecret("");
       setMessage(null);
+      setUnsupported(false);
     } else {
       setSecret("");
     }
@@ -120,6 +123,9 @@ export function SecretModal({
       onChanged();
       return;
     }
+    if (result.unsupported) {
+      setUnsupported(true);
+    }
     setMessage({
       text: result.unsupported
         ? t("secrets.unsupported")
@@ -137,6 +143,9 @@ export function SecretModal({
       setMessage({ text: t("secrets.removed"), variant: "info" });
       onChanged();
       return;
+    }
+    if (result.unsupported) {
+      setUnsupported(true);
     }
     setMessage({
       text: result.unsupported
@@ -218,7 +227,7 @@ export function SecretModal({
           </Notice>
         ) : null}
 
-        {AUTH_SET_AVAILABLE ? (
+        {authAvailable ? (
           <>
             <Field
               id={inputId}

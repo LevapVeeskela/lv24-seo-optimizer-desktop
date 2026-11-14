@@ -368,12 +368,18 @@ describe("buildRecommendations", () => {
       source: "report",
       provider: "yandex_metrika",
     });
-    expect(
-      recommendations.some(
-        (item) =>
-          item.title === "No Google Search Console rows in the weekly report",
-      ),
-    ).toBe(false);
+    // GSC is listed in stats, but with `missing_token` and zero rows it does
+    // not cover the missing report rows; that gap must stay visible.
+    const missingGsc = recommendations.find(
+      (item) =>
+        item.title === "No Google Search Console rows in the weekly report",
+    );
+    expect(missingGsc).toMatchObject({
+      category: "data_quality",
+      severity: "medium",
+      source: "report",
+      provider: "gsc",
+    });
 
     const limitations = recommendations.filter((item) =>
       item.title.startsWith("Data limitation"),
@@ -387,6 +393,50 @@ describe("buildRecommendations", () => {
         )
         .sort(),
     ).toEqual(["GSC data lag 2-3 days", "top-3000 queries only"]);
+  });
+
+  it("only treats providers with returned rows as covered", () => {
+    const report = weeklyReport([
+      sourceSection([
+        { source: "gsc", status: "missing", rows: 0, limitations: [] },
+        { source: "bing", status: "missing", rows: 0, limitations: [] },
+      ]),
+    ]);
+    const stats: StatsData = {
+      services: [
+        {
+          provider: "gsc",
+          configured: true,
+          ready: true,
+          status: "ok",
+          rows: 0,
+        },
+        {
+          provider: "bing",
+          configured: true,
+          ready: true,
+          status: "ok",
+          rows: 42,
+        },
+      ],
+    };
+
+    const recommendations = buildRecommendations(report, stats);
+
+    // Present in stats with zero rows is still a missing-data gap.
+    expect(
+      recommendations.some(
+        (item) =>
+          item.title === "No Google Search Console rows in the weekly report",
+      ),
+    ).toBe(true);
+    // A provider that returned rows covers the report source row.
+    expect(
+      recommendations.some(
+        (item) =>
+          item.title === "No Bing Webmaster rows in the weekly report",
+      ),
+    ).toBe(false);
   });
 
   it("never claims zero, null or invented values", () => {

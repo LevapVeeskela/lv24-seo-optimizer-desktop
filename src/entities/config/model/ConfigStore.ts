@@ -329,8 +329,18 @@ export class ConfigStore {
     }
 
     const generation = this.generation;
-    const patches = diffToPatches(this.diff);
+    const patches = diffToPatches(this.diff, this.draft);
     const draftSnapshot = cloneConfig(this.draft);
+    if (patches.length === 0) {
+      // Never claim a save when no field patch would reach the engine: the
+      // file and the "saved" model would silently diverge.
+      this.saveError = {
+        code: "CONFIG_NOTHING_TO_WRITE",
+        message: "Nothing to write: the draft has no field changes to save.",
+        retryable: false,
+      };
+      return false;
+    }
     this.saving = true;
     this.saveError = null;
     this.usedFullWrite = false;

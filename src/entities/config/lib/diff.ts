@@ -46,9 +46,15 @@ export function diffConfigs(
  * Convert a field-level diff into `config_patch` operations. Provider block
  * presence is a UI-only field (`providers.gsc.present`); turning a block off
  * removes the whole table, and turning it on relies on the field patches that
- * the form emits. Leaf removals use `null`.
+ * the form emits. A presence-only change (the user re-set a value that already
+ * matched the default) has no field patch, so the draft's leaf values are
+ * written explicitly instead of reporting a false success. Leaf removals use
+ * `null`.
  */
-export function diffToPatches(entries: ConfigDiffEntry[]): ConfigPatch[] {
+export function diffToPatches(
+  entries: ConfigDiffEntry[],
+  draft?: ConfigModel | null,
+): ConfigPatch[] {
   const removedSections = new Set(
     entries
       .filter((entry) => entry.kind === "presence" && entry.draft !== true)
@@ -57,11 +63,11 @@ export function diffToPatches(entries: ConfigDiffEntry[]): ConfigPatch[] {
   const patches: ConfigPatch[] = [];
   for (const entry of entries) {
     if (entry.kind === "presence") {
+      const section = entry.path.replace(/\.present$/, "");
       if (entry.draft !== true) {
-        patches.push({
-          path: entry.path.replace(/\.present$/, ""),
-          value: null,
-        });
+        patches.push({ path: section, value: null });
+      } else if (draft && !hasFieldChange(entries, section)) {
+        patches.push(...sectionLeafPatches(draft, section));
       }
       continue;
     }
@@ -79,6 +85,25 @@ export function diffToPatches(entries: ConfigDiffEntry[]): ConfigPatch[] {
     });
   }
   return patches;
+}
+
+function hasFieldChange(entries: ConfigDiffEntry[], section: string): boolean {
+  return entries.some(
+    (entry) =>
+      entry.kind !== "presence" && entry.path.startsWith(`${section}.`),
+  );
+}
+
+function sectionLeafPatches(
+  draft: ConfigModel,
+  section: string,
+): ConfigPatch[] {
+  return Object.entries(flattenConfig(draft))
+    .filter(
+      ([path]) =>
+        path.startsWith(`${section}.`) && !path.endsWith(".present"),
+    )
+    .map(([path, value]) => ({ path, value }));
 }
 
 export function formatDiffValue(value: unknown): string {

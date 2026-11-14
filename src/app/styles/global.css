@@ -1548,8 +1548,11 @@ h1, h2, h3, h4, p { overflow-wrap: anywhere; }
 .dashboard-facts { margin-top: var(--space-3); }
 .dashboard-services {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(min(100%, 320px), 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
   gap: var(--space-4);
+}
+@media (max-width: 760px) {
+  .dashboard-services { grid-template-columns: 1fr; }
 }
 .service-card {
   display: flex;

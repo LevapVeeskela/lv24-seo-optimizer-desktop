@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { observer } from "mobx-react-lite";
 import { useRootStore } from "@/app/providers/StoreProvider";
 import { useI18n, type MessageKey } from "@/shared/i18n";
-import { errorMessage } from "@/shared/lib/errors";
+import { toAppError, type AppError } from "@/shared/lib/errors";
 import { Badge } from "@/shared/ui/Badge";
 import { Button } from "@/shared/ui/Button";
 import { Card } from "@/shared/ui/Card";
@@ -14,7 +14,6 @@ import { Notice } from "@/shared/ui/Notice";
 import { Select } from "@/shared/ui/Select";
 import { useFeedback } from "@/shared/ui/Feedback";
 import {
-  ConfigStore,
   openPath,
   type AuthProvider,
   type AuthProviderStatus,
@@ -56,21 +55,26 @@ function parentPath(path: string | null): string | null {
 
 export const SettingsPage = observer(function SettingsPage() {
   const { t } = useI18n();
-  const { engine } = useRootStore();
+  const { engine, config } = useRootStore();
   const { notify } = useFeedback();
-  const [config] = useState(() => new ConfigStore());
   const [secrets] = useState(() => new SecretStore());
   const [secretProvider, setSecretProvider] = useState<AuthProvider | null>(null);
-  const loadedPath = useRef<string | null>(null);
+  const secretsPath = useRef<string | null>(null);
   const configPath = engine.status?.configPath ?? null;
 
   useEffect(() => {
-    if (!configPath || loadedPath.current === configPath) {
+    if (!configPath) {
       return;
     }
-    loadedPath.current = configPath;
-    void config.load(configPath);
-    void secrets.load(configPath);
+    // Only reload when the active path changed; an unsaved draft must survive
+    // navigation to Config and back. The secrets store stays page-local.
+    if (config.path !== configPath) {
+      void config.load(configPath);
+    }
+    if (secretsPath.current !== configPath) {
+      secretsPath.current = configPath;
+      void secrets.load(configPath);
+    }
   }, [configPath, config, secrets]);
 
   const draft = config.draft;
@@ -114,7 +118,7 @@ export const SettingsPage = observer(function SettingsPage() {
     if (!configPath) {
       return;
     }
-    const ok = await config.load(configPath);
+    const ok = await config.reload();
     await secrets.load(configPath);
     notify(
       ok ? t("settings.reloaded") : config.loadError?.message ?? t("settings.loadError"),
@@ -130,10 +134,15 @@ export const SettingsPage = observer(function SettingsPage() {
     );
   };
 
+  const saveErrorText = (error: AppError | null): string | undefined =>
+    error?.code === "CONFIG_NOTHING_TO_WRITE"
+      ? t("settings.nothingToWrite")
+      : error?.message;
+
   const save = async () => {
     const ok = await config.save();
     notify(
-      ok ? t("settings.saved") : config.saveError?.message ?? t("settings.saveFailed"),
+      ok ? t("settings.saved") : saveErrorText(config.saveError) ?? t("settings.saveFailed"),
       ok ? "success" : "error",
     );
   };
@@ -150,7 +159,7 @@ export const SettingsPage = observer(function SettingsPage() {
     try {
       await openPath(path);
     } catch (error) {
-      notify(errorMessage(error), "error");
+      notify(toAppError(error, "OPEN_PATH").message, "error");
     }
   };
 
@@ -204,7 +213,7 @@ export const SettingsPage = observer(function SettingsPage() {
       await engine.load();
       notify(t("settings.configSelected"), "success");
     } catch (error) {
-      notify(errorMessage(error), "error");
+      notify(toAppError(error, "PICK_CONFIG").message, "error");
     }
   };
 
@@ -358,7 +367,7 @@ export const SettingsPage = observer(function SettingsPage() {
       {config.saveError ? (
         <Notice variant="error">
           <strong>{t("settings.saveFailed")}</strong>
-          <span>{config.saveError.message}</span>
+          <span>{saveErrorText(config.saveError)}</span>
         </Notice>
       ) : null}
 

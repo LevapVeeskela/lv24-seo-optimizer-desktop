@@ -1,8 +1,8 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect } from "react";
 import { observer } from "mobx-react-lite";
 import { useRootStore } from "@/app/providers/StoreProvider";
 import { useI18n, type MessageKey } from "@/shared/i18n";
-import { errorMessage } from "@/shared/lib/errors";
+import { toAppError } from "@/shared/lib/errors";
 import { formatDateTime } from "@/shared/lib/format";
 import { Badge } from "@/shared/ui/Badge";
 import { Button } from "@/shared/ui/Button";
@@ -13,7 +13,6 @@ import { Notice } from "@/shared/ui/Notice";
 import { Tabs, type TabItem } from "@/shared/ui/Tabs";
 import { useFeedback } from "@/shared/ui/Feedback";
 import {
-  ConfigStore,
   CopyButton,
   environmentEntries,
   formatDiffValue,
@@ -66,17 +65,16 @@ function diffKindLabelKey(entry: ConfigDiffEntry): "config.diff.presence" | null
 
 export const ConfigPage = observer(function ConfigPage() {
   const { t, locale } = useI18n();
-  const { engine } = useRootStore();
+  const { engine, config } = useRootStore();
   const { notify } = useFeedback();
-  const [config] = useState(() => new ConfigStore());
-  const loadedPath = useRef<string | null>(null);
   const configPath = engine.status?.configPath ?? null;
 
   useEffect(() => {
-    if (!configPath || loadedPath.current === configPath) {
+    // The store is shared with Settings: keep the draft when the path matches
+    // and only load when the active workspace actually changed.
+    if (!configPath || config.path === configPath) {
       return;
     }
-    loadedPath.current = configPath;
     void config.load(configPath);
   }, [configPath, config]);
 
@@ -87,7 +85,7 @@ export const ConfigPage = observer(function ConfigPage() {
     try {
       await openPath(path);
     } catch (error) {
-      notify(errorMessage(error), "error");
+      notify(toAppError(error, "OPEN_PATH").message, "error");
     }
   };
 
@@ -97,11 +95,10 @@ export const ConfigPage = observer(function ConfigPage() {
       if (!selected) {
         return;
       }
-      loadedPath.current = null;
       await engine.load();
       notify(t("settings.configSelected"), "success");
     } catch (error) {
-      notify(errorMessage(error), "error");
+      notify(toAppError(error, "PICK_CONFIG").message, "error");
     }
   };
 

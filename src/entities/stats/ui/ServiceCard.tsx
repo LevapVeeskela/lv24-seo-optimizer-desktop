@@ -6,6 +6,7 @@ import {
   formatDelta,
   formatMetricValue,
   metricLabelKey,
+  metricUnit,
 } from "@/entities/stats/lib/metrics";
 import {
   serviceLabel,
@@ -120,7 +121,11 @@ export function ServiceCard({
                     metric,
                     value,
                     locale,
-                    service?.units?.[metric],
+                    metricUnit(
+                      service?.provider ?? provider,
+                      metric,
+                      service?.units,
+                    ),
                   )}
                 </dd>
                 {delta ? (

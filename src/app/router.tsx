@@ -1,5 +1,6 @@
 import { lazy, Suspense } from "react";
 import { Navigate, Route, Routes } from "react-router-dom";
+import { useI18n } from "@/shared/i18n";
 import { Loading } from "@/shared/ui/Loading";
 
 const DashboardPage = lazy(() =>
@@ -34,9 +35,10 @@ const NotFoundPage = lazy(() =>
 );
 
 function RouteFallback() {
+  const { t } = useI18n();
   return (
     <div className="page">
-      <Loading label="Loading…" />
+      <Loading label={t("common.loading")} />
     </div>
   );
 }

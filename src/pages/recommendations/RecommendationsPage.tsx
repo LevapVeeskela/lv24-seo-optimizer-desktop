@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { observer } from "mobx-react-lite";
+import { Link } from "react-router-dom";
 import { useRootStore } from "@/app/providers/StoreProvider";
 import {
   recommendationSourceLabel,
@@ -21,6 +22,7 @@ import { useI18n } from "@/shared/i18n";
 import { formatDateTime } from "@/shared/lib/format";
 import { Button } from "@/shared/ui/Button";
 import { Card } from "@/shared/ui/Card";
+import { ConfirmDialog } from "@/shared/ui/ConfirmDialog";
 import { EmptyState } from "@/shared/ui/EmptyState";
 import { Field } from "@/shared/ui/Field";
 import { Loading } from "@/shared/ui/Loading";
@@ -44,12 +46,15 @@ export const RecommendationsPage = observer(function RecommendationsPage({
   const queue = queueStore ?? localQueue;
   const [sourceFilter, setSourceFilter] = useState("all");
   const [severityFilter, setSeverityFilter] = useState("all");
+  const [confirmOpen, setConfirmOpen] = useState(false);
+  const configPath = engine.status?.configPath ?? null;
 
   useEffect(() => {
-    if (!engine.loading && !engine.offline && stats.state === "idle") {
+    // Without a workspace configuration `stats` is a guaranteed failure.
+    if (!engine.loading && !engine.offline && configPath && stats.state === "idle") {
       void stats.refresh();
     }
-  }, [engine.loading, engine.offline, stats]);
+  }, [engine.loading, engine.offline, configPath, stats]);
 
   const context = useMemo(
     () => recommendationContext(reports.report, stats.data),
@@ -92,9 +97,12 @@ export const RecommendationsPage = observer(function RecommendationsPage({
     );
   };
 
+  const requestBuild = () => setConfirmOpen(true);
+
   const reconnect = async () => {
     await engine.load();
-    if (!engine.offline) {
+    // Read the fresh status: the shell may have reported a config path.
+    if (!engine.offline && engine.status?.configPath) {
       await stats.refresh();
     }
   };
@@ -161,15 +169,15 @@ export const RecommendationsPage = observer(function RecommendationsPage({
             variant="secondary"
             loading={stats.loading}
             onClick={() => void stats.refresh()}
-            disabled={engine.offline}
+            disabled={engine.offline || !configPath}
           >
             {stats.loading ? copy.refreshing : copy.refreshStats}
           </Button>
           <Button
             variant="primary"
             loading={reports.loading}
-            onClick={() => void buildWeekly()}
-            disabled={engine.offline}
+            onClick={requestBuild}
+            disabled={engine.offline || !configPath}
           >
             {reports.loading ? copy.building : copy.buildWeekly}
           </Button>
@@ -190,11 +198,25 @@ export const RecommendationsPage = observer(function RecommendationsPage({
         </Notice>
       ) : null}
 
+      {!configPath && !engine.loading && !engine.offline ? (
+        <Notice
+          variant="info"
+          action={
+            <Link className="btn btn-secondary" to="/settings">
+              {copy.openSettings}
+            </Link>
+          }
+        >
+          <strong>{copy.noConfigTitle}</strong>
+          <span>{copy.noConfigHint}</span>
+        </Notice>
+      ) : null}
+
       {reports.error ? (
         <Notice
           variant="error"
           action={
-            <Button variant="secondary" onClick={() => void buildWeekly()}>
+            <Button variant="secondary" onClick={requestBuild}>
               {copy.retry}
             </Button>
           }
@@ -211,7 +233,11 @@ export const RecommendationsPage = observer(function RecommendationsPage({
         <Notice
           variant="error"
           action={
-            <Button variant="secondary" onClick={() => void stats.refresh()}>
+            <Button
+              variant="secondary"
+              onClick={() => void stats.refresh()}
+              disabled={!configPath}
+            >
               {copy.retry}
             </Button>
           }
@@ -239,8 +265,8 @@ export const RecommendationsPage = observer(function RecommendationsPage({
               <Button
                 variant="primary"
                 loading={reports.loading}
-                onClick={() => void buildWeekly()}
-                disabled={engine.offline}
+                onClick={requestBuild}
+                disabled={engine.offline || !configPath}
               >
                 {reports.loading ? copy.building : copy.buildWeekly}
               </Button>
@@ -325,7 +351,7 @@ export const RecommendationsPage = observer(function RecommendationsPage({
                 variant="secondary"
                 loading={stats.loading}
                 onClick={() => void stats.refresh()}
-                disabled={engine.offline}
+                disabled={engine.offline || !configPath}
               >
                 {stats.loading ? copy.refreshing : copy.refreshStats}
               </Button>
@@ -364,6 +390,21 @@ export const RecommendationsPage = observer(function RecommendationsPage({
       ) : null}
 
       <AgentQueue store={queue} />
+
+      <ConfirmDialog
+        open={confirmOpen}
+        title={copy.confirmTitle}
+        confirmLabel={copy.confirmConfirm}
+        cancelLabel={copy.cancel}
+        busy={reports.loading}
+        onCancel={() => setConfirmOpen(false)}
+        onConfirm={() => {
+          setConfirmOpen(false);
+          void buildWeekly();
+        }}
+      >
+        <p>{copy.confirmBody}</p>
+      </ConfirmDialog>
     </section>
   );
 });

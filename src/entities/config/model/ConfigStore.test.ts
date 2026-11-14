@@ -173,6 +173,47 @@ describe("ConfigStore", () => {
     expect(store.saved?.project.name).toBe("new name");
   });
 
+  it("writes an explicit provider block for a presence-only change", async () => {
+    readMock.mockResolvedValue(readResult("C:\\w\\seo.toml", RAW));
+    patchMock.mockResolvedValue({
+      path: "C:\\w\\seo.toml",
+      raw: `${RAW}\n[providers.gsc]\nproperty = ""\nauth = "keychain"\n`,
+      backup: "C:\\w\\seo.toml.bak-presence",
+      bytes: 64,
+      config: { project: { name: "example" } },
+      warnings: [],
+      engineError: null,
+    });
+    const store = new ConfigStore();
+    await store.load("C:\\w\\seo.toml");
+    // Re-setting the default value still marks the block as present.
+    store.set("providers.gsc.property", "");
+    expect(store.diff.map((item) => item.path)).toEqual([
+      "providers.gsc.present",
+    ]);
+
+    expect(await store.save()).toBe(true);
+    const [, patches] = patchMock.mock.calls[0];
+    expect(patches).toEqual([
+      { path: "providers.gsc.property", value: "" },
+      { path: "providers.gsc.auth", value: "keychain" },
+    ]);
+    expect(patches.some((patch) => patch.path.endsWith(".present"))).toBe(false);
+    expect(store.dirty).toBe(false);
+  });
+
+  it("does not claim a save when there is nothing to write", async () => {
+    readMock.mockResolvedValue(readResult("C:\\w\\seo.toml", RAW));
+    const store = new ConfigStore();
+    await store.load("C:\\w\\seo.toml");
+
+    expect(await store.save()).toBe(false);
+    expect(patchMock).not.toHaveBeenCalled();
+    expect(store.saveError?.code).toBe("CONFIG_NOTHING_TO_WRITE");
+    expect(store.dirty).toBe(false);
+    expect(store.saved).toEqual(store.draft);
+  });
+
   it("falls back to full TOML when config_patch is unavailable", async () => {
     readMock.mockResolvedValue(readResult("C:\\w\\seo.toml", RAW));
     patchMock.mockRejectedValue({

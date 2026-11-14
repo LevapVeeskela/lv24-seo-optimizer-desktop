@@ -2,15 +2,17 @@ import { useState } from "react";
 import { observer } from "mobx-react-lite";
 import { useRootStore } from "@/app/providers/StoreProvider";
 import { useI18n } from "@/shared/i18n";
-import { errorMessage } from "@/shared/lib/errors";
+import { toAppError, type AppError } from "@/shared/lib/errors";
 import { formatDateTime } from "@/shared/lib/format";
 import { Badge } from "@/shared/ui/Badge";
 import { Button } from "@/shared/ui/Button";
 import { Card } from "@/shared/ui/Card";
+import { ConfirmDialog } from "@/shared/ui/ConfirmDialog";
 import { EmptyState } from "@/shared/ui/EmptyState";
 import { Loading } from "@/shared/ui/Loading";
 import { Notice } from "@/shared/ui/Notice";
 import { useFeedback } from "@/shared/ui/Feedback";
+import { openPath } from "@/entities/config";
 import { ReportSectionView } from "@/entities/report/ui/ReportSectionView";
 import {
   reportHtmlPath,
@@ -23,7 +25,8 @@ export const ReportsPage = observer(function ReportsPage() {
   const { reports } = useRootStore();
   const { notify } = useFeedback();
   const [opening, setOpening] = useState(false);
-  const [openError, setOpenError] = useState<string | null>(null);
+  const [openError, setOpenError] = useState<AppError | null>(null);
+  const [confirmOpen, setConfirmOpen] = useState(false);
 
   const report = reports.report;
   const meta = reports.meta;
@@ -49,14 +52,17 @@ export const ReportsPage = observer(function ReportsPage() {
     setOpening(true);
     setOpenError(null);
     try {
-      const { openPath } = await import("@tauri-apps/plugin-opener");
+      // The shell's `open_path` validates the path against approved roots;
+      // the plugin-opener command is not in the window capability.
       await openPath(htmlPath);
     } catch (error) {
-      setOpenError(errorMessage(error));
+      setOpenError(toAppError(error, "OPEN_PATH"));
     } finally {
       setOpening(false);
     }
   };
+
+  const requestBuild = () => setConfirmOpen(true);
 
   const period = report?.period ?? meta.period;
   const property = report?.property_id ?? meta.property_id;
@@ -72,7 +78,7 @@ export const ReportsPage = observer(function ReportsPage() {
           <Button
             variant="primary"
             loading={reports.loading}
-            onClick={() => void buildWeekly()}
+            onClick={requestBuild}
           >
             {reports.loading ? t("actions.building") : t("actions.buildWeekly")}
           </Button>
@@ -96,7 +102,7 @@ export const ReportsPage = observer(function ReportsPage() {
       {openError ? (
         <Notice variant="error">
           <strong>{t("reports.openHtmlError")}</strong>
-          <span>{openError}</span>
+          <span>{openError.message}</span>
         </Notice>
       ) : null}
 
@@ -104,7 +110,7 @@ export const ReportsPage = observer(function ReportsPage() {
         <Notice
           variant="error"
           action={
-            <Button variant="secondary" onClick={() => void buildWeekly()}>
+            <Button variant="secondary" onClick={requestBuild}>
               {t("common.retry")}
             </Button>
           }
@@ -125,7 +131,7 @@ export const ReportsPage = observer(function ReportsPage() {
             title={t("reports.emptyTitle")}
             hint={t("reports.emptyHint")}
             action={
-              <Button variant="primary" onClick={() => void buildWeekly()}>
+              <Button variant="primary" onClick={requestBuild}>
                 {t("actions.buildWeekly")}
               </Button>
             }
@@ -224,6 +230,21 @@ export const ReportsPage = observer(function ReportsPage() {
           ) : null}
         </>
       ) : null}
+
+      <ConfirmDialog
+        open={confirmOpen}
+        title={t("reports.confirm.title")}
+        confirmLabel={t("reports.confirm.confirm")}
+        cancelLabel={t("common.cancel")}
+        busy={reports.loading}
+        onCancel={() => setConfirmOpen(false)}
+        onConfirm={() => {
+          setConfirmOpen(false);
+          void buildWeekly();
+        }}
+      >
+        <p>{t("reports.confirm.body")}</p>
+      </ConfirmDialog>
     </section>
   );
 });

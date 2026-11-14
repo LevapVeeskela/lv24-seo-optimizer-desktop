@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import { errorMessage } from "@/shared/lib/errors";
+import { toAppError } from "@/shared/lib/errors";
 import type {
   CliCommandId,
   CliRunOptions,
@@ -94,14 +94,22 @@ export async function cliRun<T>(
   }
   try {
     const raw = await invoke<unknown>("cli_run", payload);
-    return parseEnvelope<T>(raw);
+    // `cli_run` returns a CliRunResult wrapper (`{envelope, exitCode, ...}`);
+    // accept a direct envelope too so an older shell does not break the UI.
+    const envelope = isRecord(raw) && "envelope" in raw ? raw.envelope : raw;
+    return parseEnvelope<T>(envelope);
   } catch (error) {
+    // The shell rejects with its typed AppError shape (or a plain string).
+    // Preserve the code and the human message instead of dumping raw JSON,
+    // and only mark a transport failure as retryable.
+    const appError = toAppError(error, "SHELL_UNAVAILABLE");
     return {
       ok: false,
       error: {
-        code: "SHELL_UNAVAILABLE",
-        message: errorMessage(error),
-        retryable: true,
+        code: appError.code,
+        message: appError.message,
+        ...(appError.nextAction ? { next_action: appError.nextAction } : {}),
+        retryable: appError.code === "SHELL_UNAVAILABLE",
       },
       meta: {},
       warnings: [],

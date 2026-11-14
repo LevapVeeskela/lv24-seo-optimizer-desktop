@@ -1,6 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { parseEnvelope, type Envelope } from "@/shared/cli";
-import { errorMessage, toAppError, type AppError } from "@/shared/lib/errors";
+import { toAppError, type AppError } from "@/shared/lib/errors";
 import type {
   AuthStatusData,
   ConfigReadResult,
@@ -116,10 +116,16 @@ export async function openPath(path: string): Promise<void> {
   await invoke("open_path", { path });
 }
 
-function unavailable(message: string): Envelope<never> {
+/** Keep the shell's typed code and message; only IPC loss is retryable. */
+function unavailable(error: AppError): Envelope<never> {
   return {
     ok: false,
-    error: { code: "SHELL_UNAVAILABLE", message, retryable: true },
+    error: {
+      code: error.code,
+      message: error.message,
+      ...(error.nextAction ? { next_action: error.nextAction } : {}),
+      retryable: error.code === "SHELL_UNAVAILABLE",
+    },
     meta: {},
     warnings: [],
   };
@@ -152,7 +158,7 @@ export async function runAuthStatus(
     const raw = await invoke<RawCliRunResult>("cli_run", payload);
     return parseEnvelope<AuthStatusData>(raw.envelope ?? raw);
   } catch (error) {
-    return unavailable(errorMessage(error));
+    return unavailable(toAppError(error, "SHELL_UNAVAILABLE"));
   }
 }
 
@@ -202,7 +208,7 @@ export async function runDoctor(
       ok: false,
       healthy: false,
       checks: [],
-      message: errorMessage(error),
+      message: toAppError(error, "SHELL_UNAVAILABLE").message,
       meta: {},
       warnings: [],
       ranAt,

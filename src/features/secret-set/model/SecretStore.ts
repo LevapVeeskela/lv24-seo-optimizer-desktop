@@ -2,7 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { makeAutoObservable } from "mobx";
 import { parseEnvelope, type Envelope } from "@/shared/cli";
 import type { MessageKey } from "@/shared/i18n";
-import { errorMessage, toAppError, type AppError } from "@/shared/lib/errors";
+import { toAppError, type AppError } from "@/shared/lib/errors";
 import {
   runAuthStatus,
   type AuthProvider,
@@ -38,13 +38,27 @@ export function secretSourceKey(source: string | undefined): MessageKey {
 export type SecretsState = "idle" | "loading" | "ready" | "error";
 
 /**
- * Backend capability check, verified against `src-tauri/src/commands.rs`:
+ * Compile-time expectations, verified against `src-tauri/src/commands.rs`:
  * `auth_set` and `auth_delete` pipe the value over stdin and never return it.
- * The modal still degrades to the exact CLI command when the shell rejects
- * the call (for example an old build without these commands).
+ * The shell may still reject the command at runtime (an old build, a denied
+ * capability), so the actions also detect an unsupported-command rejection
+ * and the modal degrades to the exact CLI command in that case.
  */
 export const AUTH_SET_AVAILABLE = true;
 export const AUTH_DELETE_AVAILABLE = true;
+
+const UNSUPPORTED_COMMAND =
+  /command .*not found|unknown command|not allowed|not supported|not registered|does not exist|no such command/i;
+
+/** A missing or denied Tauri command, not a provider/engine failure. */
+export function isUnsupportedCommand(error: unknown, fallbackCode = "AUTH_SET"): boolean {
+  const appError = toAppError(error, fallbackCode);
+  return (
+    appError.code === "INVALID_COMMAND" ||
+    appError.code === "COMMAND_NOT_FOUND" ||
+    UNSUPPORTED_COMMAND.test(appError.message)
+  );
+}
 
 export interface SecretActionResult {
   ok: boolean;
@@ -141,7 +155,12 @@ export async function storeSecret(
       envelope,
     };
   } catch (error) {
-    return { ok: false, unsupported: false, message: errorMessage(error) };
+    const appError = toAppError(error, "AUTH_SET");
+    return {
+      ok: false,
+      unsupported: isUnsupportedCommand(appError, "AUTH_SET"),
+      message: appError.message,
+    };
   }
 }
 
@@ -166,7 +185,12 @@ export async function removeSecret(
       envelope,
     };
   } catch (error) {
-    return { ok: false, unsupported: false, message: errorMessage(error) };
+    const appError = toAppError(error, "AUTH_DELETE");
+    return {
+      ok: false,
+      unsupported: isUnsupportedCommand(appError, "AUTH_DELETE"),
+      message: appError.message,
+    };
   }
 }
 

@@ -63,6 +63,21 @@ describe("diffToPatches", () => {
     expect(patches).toEqual([{ path: "providers.gsc.property", value: "https://a" }]);
     expect(patches.some((patch) => patch.path.endsWith(".present"))).toBe(false);
   });
+
+  it("writes the block explicitly when only provider presence changed", () => {
+    const saved = defaultConfig();
+    const draft = setConfigValue(saved, "providers.gsc.property", "");
+    const entries = diffConfigs(saved, draft);
+
+    expect(entries.map((item) => item.path)).toEqual(["providers.gsc.present"]);
+
+    const patches = diffToPatches(entries, draft);
+    expect(patches).toEqual([
+      { path: "providers.gsc.property", value: "" },
+      { path: "providers.gsc.auth", value: "keychain" },
+    ]);
+    expect(patches.some((patch) => patch.path.endsWith(".present"))).toBe(false);
+  });
 });
 
 describe("diffConfigs", () => {

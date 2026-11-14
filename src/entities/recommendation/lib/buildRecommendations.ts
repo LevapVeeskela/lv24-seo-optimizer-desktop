@@ -74,7 +74,12 @@ export function buildRecommendations(
   const services = stats?.services ?? [];
   const coveredProviders = new Set<string>();
   for (const service of services) {
-    coveredProviders.add(normalizeProvider(service.provider));
+    // `stats` always lists every known service, so presence alone proves
+    // nothing. A provider only covers the report when it actually returned
+    // rows; an `ok` service with zero rows is still a missing-data gap.
+    if (service.status === "ok" && service.rows > 0) {
+      coveredProviders.add(normalizeProvider(service.provider));
+    }
     addServiceRecommendations(service, add);
   }
 

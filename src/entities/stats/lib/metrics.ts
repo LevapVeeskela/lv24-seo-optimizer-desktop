@@ -41,6 +41,7 @@ const HIGHER_IS_BETTER = new Set([
 const METRIC_KEYS: Record<string, MessageKey> = {
   clicks: "metric.clicks",
   impressions: "metric.impressions",
+  shows: "metric.shows",
   ctr: "metric.ctr",
   position: "metric.position",
   sessions: "metric.sessions",
@@ -48,20 +49,92 @@ const METRIC_KEYS: Record<string, MessageKey> = {
   visits: "metric.visits",
   pageviews: "metric.pageviews",
   largest_contentful_paint: "metric.largest_contentful_paint",
+  LCP: "metric.largest_contentful_paint",
   interaction_to_next_paint: "metric.interaction_to_next_paint",
+  INP: "metric.interaction_to_next_paint",
   cumulative_layout_shift: "metric.cumulative_layout_shift",
+  CLS: "metric.cumulative_layout_shift",
   performance: "metric.performance",
   seo: "metric.seo",
   first_contentful_paint: "metric.first_contentful_paint",
+  FCP: "metric.first_contentful_paint",
+  first_input_delay: "metric.first_input_delay",
+  FID: "metric.first_input_delay",
   total_blocking_time: "metric.total_blocking_time",
+  TBT: "metric.total_blocking_time",
   speed_index: "metric.speed_index",
   server_response_time: "metric.server_response_time",
+  TTFB: "metric.server_response_time",
   queries: "metric.queries",
   pages: "metric.pages",
 };
 
+/**
+ * PSI reports field/lab rows as uppercase Web Vitals labels as well as long
+ * snake_case keys. Normalize the aliases for labels, formatting and tone.
+ */
+const METRIC_ALIASES: Record<string, string> = {
+  LCP: "largest_contentful_paint",
+  INP: "interaction_to_next_paint",
+  CLS: "cumulative_layout_shift",
+  FCP: "first_contentful_paint",
+  FID: "first_input_delay",
+  TBT: "total_blocking_time",
+  TTFB: "server_response_time",
+};
+
+export function canonicalMetric(metric: string): string {
+  return METRIC_ALIASES[metric] ?? metric;
+}
+
+/**
+ * Lab metrics PSI reports without a `units` map. CrUX sends explicit units;
+ * PSI does not, so the card would otherwise render bare numbers. CLS stays
+ * unitless on purpose.
+ */
+const PSI_MILLISECOND_METRICS = new Set([
+  "largest_contentful_paint",
+  "LCP",
+  "interaction_to_next_paint",
+  "INP",
+  "first_contentful_paint",
+  "FCP",
+  "first_input_delay",
+  "FID",
+  "total_blocking_time",
+  "TBT",
+  "speed_index",
+  "server_response_time",
+  "TTFB",
+]);
+
 export function metricLabelKey(metric: string): MessageKey | null {
-  return METRIC_KEYS[metric] ?? null;
+  return METRIC_KEYS[metric] ?? METRIC_KEYS[canonicalMetric(metric)] ?? null;
+}
+
+/**
+ * Effective unit for a metric. Explicit provider units win; PSI timing
+ * metrics fall back to milliseconds, and everything else stays unitless.
+ */
+export function metricUnit(
+  provider: string | undefined,
+  metric: string,
+  units?: Record<string, string>,
+): string | undefined {
+  const explicit = units?.[metric];
+  if (explicit) {
+    return explicit;
+  }
+  if (provider === "psi") {
+    const canonical = canonicalMetric(metric);
+    if (
+      PSI_MILLISECOND_METRICS.has(metric) ||
+      PSI_MILLISECOND_METRICS.has(canonical)
+    ) {
+      return "ms";
+    }
+  }
+  return undefined;
 }
 
 function finite(value: number | null | undefined): value is number {
@@ -77,19 +150,20 @@ export function formatMetricValue(
   if (!finite(value)) {
     return "—";
   }
-  if (metric === "ctr") {
+  const key = canonicalMetric(metric);
+  if (key === "ctr") {
     return formatPercent(value, locale, 2);
   }
-  if (metric === "performance" || metric === "seo") {
+  if (key === "performance" || key === "seo") {
     return formatPercent(value, locale, 0);
   }
   if (unit === "ms") {
     return `${formatNumber(value, locale, 0)} ms`;
   }
-  if (metric === "position") {
+  if (key === "position") {
     return formatNumber(value, locale, 1);
   }
-  if (metric === "cumulative_layout_shift") {
+  if (key === "cumulative_layout_shift") {
     return formatNumber(value, locale, 2);
   }
   if (unit === "score") {
@@ -147,8 +221,9 @@ export function formatDelta(
   }
   const diff = current - previous;
   const direction = directionOf(diff);
-  const tone = toneOf(metric, direction);
-  if (metric === "ctr") {
+  const key = canonicalMetric(metric);
+  const tone = toneOf(key, direction);
+  if (key === "ctr") {
     return {
       direction,
       tone,
@@ -156,7 +231,7 @@ export function formatDelta(
       unit: "percentage_points",
     };
   }
-  if (metric === "position") {
+  if (key === "position") {
     return {
       direction,
       tone,
