@@ -155,7 +155,7 @@ jobs:
           --config "${{ runner.temp }}/tauri.ci.json"
 
       - name: Upload installers and checksums
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: desktop-${{ matrix.artifact }}
           if-no-files-found: error
