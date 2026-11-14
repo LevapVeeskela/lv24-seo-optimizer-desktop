@@ -1,8 +1,9 @@
 # Security model
 
-Status: **security contract for the public scaffold.** The Rust bridge and screens are being
-implemented. This page states the controls those components must enforce; it does not claim they are
-all present yet. See [`SECURITY.md`](../SECURITY.md) for reporting a vulnerability.
+Status: **security contract for `0.1.0`.** The Rust bridge and screens are implemented in this
+repository. This page states the controls the implementation must enforce and the residual risks
+accepted for the preview; where a control is future work, the text says so. See
+[`SECURITY.md`](../SECURITY.md) for reporting a vulnerability.
 
 ## 1. Assets and adversaries
 
@@ -107,8 +108,13 @@ connect-src ipc: http://ipc.localhost
 - No remote scripts, styles, fonts, images or connect targets.
 - `withGlobalTauri` is false; the UI uses the typed `@tauri-apps/api` imports.
 - The development CSP is limited to the Vite origin and is not used in production.
-- Report HTML is shown in a sandboxed iframe without scripts or same-origin access. It is rendered
-  on a light canvas and never auto-inverted by the dark theme.
+- Report HTML is **not embedded** in the app webview. The Reports screen calls `open_path`, which
+  validates an absolute path, requires it to resolve under the app config/data/log/export dirs or the
+  selected project's config/data dirs, and enforces an extension allow-list (`html`, `htm`, `json`,
+  `md`, `txt`, `csv`, `toml`, `log`, `sqlite`, `sqlite3`, `db`, `pdf`, images) before handing the
+  file to the OS default handler, normally the browser. `secrets.json` and macOS application bundles
+  are rejected. The opened file runs outside the app's CSP and is not sandboxed by the desktop; it is
+  local content the user chose to open.
 - The desktop does not render provider HTML or arbitrary remote content in the main webview.
 
 ## 7. Sidecar integrity
@@ -121,8 +127,9 @@ connect-src ipc: http://ipc.localhost
   pinned version and compares SHA-256 with `scripts/cli-checksums.json` when a hash is pinned.
 - A placeholder checksum (`null`) is allowed for local development but must be replaced with a
   64-hex SHA-256 before a public release. The release runbook requires this.
-- The runtime does not need to re-hash on every launch because the Tauri updater signature covers
-  the bundle; the checksum manifest is a build/release control.
+- The runtime does not re-hash the sidecar on every launch. Auto-update is not initialized in
+  `0.1.0`, so no updater signature covers the bundle: the checksum manifest is a build control, and
+  users must verify the downloaded asset against `SHA256SUMS.txt`.
 - `LV24_SEO_BIN` is a deliberate escape hatch for development and advanced users. Release builds do
   not use it unless the user sets it explicitly, and the UI labels the engine as external.
 
@@ -210,7 +217,8 @@ paid certificate, notarization or paid runner without explicit owner approval.
 - [ ] No secret value can reach the webview, a log, a fixture or a support bundle.
 - [ ] Every engine call uses an argv array and an absolute, user-selected config path.
 - [ ] No `eval`, shell string, arbitrary executable or unrestricted path.
-- [ ] CSP is production-safe; report preview is sandboxed without scripts.
+- [ ] CSP is production-safe, and report HTML opens externally through `open_path` (approved root
+      plus extension allow-list) instead of being embedded in the webview.
 - [ ] Write actions require confirmation and preserve engine `WRITE_DISABLED` semantics.
 - [ ] Cancel kills only the exact child process.
 - [ ] Sidecar version and checksum are verified before release.

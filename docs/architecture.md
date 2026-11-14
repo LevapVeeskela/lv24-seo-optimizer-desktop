@@ -19,7 +19,7 @@ implementation must satisfy. The pinned engine is `lv24-seo 0.5.0`.
 │  config read / validate / write (toml_edit)                  │
 │  CLI runner: argv array, stdin, timeout, cancel              │
 │  job manager + bounded log events                            │
-│  path allow-list · secret stdin bridge · updater             │
+│  path allow-list · secret stdin bridge · manual updates      │
 └───────────────────────────┬──────────────────────────────────┘
                             │ child process, one workspace at a time
 ┌───────────────────────────▼──────────────────────────────────┐
@@ -41,7 +41,7 @@ record and the only component that talks to provider APIs.
 | Rust → engine | argv array, optional stdin, config path, cwd | absolute `--config`, `--json`, path allow-list, per-command timeout |
 | Engine → provider | user credentials, queries, site URLs | engine-owned HTTP clients, rate limits, read-only defaults |
 | Engine → local disk | SQLite, reports, snapshots | configured data directory; desktop does not invent paths |
-| Desktop → GitHub | update metadata and signed artifacts | Tauri updater signature; no telemetry |
+| Desktop → GitHub | manual update metadata and checksums | SHA-256 manifest; no telemetry |
 
 The webview is untrusted input. It can request a known operation with validated arguments; it cannot
 choose an executable, construct a shell command, read arbitrary files, or write outside the approved
@@ -104,7 +104,7 @@ The command table is intentionally small and fixed. A representative set:
 | `gsc_query` | `gsc query ... --json` | read |
 | `yandex_queries` | `yandex queries --json` | read |
 | `crawl_run` | `crawl ... --json` | local write, cancellable |
-| `report_weekly` | `report weekly ... --json` | read/write snapshot |
+| `report_weekly` | `report weekly --out <app data>/exports/reports --json` | read/write snapshot |
 | `report_send` | `report weekly --send --json` | external send, confirm |
 | `report_diff` | `report diff ... --json` | read |
 | `schedule_preview` | `schedule print ... --json` | read |
@@ -120,16 +120,16 @@ webview cannot add one at runtime.
 Resolution order:
 
 1. `LV24_SEO_BIN` (absolute path; development or an explicitly chosen system engine);
-2. the bundled resource `lv24-seo/lv24-seo[.exe]`;
+2. the bundled resource `engine/lv24-seo/lv24-seo[.exe]`;
 3. a sibling `lv24-seo/` directory next to the app;
-4. `PATH`, only after an explicit user opt-in;
-5. development fallback `uvx --from lv24-seo==<pinned> lv24-seo`, clearly labelled as a development
-   fallback.
+4. `PATH`, only when `LV24_SEO_ALLOW_PATH_ENGINE=1` is set (opt-in; only the value `1` enables it,
+   and a stray `lv24-seo` on `PATH` is otherwise ignored).
+
+Nothing is downloaded automatically.
 
 A release build never downloads or executes code from the webview. On startup the shell runs
-`lv24-seo version --json`, requires the exact pinned version (or an explicitly allowed mismatch),
-and shows both desktop and engine versions. A mismatch is a blocking, actionable dialog, not a
-silent downgrade.
+`lv24-seo version --json`, requires at least the pinned version, and shows both desktop and engine
+versions. An older engine is a blocking, actionable dialog, not a silent downgrade.
 
 ## 6. Configuration write model
 
@@ -209,12 +209,13 @@ The release sidecar is a **PyInstaller onedir** tree, not onefile:
 - onefile extracts to a temp directory on every call, starts slowly and is unsuitable for macOS
   signing;
 - the tree is placed under `src-tauri/engine/lv24-seo/` and mapped into Tauri resources as
-  `lv24-seo/`;
-- the shell resolves `<resource_dir>/lv24-seo/lv24-seo[.exe]`;
+  `engine/lv24-seo/`;
+- the shell resolves `<resource_dir>/engine/lv24-seo/lv24-seo[.exe]` (with a flat
+  `<resource_dir>/lv24-seo/` fallback);
 - `scripts/build-sidecar.py` builds it with `uv` and explicit collect flags;
 - `scripts/verify-sidecar.mjs` checks the executable version and SHA-256 against
   `scripts/cli-checksums.json`;
-- auto-update is disabled by default (`createUpdaterArtifacts: false`, no updater endpoint);
+- auto-update is not initialized (`createUpdaterArtifacts: false`, no updater endpoint or plugin);
   if enabled later, it uses Tauri's Ed25519/minisign key, separate from OS code signing and
   notarization, which are currently not purchased.
 

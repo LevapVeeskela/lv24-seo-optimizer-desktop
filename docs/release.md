@@ -8,26 +8,31 @@ The pipeline is **manual and owner-gated**. There are no `push` or tag triggers,
 paid code-signing certificates and no notarization. A release that cannot prove its checksums or its
 engine version does not ship.
 
-## 1. Current pre-release blockers
+## 1. Release state and remaining blockers
 
-Before the first public release these must be verified or corrected (they are implementation and
-release work):
+`0.1.0` is a Windows-only preview: one unsigned NSIS installer, one unsigned portable ZIP,
+`SHA256SUMS.txt` and the Windows `sidecar-checksums-x86_64-pc-windows-msvc.json` report. Linux and
+macOS jobs still build in the manual workflow, but their installers are not `0.1.0` release assets.
+
+Before the next public release these must be verified or corrected:
 
 - `package.json` version, `src-tauri/tauri.conf.json` version and `src-tauri/Cargo.toml` version must
   agree with the release tag (the desktop is currently `0.1.0` in all three).
 - `productName`, `identifier`, window title, descriptions and icons must be the SEO desktop values.
-- Updater artifacts are disabled in the committed config (`createUpdaterArtifacts: false`, no
-  `plugins.updater` endpoint or public key). That is the zero-spend default. Decide whether to
-  enable auto-update; if not, the release notes must say it is unavailable.
-- `bundle.resources` must map the onedir engine tree (`engine/lv24-seo/`) into the app's
-  `lv24-seo/` resource directory. The workflow passes this mapping as a CI config override so it
-  does not depend on a hand-edited config, but the committed config should match.
+- Updater artifacts are disabled in the committed config (`createUpdaterArtifacts: false`); the
+  updater plugin is not initialized because no endpoint/public key exists. That is the zero-spend
+  default. Decide whether to enable auto-update; if not, the release notes must say it is unavailable.
+- `bundle.resources` maps the onedir engine tree (`engine/lv24-seo/`) into the app's
+  `engine/lv24-seo/` resource directory. The committed config and the CI override must agree.
 - CI (web, Rust matrix, contract drift) must pass on the exact release commit.
-- `scripts/cli-checksums.json` must contain real SHA-256 values for every released target, not
-  `null` placeholders.
+- `scripts/cli-checksums.json` pins the reviewed local release build for each target. Windows x64 is
+  pinned; Linux/macOS remain `null` until an owner-run local build on a matching host is reviewed.
+  The manifest is the reviewed baseline, not a build gate: PyInstaller onedir output is not
+  byte-reproducible, so a CI rebuild has a different SHA-256. CI records the actual hash of the
+  sidecar it built and the release job requires that report (see §5).
 
-Until these are done, the workflow can build artifacts for inspection, but `publish=true` must not
-be used.
+A Windows-only preview is uploaded manually from the Windows artifacts. `publish=true` publishes the
+whole matrix, because the release job uploads every file in `dist/`.
 
 ## 2. Versioning
 
@@ -51,11 +56,12 @@ packaging.
 
 ### Engine compatibility
 
-- The desktop requires the exact pinned engine version for release builds.
-- A development build may use `LV24_SEO_BIN` with another version, but the UI labels it as external
-  and shows both versions.
-- `LV24_SEO_ALLOW_ENGINE_MISMATCH=1` is an explicit developer escape hatch; it is not a release
-  mode and must be visible in diagnostics.
+- A release build bundles the exact pinned engine version.
+- The shell accepts an engine whose version is at least the pinned version (`MIN_ENGINE_VERSION` in
+  `src-tauri/src/commands.rs`, currently `0.5.0`) and blocks an older one with a compatibility
+  message. A newer engine is not what the release was tested with.
+- A development build may use `LV24_SEO_BIN` with another version; the UI labels it as external and
+  shows the path and version. A `PATH` engine is used only when `LV24_SEO_ALLOW_PATH_ENGINE=1` is set.
 
 ## 3. Manual desktop workflow
 
@@ -78,6 +84,11 @@ Trigger: **Actions → Desktop build → Run workflow**. It has no push, pull-re
 | `ubuntu-22.04` | `x86_64-unknown-linux-gnu` | AppImage, deb, rpm |
 | `macos-latest` | `aarch64-apple-darwin` | DMG (arm64) |
 | `macos-15-intel` | `x86_64-apple-darwin` | DMG (x64) |
+
+`0.1.0` publishes only the Windows row (NSIS + portable ZIP). The other rows still build in the same
+run so their sidecars and bundles stay verified, but their installers are not `0.1.0` release assets.
+The release job uploads every file it finds in `dist/`, so `publish=true` publishes all platforms at
+once.
 
 `ubuntu-22.04` sets a glibc 2.35 baseline. It is deprecated in September 2026 and unsupported in
 April 2027; when it retires, move to `ubuntu-24.04` (glibc 2.39) or a pinned 22.04 container and
@@ -102,16 +113,17 @@ python scripts/build-sidecar.py \
 
 The script:
 
-- uses `uv` to create an isolated environment with `lv24-seo[secrets]==<pinned>` and a pinned
-  PyInstaller;
+- uses `uv` to create an isolated environment with `lv24-seo[secrets]==<pinned>`, the pinned
+  `typer`, `pydantic` and PyInstaller versions (unpinned Typer 0.21 breaks `datetime.date` options);
 - runs PyInstaller with `--onedir`, `--noupx`, `--collect-submodules keyring.backends`,
   `--collect-submodules lv24_seo.crawl.rules`, hidden imports for both MCP server modules,
   `--collect-data lv24_seo` (including `schema.sql`) and `--add-data` for the packaged skills;
 - writes `src-tauri/engine/lv24-seo/` with the executable and `_internal/`;
 - smoke-runs `version --json` and writes `build-info.json` next to the tree.
 
-The Tauri bundle maps `engine/lv24-seo/` to the app resource directory `lv24-seo/`. The shell
-resolves `<resource_dir>/lv24-seo/lv24-seo[.exe]`. Do not use Tauri `externalBin` for an onedir
+The Tauri bundle maps `engine/lv24-seo/` to the app resource directory `engine/lv24-seo/`. The shell
+resolves `<resource_dir>/engine/lv24-seo/lv24-seo[.exe]` (and falls back to the flat
+`<resource_dir>/lv24-seo/`). Do not use Tauri `externalBin` for an onedir
 tree: it copies one file and cannot keep `_internal/` adjacent.
 
 ### Verify
@@ -128,14 +140,60 @@ The verifier checks:
 - the target is present in `scripts/cli-checksums.json`;
 - the executable exists and is non-empty;
 - `version --json` returns `ok: true`, `data.name = "lv24-seo"` and the exact pinned version;
-- SHA-256 matches the manifest when a 64-hex hash is pinned;
+- SHA-256 and size match the manifest when they are pinned;
 - placeholder hashes (`null`) are a warning by default and a failure with `--require-pinned`.
 
-Use `--report <path>` to write a machine-readable checksum report for the build artifact.
+This default is **strict** and is what a local release build must pass before a pin is committed.
 
-## 5. Checksum manifest
+PyInstaller does not produce byte-identical output, so a CI rebuild cannot match the pin. The build
+job therefore runs the same verifier with `--no-hash` (alias `--allow-rebuild`):
 
-[`scripts/cli-checksums.json`](../scripts/cli-checksums.json) is the reviewed pin:
+```bash
+node scripts/verify-sidecar.mjs \
+  --root src-tauri/engine \
+  --target x86_64-pc-windows-msvc \
+  --engine-version 0.5.0 \
+  --no-hash \
+  --report release/sidecar-checksums-x86_64-pc-windows-msvc.json
+```
+
+`--no-hash` still verifies the target, the executable and the exact engine version, and computes the
+actual SHA-256 and size. A SHA-256 or size mismatch against the reviewed pin becomes a warning
+instead of a failure; the report records the actual `sha256`, `size`, `pinnedSha256`,
+`hashPolicy: "rebuild"`, `hashMatched` and `sizeMatched`. `--write` cannot be combined with
+`--no-hash`.
+
+Use `--report <path>` to write the machine-readable checksum report (parent directories are created).
+In CI the report is written to `release/sidecar-checksums-<target>.json` inside the workspace and
+uploaded with the installers, so the release job can verify what was actually built.
+
+### Installer and portable ZIP
+
+```powershell
+# NSIS installer (per-user install, Start menu entry)
+npm run tauri build -- --bundles nsis
+
+# Portable ZIP with the app and a sibling lv24-seo/ tree
+npm run package:portable
+```
+
+The NSIS artifact is
+`src-tauri/target/release/bundle/nsis/LV24 SEO Optimizer_<version>_x64-setup.exe`. The portable
+script writes `release/LV24-SEO-Optimizer_<version>_x64-portable.zip` and a `.sha256` sidecar.
+`--target x86_64-pc-windows-msvc` maps to the friendly `x64` label; `aarch64-*` maps to `arm64`.
+The archive contains `LV24 SEO Optimizer/` with the app executable, the bundled
+`lv24-seo/` tree, `LICENSE`, `README.txt` and `engine-build-info.json`. Archives go to `release/`,
+not `dist/`, because Vite clears `dist/` on the next build. Both artifacts are unsigned.
+
+CI stages the installer, the portable ZIP and `.sha256`, `build-info-<target>.json` and the sidecar
+checksum report into `release/`, deletes the `release/portable/` staging tree and uploads
+`release/*` as a single flat artifact (see §7). Locally, `release/` is scratch output; do not commit
+it.
+
+## 5. Checksum manifest and rebuild-aware hashes
+
+[`scripts/cli-checksums.json`](../scripts/cli-checksums.json) is the reviewed pin for the **local
+release build**:
 
 ```json
 {
@@ -143,10 +201,17 @@ Use `--report <path>` to write a machine-readable checksum report for the build 
   "engine": "lv24-seo",
   "version": "0.5.0",
   "python": "3.12",
+  "pydantic": "2.14.3",
+  "typer": "0.29.0",
   "pyinstaller": "6.22.3",
   "targets": {
     "x86_64-pc-windows-msvc": {
       "path": "lv24-seo/lv24-seo.exe",
+      "sha256": "216f7aa627bceb00d421c64d23a12e4ac889887ff9150e4269f0589582f6499b",
+      "size": 14133493
+    },
+    "x86_64-unknown-linux-gnu": {
+      "path": "lv24-seo/lv24-seo",
       "sha256": null,
       "size": null
     }
@@ -154,12 +219,40 @@ Use `--report <path>` to write a machine-readable checksum report for the build 
 }
 ```
 
-`null` means “not pinned yet”. After a successful build, compute the hash and commit the 64-hex
-value plus size in a focused PR. The release job refuses to publish while any target still has a
-placeholder. This is deliberate: a release without a pinned sidecar is not reproducible.
+Windows x64 is pinned in the committed file (the values above are the current pin; the file is
+authoritative); Linux and macOS are `null`. `null` means “not pinned yet”. After a verified local
+build, compute the hash and commit the 64-hex value plus size in a focused PR
+(`node scripts/verify-sidecar.mjs ... --write` writes the pin after a verified build). The pin is the
+reviewed baseline of the build the owner actually tested, not a gate on CI.
 
-Do not commit `build-info.json` or the sidecar tree; both are ignored. The manifest is the durable
-record.
+### Why CI does not compare against the pin
+
+PyInstaller onedir output is not byte-reproducible. The same engine, Python and PyInstaller versions
+produce a different executable SHA-256 on the next build (embedded timestamps and paths). A local
+Windows build pinned `216f7aa6…`; an immediate rebuild produced `72e7e260…`. Comparing a CI rebuild
+with the pin would fail every run without indicating a real problem.
+
+The policy is therefore:
+
+- **Local release build — strict.** `verify-sidecar.mjs` must match the committed SHA-256 and size;
+  `--write` updates the pin after review. The pin is the durable record of the reviewed build.
+- **CI rebuild — rebuild-aware.** The build job runs `verify-sidecar.mjs --no-hash`, which still
+  verifies the target, the executable, a positive size and the exact engine version, and records the
+  actual SHA-256 in `release/sidecar-checksums-<target>.json`. A hash or size mismatch with the pin
+  is a warning in the report, not a failure.
+- **Release gate — report-based.** The release job requires one valid report for every shipped
+  target: matching target name, `hashPolicy: "rebuild"`, `ok: true`, a 64-hex `sha256`, a positive
+  `size` and `actualVersion` equal to the `engine_version` input. It also requires the manifest
+  `version` to equal that input. It does not require repo-pinned hashes, so non-reproducible CI
+  rebuilds do not block a release.
+
+The release assets contain the installers, `SHA256SUMS.txt` for the installers and the per-target
+`sidecar-checksums-*.json` reports with the actual sidecar hashes. Verify an installer with
+`SHA256SUMS.txt`; use the report to confirm which engine build was bundled. The sidecar executable
+is inside the installers, so its hash is not part of `SHA256SUMS.txt`.
+
+Do not commit `build-info.json` or the sidecar tree; both are ignored. The manifest and the released
+reports are the durable record.
 
 ## 6. Signing and notarization
 
@@ -193,7 +286,7 @@ separate review.
 
 ### Updater signing
 
-The committed scaffold has **auto-update disabled**: `createUpdaterArtifacts` is `false` and there
+The committed config has **auto-update disabled**: `createUpdaterArtifacts` is `false` and there
 is no `plugins.updater` endpoint or public key. The zero-spend default is a manual install/upgrade.
 
 If the owner later enables it, Tauri updater artifacts use a free Ed25519/minisign key, separate
@@ -218,19 +311,37 @@ For each matrix entry:
 3. install `uv`, Python 3.12 and the Rust target;
 4. install Linux WebKitGTK/AppImage/rpm build dependencies on Ubuntu;
 5. build the onedir sidecar with the pinned engine;
-6. verify the sidecar version and checksum;
+6. run `verify-sidecar.mjs --no-hash` and write `release/sidecar-checksums-<target>.json` (the
+   rebuild-aware policy in §5: target, executable and exact engine version are verified, the actual
+   SHA-256 and size are recorded, a mismatch with the reviewed pin warns);
 7. write a CI Tauri config override:
-   - `bundle.resources = { "engine/lv24-seo/": "lv24-seo/" }`;
+   - `bundle.resources = { "engine/lv24-seo/": "engine/lv24-seo/" }`;
    - `bundle.macOS.signingIdentity = "-"` when `signed=false` on macOS;
    - `bundle.createUpdaterArtifacts = false` when no updater key is configured; the committed
      config already disables updater artifacts, so a key alone does not enable them;
 8. run `npm run tauri build -- --target <target> --bundles <bundles> --config <ci-config>`;
-9. upload the installers, `.sig` files, `latest.json` (when produced) and the sidecar checksum
-   report as a 7-day artifact.
+9. on Windows, run `node scripts/package-portable.mjs --target <target>`; it writes the portable ZIP
+   and its `.sha256` sidecar to `release/`;
+10. stage every release asset into `release/`:
+    - copy the installer(s) from
+      `src-tauri/target/<target>/release/bundle/{nsis,dmg,appimage,deb,rpm}/` (plus `latest.json`
+      when Tauri produced one); only `.exe`, `.msi`, `.dmg`, `.AppImage`, `.deb`, `.rpm` and `.sig`
+      are copied, so every uploaded installer appears in `SHA256SUMS.txt`;
+    - copy `src-tauri/engine/build-info.json` to `release/build-info-<target>.json`;
+    - the sidecar checksum report and the portable ZIP are already there;
+    - delete `release/portable/`, the staging tree `package-portable.mjs` leaves behind;
+11. upload `release/*` as a 7-day artifact.
 
-The release job downloads all artifacts, generates `SHA256SUMS.txt`, writes release notes with the
-engine version and unsigned warning, and creates the GitHub release only after the environment
-approval.
+`upload-artifact` stores files relative to the least common ancestor of its `path` entries. Uploading
+a single `release/*` pattern makes that root `release/`, so the artifact is flat: the release job
+downloads it with `merge-multiple: true` and finds every file directly in `dist/`. Do not add paths
+outside `release/` to the upload list, or the artifact root moves up and the checksum reports and
+portable ZIP end up in nested directories that the release job does not scan.
+
+The release job downloads all artifacts, requires a valid sidecar checksum report per shipped target
+(§5), generates `SHA256SUMS.txt` from the installer basenames (and fails on duplicate basenames,
+which would make checksum lines ambiguous), writes release notes with the engine version and
+unsigned warning, and creates the GitHub release only after the environment approval.
 
 ## 8. Release procedure
 
@@ -238,8 +349,11 @@ approval.
 
 - [ ] CI is green on the pull request that contains the release commit.
 - [ ] `package.json`, `tauri.conf.json`, `Cargo.toml` and the intended tag agree.
-- [ ] `engine_version` matches `scripts/cli-checksums.json`.
-- [ ] All target checksums are pinned (no `null`).
+- [ ] `engine_version` matches the `version` in `scripts/cli-checksums.json` (the release gate enforces
+      this).
+- [ ] The local release build you reviewed matches the pinned SHA-256 and size in
+      `scripts/cli-checksums.json` (strict `verify-sidecar.mjs`). CI rebuilds are recorded, not
+      compared: PyInstaller output is not byte-reproducible.
 - [ ] README, `docs/*`, changelog/release notes and the unsigned warning are current.
 - [ ] No secrets, private keys or customer data are in the diff or fixtures.
 - [ ] The GitHub environment `desktop-release` exists with the owner as required reviewer.
@@ -258,17 +372,21 @@ approval.
    - a no-data weekly report renders honestly;
    - the sidecar path is inside the app resources;
    - uninstalling removes the app but not the user's workspace.
-5. Verify the sidecar checksum report against a local rebuild if needed.
+5. Open `sidecar-checksums-<target>.json` from the artifact: `ok` is true, `hashPolicy` is
+   `rebuild`, `sha256` is a 64-hex digest, `size` is positive and `actualVersion` is the engine
+   version you intended. It will not equal the reviewed pin; that is expected.
 
 ### Publish run
 
-1. Pin any changed checksums in a PR and merge it.
+1. Update `scripts/cli-checksums.json` in a PR if the reviewed local build changed (the strict local
+   verifier and `--write` produce the pin); merge it.
 2. Run **Desktop build** with `publish=true`, the final `tag` (`vX.Y.Z`), `signed=false` (unless
    certificates are actually configured) and the same engine version.
 3. Approve the `desktop-release` environment as the repository owner. The release job also requires
    the actor to be the repository owner; a non-owner run is skipped.
-4. The workflow creates the GitHub release from the workflow commit, uploads all artifacts and
-   `SHA256SUMS.txt`, and includes the engine version and unsigned warning.
+4. The workflow creates the GitHub release from the workflow commit, uploads all artifacts,
+   `SHA256SUMS.txt` and the per-target `sidecar-checksums-*.json` reports, and includes the engine
+   version and unsigned warning.
 5. Verify the release page: asset names, checksums, no missing target, notes accurate.
 6. If updater artifacts were produced, verify `latest.json` and the `.sig` files; do not advertise
    auto-update for deb/rpm.
@@ -290,7 +408,7 @@ approval.
 - **Compromised key:** rotate the updater key, ship a manual release with the new public key, and
   document that auto-update cannot bridge the rotation.
 - **Engine regression:** pin the previous engine version, rebuild, and publish a patch. The desktop
-  refuses a mismatched engine rather than guessing.
+  refuses an older engine rather than guessing.
 
 ## 10. Cost and policy
 
@@ -307,26 +425,28 @@ approval.
 
 ## 11. Release notes template
 
+Fill in only the platforms that are actually published; the `0.1.0` preview ships Windows x64 only.
+
 ```markdown
 ## LV24 SEO Optimizer Desktop vX.Y.Z
 
 Engine: lv24-seo X.Y.Z (bundled onedir sidecar)
-Platforms: Windows x64 (NSIS), Linux x64 (AppImage, deb, rpm), macOS arm64/x64 (DMG)
+Platforms: Windows x64 (NSIS installer + portable ZIP)
 
 ### Status
-UNSIGNED build. macOS is ad-hoc signed only; Windows has no Authenticode signature.
-See the README for Gatekeeper and SmartScreen instructions. Verify SHA256SUMS.txt.
+UNSIGNED build. Windows has no Authenticode signature; SmartScreen and antivirus may warn.
+See the README for the first-launch flow. Verify SHA256SUMS.txt.
 
 ### Changes
 - ...
 
 ### Verification
 - SHA256SUMS.txt
-- Sidecar checksum report: ...
+- Sidecar checksum report: sidecar-checksums-x86_64-pc-windows-msvc.json (actual CI build hash)
 - CI run: ...
 
 ### Known limitations
+- No auto-update; install/upgrade manually.
 - No local HTTP API.
-- Auto-update: available only if updater artifacts are present (AppImage on Linux).
 - Provider coverage and data age are shown in the app; missing is not zero.
 ```
