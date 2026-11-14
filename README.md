@@ -45,6 +45,29 @@ not want to remember flags:
 - **Signed in-app updates** for the bundle types that can replace themselves, with a manual release
   page for the rest.
 
+### Surfaces and tools
+
+The desktop is one surface over the same engine. These are the tools the engine exposes today:
+
+| Surface | What you get |
+|---|---|
+| Desktop | Dashboard, weekly report view, config editor/diff/validation, recommendations, agent task queue, signed updates |
+| CLI | `init`, `doctor`, `auth`, `gsc`, `yandex`, `crawl`, `report`, `stats`, `schedule`, `export`, `mcp serve` |
+| MCP | 11 tools, 3 resources, 3 prompts; read-only by default |
+| Skills | `seo-weekly`, `seo-indexing-triage`, `seo-technical-audit` |
+| Automation | cron, systemd timer and Windows Task Scheduler generators; SMTP/Telegram delivery |
+
+MCP tools by access level:
+
+| Access | Tools |
+|---|---|
+| Read-only | `seo_properties`, `gsc_search_analytics`, `yandex_query_stats`, `yandex_indexing_state`, `seo_report_diff`, `seo_indexing_triage`, `seo_opportunities` |
+| Read + local state (`readOnlyHint: false`, not destructive) | `seo_crawl_site`, `seo_weekly_report` |
+| Gated provider write (`allow_write=true`, `destructiveHint: true`) | `seo_recrawl_request`, `seo_sitemap_submit` |
+
+The full inputs, outputs and limits are in the engine's
+[`docs/mcp.md`](https://github.com/LevapVeeskela/lv24-seo-optimizer/blob/main/docs/mcp.md).
+
 ## What it is not
 
 - Not a reimplementation of SEO logic, provider clients, crawling or report builders. Those live in
