@@ -8,6 +8,9 @@ updates:
       time: "06:00"
       timezone: UTC
     open-pull-requests-limit: 5
+    ignore:
+      - dependency-name: "@types/node"
+        update-types: ["version-update:semver-major"]
     groups:
       npm-minor-patch:
         patterns: ["*"]
@@ -35,6 +38,6 @@ updates:
       timezone: UTC
     open-pull-requests-limit: 5
     groups:
-      actions-minor-patch:
+      actions:
         patterns: ["*"]
-        update-types: ["minor", "patch"]
+        update-types: ["major", "minor", "patch"]
