@@ -90,8 +90,8 @@ release gate rejects the manifest mismatch.
 |---|---|---|---|
 | `windows-latest` | `x86_64-pc-windows-msvc` | NSIS | signed setup `.exe` |
 | `ubuntu-22.04` | `x86_64-unknown-linux-gnu` | AppImage, deb, rpm | signed AppImage |
-| `macos-15` | `aarch64-apple-darwin` | DMG | signed `.app.tar.gz` |
-| `macos-15-intel` | `x86_64-apple-darwin` | DMG | signed `.app.tar.gz` |
+| `macos-15` | `aarch64-apple-darwin` | DMG + app | signed `.app.tar.gz` |
+| `macos-15-intel` | `x86_64-apple-darwin` | DMG + app | signed `.app.tar.gz` |
 
 `ubuntu-22.04` sets a glibc 2.35 baseline. It is deprecated in September 2026 and unsupported in
 April 2027; when it retires, move to `ubuntu-24.04` (glibc 2.39) or a pinned 22.04 container and

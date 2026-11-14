@@ -169,12 +169,12 @@ jobs:
             artifact: macos-arm64
             os: macos-15
             target: aarch64-apple-darwin
-            bundles: dmg
+            bundles: dmg,app
           - name: macos-x64
             artifact: macos-x64
             os: macos-15-intel
             target: x86_64-apple-darwin
-            bundles: dmg
+            bundles: dmg,app
     env:
       CARGO_TERM_COLOR: always
       RUST_BACKTRACE: "1"
