@@ -23,7 +23,7 @@ Auto-update is enabled for Windows NSIS, macOS `.app` and Linux AppImage. deb, r
 portable ZIP are manual-only; the UI disables in-app installation for those bundle types and links
 to the release page. `0.1.0` has no updater, so `0.1.0` users must install `0.2.1` manually once.
 
-Before the `0.2.1` publish run these must be true:
+Release preconditions (as met for the `0.2.1` run; update the version pins for the next release):
 
 - `package.json`, `src-tauri/tauri.conf.json` and `src-tauri/Cargo.toml` all say `0.2.1`.
 - `scripts/cli-checksums.json` says `0.5.1` and the workflow runs with `engine_version=0.5.1`.
@@ -31,8 +31,7 @@ Before the `0.2.1` publish run these must be true:
 - `MIN_ENGINE_VERSION` in `src-tauri/src/commands.rs` is `0.5.1`. The `0.2.1` bundle is `0.5.1`;
   an older engine is rejected. Verify the gate and the pin agree before publishing.
 - CI (web, Rust matrix, contract drift) is green on the exact release commit. The contracts were
-  regenerated from `0.5.1`; `contracts/config.schema.json` and `contracts/cli-v1/*.json` no longer
-  say `0.5.0`.
+  regenerated from the pinned engine and match `scripts/cli-checksums.json`.
 - The `desktop-release` environment exists with the owner as required reviewer.
 - The `TAURI_SIGNING_PRIVATE_KEY` repository secret exists. `publish=true` fails without it.
 - README, `docs/*`, release notes and the unsigned warning are current.
@@ -192,6 +191,16 @@ release build**:
       "size": 14138954
     },
     "x86_64-unknown-linux-gnu": {
+      "path": "lv24-seo/lv24-seo",
+      "sha256": null,
+      "size": null
+    },
+    "aarch64-apple-darwin": {
+      "path": "lv24-seo/lv24-seo",
+      "sha256": null,
+      "size": null
+    },
+    "x86_64-apple-darwin": {
       "path": "lv24-seo/lv24-seo",
       "sha256": null,
       "size": null
@@ -414,8 +423,8 @@ The release job:
 - [ ] CI is green on the pull request that contains the release commit.
 - [ ] `package.json`, `tauri.conf.json`, `Cargo.toml` and the intended tag agree (`0.2.1`).
 - [ ] `scripts/cli-checksums.json` says `0.5.1` and `engine_version=0.5.1` will be supplied.
-- [ ] Contracts were regenerated from `0.5.1`; `contracts/config.schema.json` no longer says
-      `0.5.0`.
+- [ ] Contracts were regenerated from the pinned engine and match
+      `scripts/cli-checksums.json`.
 - [ ] `MIN_ENGINE_VERSION` is `0.5.1` and matches the pin.
 - [ ] The local release build you reviewed matches the pinned SHA-256 and size in
       `scripts/cli-checksums.json` (strict `verify-sidecar.mjs`). CI rebuilds are recorded, not

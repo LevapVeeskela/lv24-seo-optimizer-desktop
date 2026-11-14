@@ -84,9 +84,15 @@ Read [`docs/security.md`](docs/security.md) for the full model. The essentials:
 ## Secrets and local data
 
 - Use the OS keychain (`lv24-seo[secrets]`) or `LV24_SEO_*` environment variables.
-- The opt-in file fallback (`LV24_SEO_ALLOW_FILE_SECRETS=1` + `data/secrets.json`) is for
-  headless/keyring-less environments only. On Windows it relies on file ACLs; POSIX `0600` does not
-  apply.
+- The desktop and the CLI share **one OS keychain entry per provider** (and per delivery secret):
+  service `lv24-seo`, usernames `gsc_token`, `yandex_webmaster_token`, `yandex_metrika_token`,
+  `bing_api_key`, `crux_api_key`, `psi_api_key`, `smtp_password`, `telegram_bot_token`. A token
+  entered with `lv24-seo auth set --provider <p> --stdin` in a terminal is visible in the desktop's
+  `auth status` without re-entry, and a token entered in the desktop is visible to the CLI.
+  `LV24_SEO_*` environment variables are inherited by the desktop's CLI runner.
+- The opt-in file fallback (`LV24_SEO_ALLOW_FILE_SECRETS=1` + `<data-dir>/secrets.json`) is for
+  headless/keyring-less environments only. It is shared only when both surfaces use the same
+  workspace/data directory. On Windows it relies on file ACLs; POSIX `0600` does not apply there.
 - Provider queries, URLs, traffic, SQLite history and reports stay in the configured local storage.
   Provider calls, crawling and opt-in email/Telegram delivery transmit data to those destinations.
 - Back up SQLite before upgrading the engine. Do not attach a real workspace database to a public

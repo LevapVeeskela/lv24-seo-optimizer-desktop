@@ -10,7 +10,7 @@ for reporting a vulnerability.
 
 | Asset | Why it matters |
 |---|---|
-| Provider credentials (GSC, Yandex, Bing, CrUX, PSI) | grant read access to the property owner's search data |
+| Provider credentials (GSC, Yandex Webmaster, Yandex Metrika, Bing, CrUX, PSI) | grant read access to the property owner's search data |
 | SMTP password and Telegram bot token | can send messages and impersonate the owner |
 | `seo.toml` | reveals property names, recipients, hosts and paths |
 | SQLite history, reports and crawl data | contains queries, URLs and traffic that may be commercially sensitive |
@@ -236,7 +236,7 @@ paid certificate, notarization or paid runner without explicit owner approval.
   rotated, not just deleted from the latest commit.
 - Release artifacts are checksummed before publication. The release job is owner-gated and manual;
   there are no push/tag triggers. The updater private key is scoped to the build step.
-- `SHA256SUMS.txt` covers every published asset, including updater signatures and `latest.json`.
+- `SHA256SUMS.txt` covers every other published asset, including updater signatures and `latest.json`.
   Sidecar checksum reports stay in CI as rebuild-aware evidence and are not published.
 
 ## 13. Residual risks

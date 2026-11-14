@@ -52,20 +52,30 @@ The desktop is one surface over the same engine. These are the tools the engine 
 | Surface | What you get |
 |---|---|
 | Desktop | Dashboard, weekly report view, config editor/diff/validation, recommendations, agent task queue, signed updates |
-| CLI | `init`, `doctor`, `auth`, `gsc`, `yandex`, `crawl`, `report`, `stats`, `schedule`, `export`, `mcp serve` |
-| MCP | 11 tools, 3 resources, 3 prompts; read-only by default |
+| CLI | 17 top-level commands (10 groups + 7 commands): `version`, `doctor`, `init`, `properties`, `stats`, `crawl`, `install`, `auth`, `config`, `gsc`, `yandex`, `sitemap`, `indexnow`, `report`, `schedule`, `export`, `mcp` |
+| MCP | 11 tools, 3 resources, 3 prompts; no provider writes by default |
 | Skills | `seo-weekly`, `seo-indexing-triage`, `seo-technical-audit` |
 | Automation | cron, systemd timer and Windows Task Scheduler generators; SMTP/Telegram delivery |
 
 MCP tools by access level:
 
-| Access | Tools |
-|---|---|
-| Read-only | `seo_properties`, `gsc_search_analytics`, `yandex_query_stats`, `yandex_indexing_state`, `seo_report_diff`, `seo_indexing_triage`, `seo_opportunities` |
-| Read + local state (`readOnlyHint: false`, not destructive) | `seo_crawl_site`, `seo_weekly_report` |
-| Gated provider write (`allow_write=true`, `destructiveHint: true`) | `seo_recrawl_request`, `seo_sitemap_submit` |
+| Tool | Access | What it does |
+|---|---|---|
+| `seo_properties` | read-only | Configured providers, targets and token presence |
+| `gsc_search_analytics` | read-only | GSC query/page/country/device rows |
+| `yandex_query_stats` | read-only | Top Yandex queries for the host |
+| `yandex_indexing_state` | read-only | Indexing history, events and problems |
+| `seo_crawl_site` | read + local state (`readOnlyHint: false`) | Bounded crawl; stores pages and issues |
+| `seo_weekly_report` | read + local state (`readOnlyHint: false`) | Weekly digest; stores a report snapshot |
+| `seo_report_diff` | read-only | Diff two stored weekly snapshots |
+| `seo_indexing_triage` | read-only | Group indexing problems into an action list |
+| `seo_opportunities` | read-only | Striking-distance and decay opportunities |
+| `seo_recrawl_request` | gated write (`destructiveHint: true`) | Yandex recrawl queue; `WRITE_DISABLED` in 0.5.1 |
+| `seo_sitemap_submit` | gated write (`destructiveHint: true`) | GSC/Bing sitemap submit/delete; `WRITE_DISABLED` in 0.5.1 |
 
-The full inputs, outputs and limits are in the engine's
+The two local-state tools never touch provider state and are not destructive. The two provider
+writes require `allow_write=true`; the pinned engine returns `WRITE_DISABLED` until the write
+adapters land. The full inputs, outputs and limits are in the engine's
 [`docs/mcp.md`](https://github.com/LevapVeeskela/lv24-seo-optimizer/blob/main/docs/mcp.md).
 
 ## What it is not
@@ -87,12 +97,12 @@ Full notes, install steps and limitations: [`docs/releases/0.2.1.md`](docs/relea
 | Platform | Assets | Auto-update |
 |---|---|---|
 | Windows 10/11 x64 | `LV24.SEO.Optimizer_0.2.1_x64-setup.exe` (+ `.exe.sig`), `LV24-SEO-Optimizer_0.2.1_x64-portable.zip` | NSIS only; portable ZIP is manual |
-| Linux x64 | AppImage (+ `.AppImage.sig`), deb, rpm | AppImage only; deb/rpm are manual |
-| macOS 13+ arm64/x64 | DMG, `.app.tar.gz` (+ `.sig`) | `.app` only; DMG is the first install |
+| Linux x64 | `LV24.SEO.Optimizer_0.2.1_amd64.AppImage` (+ `.AppImage.sig`), `LV24.SEO.Optimizer_0.2.1_amd64.deb`, `LV24.SEO.Optimizer-0.2.1-1.x86_64.rpm` | AppImage only; deb/rpm are manual |
+| macOS 13+ arm64/x64 | `LV24.SEO.Optimizer_0.2.1_aarch64.dmg`, `LV24.SEO.Optimizer_0.2.1_x64.dmg`, `LV24.SEO.Optimizer_0.2.1_aarch64.app.tar.gz` and `LV24.SEO.Optimizer_0.2.1_x64.app.tar.gz` (+ `.sig`) | `.app` only; DMG is the first install |
 
 The `0.2.x` releases also publish `latest.json` and `SHA256SUMS.txt`. Verify the checksum before
-running an installer. `SHA256SUMS.txt` covers every published asset, including updater signatures
-and `latest.json`.
+running an installer. `SHA256SUMS.txt` covers every other published asset, including updater
+signatures and `latest.json`.
 
 ### Windows
 
@@ -294,6 +304,9 @@ settings, health status and presentation; it does not add provider adapters.
 | Your own site | — | crawl, robots, sitemap, JSON-LD, hreflang, links | none |
 | nginx access logs | — | Python analysis helpers (no desktop ingest yet) | none |
 
+Yandex Metrika is a separate auth provider from Yandex Webmaster: the desktop stores
+`yandex_metrika_token` under the `metrika` provider and `yandex_webmaster_token` under `yandex`.
+
 The desktop never asks for a paid provider key. Optional paid adapters in the engine are
 bring-your-own-key and are not part of the default path.
 
@@ -383,8 +396,8 @@ action. The desktop does not apply site edits itself.
   so a token stored by `lv24-seo auth set` in a terminal is visible in the desktop's `auth status`
   and vice versa. The OS keychain entry uses service `lv24-seo` and the same secret name on every
   surface; `LV24_SEO_*` environment variables are inherited by the CLI runner. The opt-in
-  `<data-dir>/secrets.json` fallback is shared only when the desktop opens the same workspace/data
-  directory; it is never copied into the webview.
+  `<data-dir>/secrets.json` fallback (0600 on POSIX, ACLs on Windows) is shared only when the desktop
+  opens the same workspace/data directory; it is never copied into the webview.
 - **No local HTTP API.** The desktop talks to the engine through a fixed, allow-listed process
   bridge. There is no loopback server to authenticate, proxy or expose.
 - **No telemetry.** Nothing is uploaded automatically except the updater's request for

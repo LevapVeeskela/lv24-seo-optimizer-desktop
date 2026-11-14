@@ -144,7 +144,7 @@ raw_retention_days = 90        # reserved; no raw archives are written
 |---|---|---|
 | `providers.gsc` | `property`, reserved `auth` | OAuth access token today; service-account flow is planned |
 | `providers.yandex_webmaster` | `host_id` | Yandex OAuth |
-| `providers.yandex_metrika` | `counter`, `goals` | `goals` is parsed but unused |
+| `providers.yandex_metrika` | `counter`, `goals` | separate `metrika` auth provider (`yandex_metrika_token`); `goals` is parsed but unused |
 | `providers.bing` | `site` | Bing Webmaster API key; IndexNow key is separate |
 | `providers.crux` | `origin` | CrUX API key |
 | `providers.psi` | `strategy`, `urls` | PSI API key; lab data, first URL for aggregate metrics |
@@ -197,11 +197,18 @@ The desktop labels each of these **no effect** and does not present it as a work
 |---|---|---|
 | OS keychain | `lv24-seo auth set --provider <p> --stdin` with the `secrets` extra | preferred; show “keychain” |
 | Environment | `LV24_SEO_*` variables | read-only badge; values never shown |
-| Opt-in file | `LV24_SEO_ALLOW_FILE_SECRETS=1` + `data/secrets.json` (0600 on POSIX) | show a warning; never copy the file |
+| Opt-in file | `LV24_SEO_ALLOW_FILE_SECRETS=1` + `<data-dir>/secrets.json` (0600 on POSIX) | show a warning; never copy the file |
 | Missing | no credential | show `missing`, not an outage |
 
 Rules:
 
+- The desktop and the CLI share one OS keychain entry per secret: service `lv24-seo`, username
+  equal to the secret name (`gsc_token`, `yandex_webmaster_token`, `yandex_metrika_token`,
+  `bing_api_key`, `crux_api_key`, `psi_api_key`, `smtp_password`, `telegram_bot_token`). A token
+  entered in either surface is visible to the other; nothing is copied into the webview or the app
+  data directory.
+- The opt-in `<data-dir>/secrets.json` fallback is shared only when both surfaces use the same
+  workspace/data directory. On POSIX it is `0600`; on Windows it relies on file ACLs.
 - No token, SMTP password or bot token belongs in `seo.toml`, a report, a fixture, a log or a
   diagnostics summary.
 - `auth status --json` reports provider, secret name, presence, source and optional expiry; never
@@ -220,15 +227,15 @@ All engine variables are prefixed `LV24_SEO_`. The main ones:
 
 | Variable | Purpose |
 |---|---|
-| `LV24_SEO_GSC_CLIENT_ID`, `LV24_SEO_GSC_CLIENT_SECRET`, `LV24_SEO_GSC_SERVICE_ACCOUNT_FILE` | GSC OAuth / service-account inputs |
+| `LV24_SEO_GSC_TOKEN` | GSC OAuth access token; the service-account flow is planned |
 | `LV24_SEO_GSC_PROPERTY` | GSC property override |
 | `LV24_SEO_YANDEX_WEBMASTER_TOKEN`, `LV24_SEO_YANDEX_HOST_ID` | Yandex Webmaster |
-| `LV24_SEO_YANDEX_METRIKA_TOKEN`, `LV24_SEO_YANDEX_METRIKA_COUNTER` | Yandex Metrika |
-| `LV24_SEO_BING_API_KEY`, `LV24_SEO_INDEXNOW_KEY` | Bing / IndexNow |
+| `LV24_SEO_YANDEX_METRIKA_TOKEN`, `LV24_SEO_YANDEX_METRIKA_COUNTER` | Yandex Metrika (separate token) |
+| `LV24_SEO_BING_API_KEY` | Bing Webmaster API key; the IndexNow key is the `indexnow submit --key` flag |
 | `LV24_SEO_CRUX_API_KEY`, `LV24_SEO_PSI_API_KEY` | CrUX / PSI |
 | `LV24_SEO_SMTP_HOST`, `LV24_SEO_SMTP_PORT`, `LV24_SEO_SMTP_USER`, `LV24_SEO_SMTP_PASSWORD`, `LV24_SEO_SMTP_FROM`, `LV24_SEO_MAIL_TO` | email delivery |
 | `LV24_SEO_TELEGRAM_BOT_TOKEN`, `LV24_SEO_TELEGRAM_CHAT_ID` | Telegram delivery |
-| `LV24_SEO_REPORT_LOCALE` | `report.locale` override (`ru`, `en`, `zh`) |
+| `LV24_SEO_REPORT_LOCALE`, `LV24_SEO_REPORT_TIMEZONE` | `report.locale` / `report.timezone` override |
 | `LV24_SEO_DATA_DIR` | storage override; the desktop does not set it silently |
 | `LV24_SEO_LOG_LEVEL` | engine log level |
 | `LV24_SEO_ALLOW_FILE_SECRETS` | set to `1` only for headless/keyring-less environments |
