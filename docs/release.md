@@ -178,8 +178,10 @@ npm run package:portable
 ```
 
 The NSIS artifact is
-`src-tauri/target/release/bundle/nsis/LV24 SEO Optimizer_<version>_x64-setup.exe`. The portable
-script writes `release/LV24-SEO-Optimizer_<version>_x64-portable.zip` and a `.sha256` sidecar.
+`src-tauri/target/release/bundle/nsis/LV24 SEO Optimizer_<version>_x64-setup.exe`. GitHub normalizes
+spaces to dots in release asset names, so the published asset is
+`LV24.SEO.Optimizer_<version>_x64-setup.exe`; use that dotted name in release notes and checksums.
+The portable script writes `release/LV24-SEO-Optimizer_<version>_x64-portable.zip` and a `.sha256` sidecar.
 `--target x86_64-pc-windows-msvc` maps to the friendly `x64` label; `aarch64-*` maps to `arm64`.
 The archive contains `LV24 SEO Optimizer/` with the app executable, the bundled
 `lv24-seo/` tree, `LICENSE`, `README.txt` and `engine-build-info.json`. Archives go to `release/`,

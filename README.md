@@ -60,7 +60,7 @@ Download from [Releases](https://github.com/LevapVeeskela/lv24-seo-optimizer-des
 
 | File | Use |
 |---|---|
-| `LV24 SEO Optimizer_0.1.0_x64-setup.exe` | NSIS installer; installs per user and adds a Start menu entry |
+| `LV24.SEO.Optimizer_0.1.0_x64-setup.exe` | NSIS installer; installs per user and adds a Start menu entry |
 | `LV24-SEO-Optimizer_0.1.0_x64-portable.zip` | extract the whole `LV24 SEO Optimizer` folder and run `lv24-seo-desktop.exe` |
 | `SHA256SUMS.txt` | verify the downloaded files before running |
 
@@ -73,7 +73,7 @@ installation is required. The portable ZIP expects the `lv24-seo\` folder to sta
 
 ```powershell
 $files = @(
-  "LV24 SEO Optimizer_0.1.0_x64-setup.exe"
+  "LV24.SEO.Optimizer_0.1.0_x64-setup.exe"
   "LV24-SEO-Optimizer_0.1.0_x64-portable.zip"
 )
 $sums = Get-Content .\SHA256SUMS.txt
