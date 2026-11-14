@@ -2,7 +2,7 @@
 
 ## Supported versions
 
-`lv24-seo-optimizer-desktop` is **pre-release**. The latest published line is `0.2.1`; `0.1.0` is a
+`lv24-seo-optimizer-desktop` is **pre-release**. The latest published line is `0.2.2`; `0.1.0` is a
 Windows-only preview with no updater and is upgraded manually. Security fixes are provided for the
 latest release line; older pre-1.0 lines are not maintained unless stated in the release notes.
 
@@ -65,7 +65,11 @@ Read [`docs/security.md`](docs/security.md) for the full model. The essentials:
 - **No secrets in the webview.** Token input is sent once over IPC and piped to
   `lv24-seo auth set --stdin`; values are never logged, stored in UI state or included in support
   bundles. On Linux the CLI runner inherits the session-bus/XDG variables Secret Service needs; the
-  value still travels only over stdin.
+  value still travels only over stdin. Environment-provided tokens are read-only in the UI, and a
+  `auth logout` that deleted nothing (`deleted: false`) is reported as such.
+- **Durable, private file writes.** Configuration and settings writes are atomic and fsynced (temp
+  file, rename, parent directory), temp drafts and backups are mode `0600`, and configuration reads
+  are bounded. Windows reserved device names are rejected in every path component.
 - **No local HTTP API.** The desktop uses a fixed, allow-listed child-process bridge. There is no
   loopback server to authenticate or expose.
 - **No telemetry.** Nothing is uploaded automatically except the updater's request for
@@ -126,7 +130,11 @@ Read [`docs/security.md`](docs/security.md) for the full model. The essentials:
   disables the install button.
 - deb, rpm, MSI and the portable ZIP are manual-only. The UI disables in-app installation and links
   to the release page instead of pretending the package can replace itself.
-- `0.1.0` has no updater. Install `0.2.1` manually once; auto-update works from `0.2.0` onward.
+- **Sidecar cleanup before an update.** The updater stops only the engine PIDs this app instance
+  registered when it spawned them; nothing is matched by image name, so another installed copy or a
+  terminal run is untouched. If a tracked sidecar cannot be stopped, the install is blocked with
+  `UPDATE_ENGINE_BUSY` rather than starting an installer that would fail on a locked file.
+- `0.1.0` has no updater. Install `0.2.2` manually once; auto-update works from `0.2.0` onward.
 - A signature failure blocks the artifact and points to the release page. It is not treated as an
   offline error and the same artifact is not retried.
 

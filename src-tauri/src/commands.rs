@@ -13,7 +13,7 @@ use crate::error::{AppError, AppResult, ErrorInfo};
 use crate::paths;
 use crate::settings::{Settings, SettingsPatch, SettingsStore};
 
-pub const MIN_ENGINE_VERSION: &str = "0.5.1";
+pub const MIN_ENGINE_VERSION: &str = "0.5.2";
 
 pub struct AppState {
     pub paths: paths::AppPaths,

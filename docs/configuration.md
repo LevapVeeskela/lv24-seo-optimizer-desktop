@@ -1,10 +1,10 @@
 # Configuration
 
-Status: **desktop configuration contract for `0.2.1`.** The settings screens implement this
-contract; the engine-side `seo.toml` semantics below are those of the pinned `lv24-seo 0.5.1`. When
+Status: **desktop configuration contract for `0.2.2`.** The settings screens implement this
+contract; the engine-side `seo.toml` semantics below are those of the pinned `lv24-seo 0.5.2`. When
 the desktop and the engine disagree, the engine is authoritative and the desktop must show its
 validation error instead of silently “fixing” the file. The desktop's `ConfigModel` mirrors the
-subset of `lv24_seo.core.config.SeoConfig` used by the forms for `0.5.1`; the engine still validates
+subset of `lv24_seo.core.config.SeoConfig` used by the forms for `0.5.2`; the engine still validates
 the whole file.
 
 ## 1. What owns what
@@ -172,8 +172,12 @@ required credential are present. Presence is not proof of permission; “Test”
 - `crawl.max_urls` bounds the crawl; `respect_robots = true` is the safe default.
 - `crawl.concurrency` is reserved and has no effect; the crawler is serial with `Crawl-delay`
   pacing. The UI shows it as “no effect”.
-- `storage.data_dir` is relative to the process working directory. Prefer an absolute path in the
-  desktop. The desktop launches with `cwd = config parent`.
+- `storage.data_dir` is anchored to the config file since `lv24-seo 0.5.2`: a relative value written
+  in `seo.toml` resolves against the config file's parent, so a run from another working directory
+  cannot create a second database. The built-in default (no `[storage]` block) and
+  `LV24_SEO_DATA_DIR` stay process-scoped. `doctor --json` reports `meta.data_dir` and
+  `meta.data_dir_source` (`config` or `working directory`). The desktop still launches with
+  `cwd = config parent`.
 - `storage.raw_retention_days` is reserved; no raw provider archives are written, so pruning is a
   logged no-op. The UI must not imply that changing it deletes data.
 - `data/seo.sqlite3` is the history. Back it up before upgrading the engine.
@@ -317,4 +321,4 @@ The desktop calls the same commands with an absolute `--config` and parses the e
 | `truncated: true` | provider row cap | warning; totals are not presented as complete |
 | report is a no-data fallback | no provider rows | neutral report, `complete: false` |
 | engine version mismatch | sidecar and desktop pins disagree | engine marked offline with the standard notice; footer shows the detected engine version when available; no blocking dialog |
-| relative data dir differs from terminal | cwd differs | desktop launches with `cwd = config parent`; prefer absolute path |
+| relative data dir differs from terminal | `LV24_SEO_DATA_DIR` or the built-in default is process-scoped | `doctor --json` `meta.data_dir_source`; a file-written relative `data_dir` is anchored to the config since engine `0.5.2` |

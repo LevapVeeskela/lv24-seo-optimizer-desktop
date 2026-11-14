@@ -1,18 +1,18 @@
 {
   "schemaVersion": 1,
   "engine": "lv24-seo",
-  "version": "0.5.1",
+  "version": "0.5.2",
   "python": "3.12",
   "pydantic": "2.14.3",
   "typer": "0.29.0",
   "pyinstaller": "6.22.3",
-  "source": "https://pypi.org/project/lv24-seo/0.5.1/",
+  "source": "https://pypi.org/project/lv24-seo/0.5.2/",
   "notes": "Release pin for the PyInstaller onedir sidecar. Replace every null sha256 with the 64-hex SHA-256 of the built executable after a verified build. Null means not pinned yet; --require-pinned rejects it.",
   "targets": {
     "x86_64-pc-windows-msvc": {
       "path": "lv24-seo/lv24-seo.exe",
-      "sha256": "7379a187531600d02fe6ea99c851c34d744f3a6a31b14d2fa7092796a1bb0270",
-      "size": 14138954
+      "sha256": null,
+      "size": null
     },
     "x86_64-unknown-linux-gnu": {
       "path": "lv24-seo/lv24-seo",
