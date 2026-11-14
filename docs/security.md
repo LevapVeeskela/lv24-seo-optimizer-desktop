@@ -1,8 +1,8 @@
 # Security model
 
-Status: **security contract for `0.2.0`.** The Rust bridge and screens are implemented in this
+Status: **security contract for `0.2.1`.** The Rust bridge and screens are implemented in this
 repository. This page states the controls the implementation must enforce and the residual risks
-accepted for the preview; where a control is future work, the text says so. `0.2.0` adds signed
+accepted for the preview; where a control is future work, the text says so. `0.2.1` adds signed
 auto-update for Windows NSIS, macOS `.app` and Linux AppImage. See [`SECURITY.md`](../SECURITY.md)
 for reporting a vulnerability.
 
@@ -61,6 +61,12 @@ engine via `LV24_SEO_BIN`, and provider-side breaches.
   needs (`DBUS_SESSION_BUS_ADDRESS`, `XDG_RUNTIME_DIR`, `TMPDIR` and related paths) while still
   filtering unrelated host variables. This makes the OS keychain reachable from the desktop process;
   the secret value itself still travels only over stdin.
+- The desktop and the CLI share one OS keychain entry per secret: service `lv24-seo`, username
+  `gsc_token`, `psi_api_key`, and so on. A token entered in a terminal is visible in the desktop's
+  `auth status` and a token entered in the desktop is visible to the CLI, without a copy in the
+  webview or the app data directory. `LV24_SEO_*` environment variables are inherited by the CLI
+  runner. The opt-in `<data-dir>/secrets.json` fallback is shared only when both surfaces use the
+  same workspace/data directory.
 - `seo.toml` never contains tokens, passwords or bot tokens. `config show` is redacted by the
   engine; the desktop must not “unredact” it.
 - MCP client installation may return the full merged host configuration, which can contain other
@@ -87,7 +93,7 @@ opt-in file. The desktop must show which source is active.
   command and require an explicit confirmation dialog naming the target.
 - A timeout or dropped child handle kills the exact child process handle/PID. It never uses a
   wildcard process name; several LV24 applications can run concurrently. There is no user-facing
-  cancel button in `0.2.0`.
+  cancel button in `0.2.1`.
 
 ## 5. Configuration files
 
@@ -172,7 +178,7 @@ connect-src ipc: http://ipc.localhost
 - Windows NSIS, macOS `.app` and Linux AppImage update in place. deb, rpm, MSI and the portable ZIP
   are manual-only: the UI disables the in-app installer for those bundle types and links to the
   release page.
-- `0.1.0` has no updater, endpoint or public key. Its users must install `0.2.0` manually once;
+- `0.1.0` has no updater, endpoint or public key. Its users must install `0.2.1` manually once;
   auto-update works from `0.2.0` onward.
 - OS code signing/notarization is separate. The default build is unsigned; see section 11.
 

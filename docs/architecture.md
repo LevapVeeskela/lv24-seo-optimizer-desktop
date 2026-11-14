@@ -1,6 +1,6 @@
 # Architecture
 
-Status: **implementation contract for `0.2.0`.** The Rust command bridge and product screens are
+Status: **implementation contract for `0.2.1`.** The Rust command bridge and product screens are
 implemented in this repository. Where this document describes a control, it is the requirement that
 implementation must satisfy. The pinned engine is `lv24-seo 0.5.1`.
 

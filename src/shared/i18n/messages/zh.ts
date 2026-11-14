@@ -322,6 +322,7 @@ export const zh: Messages = {
   "secrets.provider": "提供方",
   "secrets.provider.gsc": "Google Search Console",
   "secrets.provider.yandex": "Yandex Webmaster",
+  "secrets.provider.metrika": "Yandex Metrika",
   "secrets.provider.bing": "Bing Webmaster",
   "secrets.provider.crux": "Chrome UX Report",
   "secrets.provider.psi": "PageSpeed Insights",

@@ -521,6 +521,7 @@ export const SettingsPage = observer(function SettingsPage() {
                     set("providers.yandex_metrika.counter", event.target.value)
                   }
                 />
+                {tokenBadge("metrika")}
               </Field>
               <Field
                 id="provider-bing-site"

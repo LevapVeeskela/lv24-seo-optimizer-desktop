@@ -129,7 +129,9 @@ pub struct CliRunResult {
     pub truncated: bool,
 }
 
-pub const AUTH_PROVIDERS: &[&str] = &["gsc", "yandex", "bing", "crux", "psi", "smtp", "telegram"];
+pub const AUTH_PROVIDERS: &[&str] = &[
+    "gsc", "yandex", "metrika", "bing", "crux", "psi", "smtp", "telegram",
+];
 
 pub fn normalize_auth_provider(raw: &str) -> AppResult<String> {
     let value = raw.trim().to_ascii_lowercase();
@@ -1061,6 +1063,7 @@ mod tests {
     fn only_expected_environment_is_inherited() {
         assert!(is_inherited_env("PATH"));
         assert!(is_inherited_env("SystemRoot"));
+        assert!(is_inherited_env("USERPROFILE"));
         assert!(is_inherited_env("LV24_SEO_GSC_TOKEN"));
         assert!(!is_inherited_env("AWS_SECRET_ACCESS_KEY"));
         assert!(!is_inherited_env("GITHUB_TOKEN"));

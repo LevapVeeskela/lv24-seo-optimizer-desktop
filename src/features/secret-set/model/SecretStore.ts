@@ -13,6 +13,7 @@ import {
 export const SECRET_PROVIDER_KEYS: Record<AuthProvider, MessageKey> = {
   gsc: "secrets.provider.gsc",
   yandex: "secrets.provider.yandex",
+  metrika: "secrets.provider.metrika",
   bing: "secrets.provider.bing",
   crux: "secrets.provider.crux",
   psi: "secrets.provider.psi",

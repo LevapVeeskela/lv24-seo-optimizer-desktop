@@ -25,6 +25,7 @@ import type {
 const PROVIDERS: readonly AuthProvider[] = [
   "gsc",
   "yandex",
+  "metrika",
   "bing",
   "crux",
   "psi",

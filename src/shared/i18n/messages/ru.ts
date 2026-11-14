@@ -322,6 +322,7 @@ export const ru: Messages = {
   "secrets.provider": "Провайдер",
   "secrets.provider.gsc": "Google Search Console",
   "secrets.provider.yandex": "Яндекс Вебмастер",
+  "secrets.provider.metrika": "Яндекс Метрика",
   "secrets.provider.bing": "Bing Webmaster",
   "secrets.provider.crux": "Chrome UX Report",
   "secrets.provider.psi": "PageSpeed Insights",

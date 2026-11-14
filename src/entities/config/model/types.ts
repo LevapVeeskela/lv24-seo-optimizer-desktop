@@ -287,6 +287,7 @@ export interface DoctorRun {
 export const AUTH_PROVIDERS = [
   "gsc",
   "yandex",
+  "metrika",
   "bing",
   "crux",
   "psi",
@@ -301,8 +302,9 @@ export function authProviderForConfigProvider(
 ): AuthProvider {
   switch (provider) {
     case "yandex_webmaster":
-    case "yandex_metrika":
       return "yandex";
+    case "yandex_metrika":
+      return "metrika";
     case "smtp":
       return "smtp";
     case "telegram":

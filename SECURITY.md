@@ -2,7 +2,7 @@
 
 ## Supported versions
 
-`lv24-seo-optimizer-desktop` is **pre-release**. The latest published line is `0.2.0`; `0.1.0` is a
+`lv24-seo-optimizer-desktop` is **pre-release**. The latest published line is `0.2.1`; `0.1.0` is a
 Windows-only preview with no updater and is upgraded manually. Security fixes are provided for the
 latest release line; older pre-1.0 lines are not maintained unless stated in the release notes.
 
@@ -120,7 +120,7 @@ Read [`docs/security.md`](docs/security.md) for the full model. The essentials:
   disables the install button.
 - deb, rpm, MSI and the portable ZIP are manual-only. The UI disables in-app installation and links
   to the release page instead of pretending the package can replace itself.
-- `0.1.0` has no updater. Install `0.2.0` manually once; auto-update works from `0.2.0` onward.
+- `0.1.0` has no updater. Install `0.2.1` manually once; auto-update works from `0.2.0` onward.
 - A signature failure blocks the artifact and points to the release page. It is not treated as an
   offline error and the same artifact is not retried.
 
