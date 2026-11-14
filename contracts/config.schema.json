@@ -1,0 +1,414 @@
+{
+  "$comment": "Generated from lv24-seo 0.5.0 SeoConfig.model_json_schema(). Do not edit by hand.",
+  "$defs": {
+    "BingConfig": {
+      "additionalProperties": false,
+      "description": "Bing Webmaster Tools site.",
+      "properties": {
+        "site": {
+          "default": "",
+          "title": "Site",
+          "type": "string"
+        }
+      },
+      "title": "BingConfig",
+      "type": "object"
+    },
+    "CrawlConfig": {
+      "additionalProperties": false,
+      "description": "Crawler limits. ``respect_robots`` stays on unless a user opts out explicitly.\n\nCrawling is serial with polite pacing (robots ``Crawl-delay`` between\nrequests); ``concurrency`` is reserved for a future bounded worker pool and\ncurrently has no effect on execution.",
+      "properties": {
+        "concurrency": {
+          "default": 4,
+          "minimum": 1,
+          "title": "Concurrency",
+          "type": "integer"
+        },
+        "max_urls": {
+          "default": 500,
+          "minimum": 1,
+          "title": "Max Urls",
+          "type": "integer"
+        },
+        "respect_robots": {
+          "default": true,
+          "title": "Respect Robots",
+          "type": "boolean"
+        },
+        "user_agent": {
+          "default": "lv24-seo/0.1",
+          "title": "User Agent",
+          "type": "string"
+        }
+      },
+      "title": "CrawlConfig",
+      "type": "object"
+    },
+    "CruxConfig": {
+      "additionalProperties": false,
+      "description": "Chrome UX Report origin.",
+      "properties": {
+        "origin": {
+          "default": "",
+          "title": "Origin",
+          "type": "string"
+        }
+      },
+      "title": "CruxConfig",
+      "type": "object"
+    },
+    "EmailConfig": {
+      "additionalProperties": false,
+      "description": "Email delivery settings. ``from`` is a keyword, hence the alias.",
+      "properties": {
+        "enabled": {
+          "default": false,
+          "title": "Enabled",
+          "type": "boolean"
+        },
+        "from": {
+          "default": "",
+          "title": "From",
+          "type": "string"
+        },
+        "only_on_change": {
+          "default": true,
+          "title": "Only On Change",
+          "type": "boolean"
+        },
+        "smtp_host": {
+          "default": "",
+          "title": "Smtp Host",
+          "type": "string"
+        },
+        "smtp_port": {
+          "default": 587,
+          "maximum": 65535,
+          "minimum": 1,
+          "title": "Smtp Port",
+          "type": "integer"
+        },
+        "smtp_user": {
+          "default": "",
+          "title": "Smtp User",
+          "type": "string"
+        },
+        "to": {
+          "items": {
+            "type": "string"
+          },
+          "title": "To",
+          "type": "array"
+        }
+      },
+      "title": "EmailConfig",
+      "type": "object"
+    },
+    "GscConfig": {
+      "additionalProperties": false,
+      "description": "Google Search Console property and credential source.",
+      "properties": {
+        "auth": {
+          "default": "keychain",
+          "title": "Auth",
+          "type": "string"
+        },
+        "property": {
+          "default": "",
+          "title": "Property",
+          "type": "string"
+        }
+      },
+      "title": "GscConfig",
+      "type": "object"
+    },
+    "ProjectConfig": {
+      "additionalProperties": false,
+      "description": "Identity of the site this workspace reports on.",
+      "properties": {
+        "base_url": {
+          "default": "",
+          "title": "Base Url",
+          "type": "string"
+        },
+        "default_property": {
+          "default": "",
+          "title": "Default Property",
+          "type": "string"
+        },
+        "name": {
+          "default": "",
+          "title": "Name",
+          "type": "string"
+        }
+      },
+      "title": "ProjectConfig",
+      "type": "object"
+    },
+    "ProvidersConfig": {
+      "additionalProperties": false,
+      "description": "Optional provider blocks; absent means \"not configured\", not a failure.",
+      "properties": {
+        "bing": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/BingConfig"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "crux": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/CruxConfig"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "gsc": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/GscConfig"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "psi": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/PsiConfig"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "yandex_metrika": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/YandexMetrikaConfig"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "yandex_webmaster": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/YandexWebmasterConfig"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        }
+      },
+      "title": "ProvidersConfig",
+      "type": "object"
+    },
+    "PsiConfig": {
+      "additionalProperties": false,
+      "description": "PageSpeed Insights defaults.",
+      "properties": {
+        "strategy": {
+          "default": "mobile",
+          "enum": [
+            "mobile",
+            "desktop"
+          ],
+          "title": "Strategy",
+          "type": "string"
+        },
+        "urls": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Urls",
+          "type": "array"
+        }
+      },
+      "title": "PsiConfig",
+      "type": "object"
+    },
+    "ReportConfig": {
+      "additionalProperties": false,
+      "description": "Report locale, schedule and delivery channels.",
+      "properties": {
+        "email": {
+          "$ref": "#/$defs/EmailConfig"
+        },
+        "locale": {
+          "default": "ru",
+          "enum": [
+            "ru",
+            "en",
+            "zh"
+          ],
+          "title": "Locale",
+          "type": "string"
+        },
+        "telegram": {
+          "$ref": "#/$defs/TelegramConfig"
+        },
+        "thresholds": {
+          "$ref": "#/$defs/ThresholdsConfig"
+        },
+        "timezone": {
+          "default": "Europe/Minsk",
+          "title": "Timezone",
+          "type": "string"
+        },
+        "week_start": {
+          "default": "monday",
+          "enum": [
+            "monday",
+            "sunday"
+          ],
+          "title": "Week Start",
+          "type": "string"
+        }
+      },
+      "title": "ReportConfig",
+      "type": "object"
+    },
+    "StorageConfig": {
+      "additionalProperties": false,
+      "description": "Local data directory and raw-response retention.",
+      "properties": {
+        "data_dir": {
+          "default": "data",
+          "format": "path",
+          "title": "Data Dir",
+          "type": "string"
+        },
+        "raw_retention_days": {
+          "default": 90,
+          "minimum": 0,
+          "title": "Raw Retention Days",
+          "type": "integer"
+        }
+      },
+      "title": "StorageConfig",
+      "type": "object"
+    },
+    "TelegramConfig": {
+      "additionalProperties": false,
+      "description": "Telegram delivery settings.",
+      "properties": {
+        "chat_id": {
+          "default": "",
+          "title": "Chat Id",
+          "type": "string"
+        },
+        "enabled": {
+          "default": false,
+          "title": "Enabled",
+          "type": "boolean"
+        },
+        "severity": {
+          "default": "critical",
+          "enum": [
+            "critical",
+            "all"
+          ],
+          "title": "Severity",
+          "type": "string"
+        }
+      },
+      "title": "TelegramConfig",
+      "type": "object"
+    },
+    "ThresholdsConfig": {
+      "additionalProperties": false,
+      "description": "Report movement thresholds, in percent or absolute positions.",
+      "properties": {
+        "clicks_pct": {
+          "default": 10.0,
+          "title": "Clicks Pct",
+          "type": "number"
+        },
+        "impressions_pct": {
+          "default": 15.0,
+          "title": "Impressions Pct",
+          "type": "number"
+        },
+        "position_abs": {
+          "default": 1.5,
+          "title": "Position Abs",
+          "type": "number"
+        }
+      },
+      "title": "ThresholdsConfig",
+      "type": "object"
+    },
+    "YandexMetrikaConfig": {
+      "additionalProperties": false,
+      "description": "Yandex Metrika counter and the goals that count as conversions.",
+      "properties": {
+        "counter": {
+          "default": "",
+          "title": "Counter",
+          "type": "string"
+        },
+        "goals": {
+          "items": {
+            "type": "integer"
+          },
+          "title": "Goals",
+          "type": "array"
+        }
+      },
+      "title": "YandexMetrikaConfig",
+      "type": "object"
+    },
+    "YandexWebmasterConfig": {
+      "additionalProperties": false,
+      "description": "Yandex Webmaster host id, for example ``https:example.com:443``.",
+      "properties": {
+        "host_id": {
+          "default": "",
+          "title": "Host Id",
+          "type": "string"
+        }
+      },
+      "title": "YandexWebmasterConfig",
+      "type": "object"
+    }
+  },
+  "$id": "https://github.com/LevapVeeskela/lv24-seo-optimizer-desktop/contracts/config.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Validated, fully-defaulted configuration for one SEO workspace.",
+  "properties": {
+    "crawl": {
+      "$ref": "#/$defs/CrawlConfig"
+    },
+    "project": {
+      "$ref": "#/$defs/ProjectConfig"
+    },
+    "providers": {
+      "$ref": "#/$defs/ProvidersConfig"
+    },
+    "report": {
+      "$ref": "#/$defs/ReportConfig"
+    },
+    "storage": {
+      "$ref": "#/$defs/StorageConfig"
+    }
+  },
+  "title": "SeoConfig",
+  "type": "object"
+}

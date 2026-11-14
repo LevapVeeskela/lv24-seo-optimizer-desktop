@@ -1,0 +1,91 @@
+{
+  "engine": "lv24-seo",
+  "fixtures": {
+    "auth-status": {
+      "command": [
+        "auth",
+        "status",
+        "--json"
+      ],
+      "exitCode": 0,
+      "file": "auth-status.json"
+    },
+    "config-show": {
+      "command": [
+        "config",
+        "show",
+        "--json"
+      ],
+      "exitCode": 0,
+      "file": "config-show.json"
+    },
+    "doctor": {
+      "command": [
+        "doctor",
+        "--json"
+      ],
+      "exitCode": 0,
+      "file": "doctor.json"
+    },
+    "properties": {
+      "command": [
+        "properties",
+        "--json"
+      ],
+      "exitCode": 0,
+      "file": "properties.json"
+    },
+    "report-diff-no-store": {
+      "command": [
+        "report",
+        "diff",
+        "--json"
+      ],
+      "exitCode": 2,
+      "file": "report-diff-no-store.json"
+    },
+    "report-weekly-no-data": {
+      "command": [
+        "report",
+        "weekly",
+        "--days",
+        "7",
+        "--lag-days",
+        "2",
+        "--json"
+      ],
+      "exitCode": 0,
+      "file": "report-weekly-no-data.json"
+    },
+    "stats": {
+      "command": [
+        "stats",
+        "--days",
+        "7",
+        "--lag-days",
+        "2",
+        "--json"
+      ],
+      "exitCode": 0,
+      "file": "stats.json"
+    },
+    "version": {
+      "command": [
+        "version",
+        "--json"
+      ],
+      "exitCode": 0,
+      "file": "version.json"
+    }
+  },
+  "generatedBy": "scripts/gen-contracts.py",
+  "normalization": {
+    "dates": "<DATE>",
+    "duration_ms": 0,
+    "home": "<HOME>",
+    "timestamps": "<TIMESTAMP>",
+    "workspace": "<WORKSPACE>"
+  },
+  "schemaVersion": 1,
+  "version": "0.5.0"
+}

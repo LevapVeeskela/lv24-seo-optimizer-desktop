@@ -1,0 +1,43 @@
+{
+  "data": {
+    "checks": [
+      {
+        "detail": "<PYTHON_VERSION>",
+        "id": "python",
+        "ok": true
+      },
+      {
+        "detail": "<PLATFORM>",
+        "id": "platform",
+        "ok": true
+      },
+      {
+        "detail": "not found; run `lv24-seo init`",
+        "id": "config",
+        "ok": false
+      },
+      {
+        "detail": "<CWD>",
+        "id": "cwd_writable",
+        "ok": true
+      },
+      {
+        "detail": "<DATA_DIR>",
+        "id": "data_dir",
+        "ok": false
+      },
+      {
+        "detail": "<TOKENS>",
+        "id": "tokens",
+        "ok": false
+      }
+    ],
+    "healthy": true
+  },
+  "meta": {
+    "config": null,
+    "version": "0.5.0"
+  },
+  "ok": true,
+  "warnings": []
+}

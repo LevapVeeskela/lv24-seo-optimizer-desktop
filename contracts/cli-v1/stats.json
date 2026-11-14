@@ -1,0 +1,133 @@
+{
+  "data": {
+    "coverage": {
+      "complete": false,
+      "configured": 0,
+      "failed": 0,
+      "missing": 0,
+      "returned": 0
+    },
+    "generated_at": "<TIMESTAMP>",
+    "limitations": [],
+    "period": {
+      "end": "<DATE>",
+      "start": "<DATE>"
+    },
+    "previous_period": {
+      "end": "<DATE>",
+      "start": "<DATE>"
+    },
+    "services": [
+      {
+        "configured": false,
+        "data_age_days": 0,
+        "error": null,
+        "label": "Google Search Console",
+        "limitations": [],
+        "metrics": {},
+        "previous": null,
+        "provider": "gsc",
+        "ready": false,
+        "rows": 0,
+        "status": "not_configured",
+        "truncated": false,
+        "warnings": []
+      },
+      {
+        "configured": false,
+        "data_age_days": 0,
+        "error": null,
+        "label": "Yandex Webmaster",
+        "limitations": [],
+        "metrics": {},
+        "previous": null,
+        "provider": "yandex_webmaster",
+        "ready": false,
+        "rows": 0,
+        "status": "not_configured",
+        "truncated": false,
+        "warnings": []
+      },
+      {
+        "configured": false,
+        "data_age_days": 0,
+        "error": null,
+        "label": "Yandex Metrika",
+        "limitations": [],
+        "metrics": {},
+        "previous": null,
+        "provider": "yandex_metrika",
+        "ready": false,
+        "rows": 0,
+        "status": "not_configured",
+        "truncated": false,
+        "warnings": []
+      },
+      {
+        "configured": false,
+        "data_age_days": 0,
+        "error": null,
+        "label": "Bing Webmaster",
+        "limitations": [],
+        "metrics": {},
+        "previous": null,
+        "provider": "bing",
+        "ready": false,
+        "rows": 0,
+        "status": "not_configured",
+        "truncated": false,
+        "warnings": []
+      },
+      {
+        "configured": false,
+        "data_age_days": 0,
+        "error": null,
+        "label": "Chrome UX Report",
+        "limitations": [],
+        "metrics": {},
+        "previous": null,
+        "provider": "crux",
+        "ready": false,
+        "rows": 0,
+        "status": "not_configured",
+        "truncated": false,
+        "warnings": []
+      },
+      {
+        "configured": false,
+        "data_age_days": 0,
+        "error": null,
+        "label": "PageSpeed Insights",
+        "limitations": [],
+        "metrics": {},
+        "previous": null,
+        "provider": "psi",
+        "ready": false,
+        "rows": 0,
+        "status": "not_configured",
+        "truncated": false,
+        "warnings": []
+      }
+    ],
+    "warnings": []
+  },
+  "meta": {
+    "complete": false,
+    "data_age_days": 0,
+    "days": 7,
+    "lag_days": 2,
+    "limitations": [],
+    "period": {
+      "end": "<DATE>",
+      "start": "<DATE>"
+    },
+    "previous_period": {
+      "end": "<DATE>",
+      "start": "<DATE>"
+    },
+    "truncated": false,
+    "version": "0.5.0"
+  },
+  "ok": true,
+  "warnings": []
+}

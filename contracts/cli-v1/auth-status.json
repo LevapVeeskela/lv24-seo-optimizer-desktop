@@ -1,0 +1,70 @@
+{
+  "data": {
+    "missing": [
+      "gsc",
+      "yandex",
+      "bing",
+      "crux",
+      "psi",
+      "smtp",
+      "telegram"
+    ],
+    "present": [],
+    "providers": [
+      {
+        "expires_at": null,
+        "present": false,
+        "provider": "gsc",
+        "secret": "gsc_token",
+        "source": "missing"
+      },
+      {
+        "expires_at": null,
+        "present": false,
+        "provider": "yandex",
+        "secret": "yandex_webmaster_token",
+        "source": "missing"
+      },
+      {
+        "expires_at": null,
+        "present": false,
+        "provider": "bing",
+        "secret": "bing_api_key",
+        "source": "missing"
+      },
+      {
+        "expires_at": null,
+        "present": false,
+        "provider": "crux",
+        "secret": "crux_api_key",
+        "source": "missing"
+      },
+      {
+        "expires_at": null,
+        "present": false,
+        "provider": "psi",
+        "secret": "psi_api_key",
+        "source": "missing"
+      },
+      {
+        "expires_at": null,
+        "present": false,
+        "provider": "smtp",
+        "secret": "smtp_password",
+        "source": "missing"
+      },
+      {
+        "expires_at": null,
+        "present": false,
+        "provider": "telegram",
+        "secret": "telegram_bot_token",
+        "source": "missing"
+      }
+    ]
+  },
+  "meta": {
+    "version": "0.5.0"
+  },
+  "ok": true,
+  "warnings": []
+}

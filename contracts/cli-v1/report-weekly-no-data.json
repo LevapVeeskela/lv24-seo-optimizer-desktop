@@ -1,0 +1,124 @@
+{
+  "data": {
+    "generated_at": "<TIMESTAMP>",
+    "headline": "No provider data available",
+    "kind": "weekly",
+    "limitations": [
+      "no source returned usable rows; report is a no-data fallback",
+      "headline delta unavailable: no comparable GSC windows; per-engine numbers are shown without a total"
+    ],
+    "period": {
+      "end": "<DATE>",
+      "start": "<DATE>"
+    },
+    "property_id": "default",
+    "sections": [
+      {
+        "key": "headline",
+        "notes": [],
+        "rows": [],
+        "summary": "Comparison unavailable: both complete baseline windows are required",
+        "title": "Headline"
+      },
+      {
+        "key": "traffic",
+        "notes": [],
+        "rows": [],
+        "summary": "No engine reported traffic rows",
+        "title": "Traffic by engine"
+      },
+      {
+        "key": "opportunities",
+        "notes": [
+          "no GSC query rows were provided; opportunities are empty"
+        ],
+        "rows": [],
+        "summary": "No opportunities found",
+        "title": "Opportunities"
+      },
+      {
+        "key": "issues",
+        "notes": [
+          "no issue rows were provided"
+        ],
+        "rows": [],
+        "summary": "No issues reported",
+        "title": "Issues by severity"
+      },
+      {
+        "key": "sources",
+        "notes": [
+          "gsc: missing (no rows)",
+          "yandex: missing (no rows)",
+          "metrika: missing (no rows)",
+          "limitation: no source returned usable rows; report is a no-data fallback",
+          "limitation: headline delta unavailable: no comparable GSC windows; per-engine numbers are shown without a total"
+        ],
+        "rows": [
+          {
+            "limitations": [],
+            "rows": 0,
+            "source": "gsc",
+            "status": "missing"
+          },
+          {
+            "limitations": [],
+            "rows": 0,
+            "source": "yandex",
+            "status": "missing"
+          },
+          {
+            "limitations": [],
+            "rows": 0,
+            "source": "metrika",
+            "status": "missing"
+          }
+        ],
+        "summary": "No engine returned rows",
+        "title": "Sources"
+      }
+    ],
+    "warnings": [
+      "no metrics for either period; delta rows are all zero",
+      "no provider rows; traffic and opportunities are empty",
+      "gsc: token missing",
+      "yandex_webmaster: token missing",
+      "yandex_metrika: token missing",
+      "psi: urls missing",
+      "store: not configured; snapshot was not saved"
+    ]
+  },
+  "meta": {
+    "complete": false,
+    "data_age_days": 0,
+    "limitations": [
+      "no source returned usable rows; report is a no-data fallback",
+      "headline delta unavailable: no comparable GSC windows; per-engine numbers are shown without a total"
+    ],
+    "locale": "ru",
+    "period": {
+      "end": "<DATE>",
+      "start": "<DATE>"
+    },
+    "previous_period": {
+      "end": "<DATE>",
+      "start": "<DATE>"
+    },
+    "property_id": "default",
+    "sent": false,
+    "sources": [],
+    "sources_failed": [],
+    "sources_incomplete": [],
+    "sources_missing": [],
+    "truncated": false,
+    "version": "0.5.0"
+  },
+  "ok": true,
+  "warnings": [
+    "gsc: token missing",
+    "yandex_webmaster: token missing",
+    "yandex_metrika: token missing",
+    "psi: urls missing",
+    "store: not configured; snapshot was not saved"
+  ]
+}

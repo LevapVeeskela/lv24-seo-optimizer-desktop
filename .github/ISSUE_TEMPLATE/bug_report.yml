@@ -1,0 +1,113 @@
+name: Bug report
+description: Report a reproducible desktop, packaging or contract problem
+title: "[bug] "
+labels: ["bug", "triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the report. Do not include provider tokens, SMTP passwords, private site URLs,
+        customer queries or full SQLite files. For security issues use the private advisory link in
+        [SECURITY.md](https://github.com/LevapVeeskela/lv24-seo-optimizer-desktop/blob/main/SECURITY.md).
+  - type: textarea
+    id: summary
+    attributes:
+      label: What happened?
+      description: A short description of the actual behavior.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What did you expect?
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Open ...
+        2. Set ...
+        3. See ...
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - Dashboard / stats
+        - Settings / configuration
+        - Reports / diff / crawl
+        - Providers / credentials
+        - Automation / MCP / schedule
+        - Desktop shell / install / update
+        - Contracts / CI / release
+        - Documentation
+        - Other
+    validations:
+      required: true
+  - type: input
+    id: desktop_version
+    attributes:
+      label: Desktop version or commit
+      placeholder: "0.1.0 or commit SHA"
+    validations:
+      required: true
+  - type: input
+    id: engine_version
+    attributes:
+      label: Engine version
+      description: Shown in the app footer or `lv24-seo version --json`.
+      placeholder: "lv24-seo 0.5.0"
+    validations:
+      required: true
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating system
+      options:
+        - Windows 11
+        - Windows 10
+        - macOS (Apple silicon)
+        - macOS (Intel)
+        - Linux (AppImage)
+        - Linux (deb)
+        - Linux (rpm)
+        - Other
+    validations:
+      required: true
+  - type: dropdown
+    id: install
+    attributes:
+      label: Install method
+      options:
+        - Built from source
+        - Unsigned installer from a release
+        - Development mode (npm run tauri dev)
+        - Other
+    validations:
+      required: true
+  - type: checkboxes
+    id: unsigned
+    attributes:
+      label: Signing
+      options:
+        - label: I understand the default builds are unsigned and Gatekeeper/SmartScreen may warn.
+          required: false
+  - type: textarea
+    id: logs
+    attributes:
+      label: Redacted logs or diagnostics
+      description: Remove tokens, passwords, private URLs, queries and personal data first.
+      render: text
+    validations:
+      required: false
+  - type: textarea
+    id: extra
+    attributes:
+      label: Anything else?
+      description: Screenshots, workarounds, related issues.
+    validations:
+      required: false

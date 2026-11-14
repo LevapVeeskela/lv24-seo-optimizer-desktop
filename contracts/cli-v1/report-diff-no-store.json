@@ -1,0 +1,13 @@
+{
+  "error": {
+    "code": "CONFIG_INVALID",
+    "message": "report diff needs stored snapshots, but no store is configured",
+    "next_action": "run `lv24-seo init`, then `lv24-seo report weekly` on two runs",
+    "retryable": false
+  },
+  "meta": {
+    "version": "0.5.0"
+  },
+  "ok": false,
+  "warnings": []
+}

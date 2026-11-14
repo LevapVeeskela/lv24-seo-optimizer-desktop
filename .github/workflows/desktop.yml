@@ -1,0 +1,264 @@
+name: Desktop build
+
+# Manual only. There are no push, pull-request or tag triggers: a release must be
+# started by the owner and approved through the `desktop-release` environment.
+on:
+  workflow_dispatch:
+    inputs:
+      engine_version:
+        description: "Pinned lv24-seo engine version (must match scripts/cli-checksums.json)"
+        required: true
+        default: "0.5.0"
+        type: string
+      signed:
+        description: "Request OS code signing/notarization (requires paid certificates; leave false)"
+        required: true
+        default: false
+        type: boolean
+      publish:
+        description: "Create a GitHub release after every matrix build passes (owner only)"
+        required: true
+        default: false
+        type: boolean
+      tag:
+        description: "Release tag vX.Y.Z (required when publish=true)"
+        required: false
+        default: ""
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: desktop-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: windows-x64
+            artifact: windows-x64
+            os: windows-latest
+            target: x86_64-pc-windows-msvc
+            bundles: nsis
+          - name: linux-x64
+            artifact: linux-x64
+            os: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+            bundles: appimage,deb,rpm
+          - name: macos-arm64
+            artifact: macos-arm64
+            os: macos-latest
+            target: aarch64-apple-darwin
+            bundles: dmg
+          - name: macos-x64
+            artifact: macos-x64
+            os: macos-15-intel
+            target: x86_64-apple-darwin
+            bundles: dmg
+    env:
+      CARGO_TERM_COLOR: always
+      RUST_BACKTRACE: "1"
+      PYTHONUTF8: "1"
+      PYTHONIOENCODING: utf-8
+      TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+      TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
+      - name: Install web dependencies
+        run: npm ci
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: false
+
+      - name: Install pinned Python
+        run: uv python install 3.12
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Install Linux Tauri dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential curl wget file libssl-dev libxdo-dev \
+            libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev \
+            libfuse2 rpm
+
+      - name: Warn about Windows signing
+        if: inputs.signed && runner.os == 'Windows'
+        run: echo "::warning::Windows Authenticode is not configured in this zero-spend repository; the artifact remains unsigned."
+
+      - name: Require macOS signing credentials
+        if: inputs.signed && runner.os == 'macOS'
+        shell: bash
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+        run: |
+          if [ -z "$APPLE_CERTIFICATE" ]; then
+            echo "::error::signed=true but APPLE_CERTIFICATE is not configured; refusing to claim a signed build"
+            exit 1
+          fi
+
+      - name: Build onedir sidecar
+        run: >
+          uv run --python 3.12 python scripts/build-sidecar.py
+          --engine-version "${{ inputs.engine_version }}"
+          --target "${{ matrix.target }}"
+          --out src-tauri/engine
+
+      - name: Verify sidecar version and checksum
+        run: >
+          node scripts/verify-sidecar.mjs
+          --root src-tauri/engine
+          --target "${{ matrix.target }}"
+          --engine-version "${{ inputs.engine_version }}"
+          --report "${{ runner.temp }}/sidecar-checksums-${{ matrix.target }}.json"
+
+      - name: Write CI Tauri config
+        env:
+          TAURI_CI_CONFIG: ${{ runner.temp }}/tauri.ci.json
+          UNSIGNED_MAC: ${{ runner.os == 'macOS' && inputs.signed == false }}
+        run: |
+          node -e "const fs=require('fs'); const p=process.env.TAURI_CI_CONFIG; const cfg={bundle:{resources:{'engine/lv24-seo/':'lv24-seo/'}}}; if (process.env.UNSIGNED_MAC === 'true') { cfg.bundle.macOS={signingIdentity:'-'}; } if (!process.env.TAURI_SIGNING_PRIVATE_KEY) { cfg.bundle.createUpdaterArtifacts=false; } fs.writeFileSync(p, JSON.stringify(cfg));"
+
+      - name: Build Tauri installers
+        env:
+          APPLE_CERTIFICATE: ${{ inputs.signed && secrets.APPLE_CERTIFICATE || '' }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ inputs.signed && secrets.APPLE_CERTIFICATE_PASSWORD || '' }}
+          APPLE_SIGNING_IDENTITY: ${{ inputs.signed && secrets.APPLE_SIGNING_IDENTITY || '' }}
+          APPLE_ID: ${{ inputs.signed && secrets.APPLE_ID || '' }}
+          APPLE_PASSWORD: ${{ inputs.signed && secrets.APPLE_PASSWORD || '' }}
+          APPLE_TEAM_ID: ${{ inputs.signed && secrets.APPLE_TEAM_ID || '' }}
+        run: >
+          npm run tauri build --
+          --target "${{ matrix.target }}"
+          --bundles "${{ matrix.bundles }}"
+          --config "${{ runner.temp }}/tauri.ci.json"
+
+      - name: Upload installers and checksums
+        uses: actions/upload-artifact@v4
+        with:
+          name: desktop-${{ matrix.artifact }}
+          if-no-files-found: error
+          retention-days: 7
+          path: |
+            src-tauri/target/${{ matrix.target }}/release/bundle/nsis/*.exe
+            src-tauri/target/${{ matrix.target }}/release/bundle/dmg/*.dmg
+            src-tauri/target/${{ matrix.target }}/release/bundle/appimage/*.AppImage
+            src-tauri/target/${{ matrix.target }}/release/bundle/deb/*.deb
+            src-tauri/target/${{ matrix.target }}/release/bundle/rpm/*.rpm
+            src-tauri/target/${{ matrix.target }}/release/bundle/**/*.sig
+            src-tauri/target/${{ matrix.target }}/release/bundle/latest.json
+            src-tauri/target/${{ matrix.target }}/release/bundle/**/latest.json
+            src-tauri/engine/build-info.json
+            ${{ runner.temp }}/sidecar-checksums-${{ matrix.target }}.json
+
+  release:
+    name: Owner-gated release
+    needs: build
+    if: inputs.publish && github.actor == github.repository_owner
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: desktop-release
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Download all installers
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Validate tag
+        shell: bash
+        run: |
+          set -euo pipefail
+          TAG="${{ inputs.tag }}"
+          if [[ ! "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([.-][0-9A-Za-z.-]+)?$ ]]; then
+            echo "::error::tag must look like vX.Y.Z; got '$TAG'"
+            exit 1
+          fi
+          echo "TAG=$TAG" >> "$GITHUB_ENV"
+
+      - name: Require pinned sidecar checksums
+        shell: bash
+        run: |
+          node - <<'NODE'
+          const fs = require("fs");
+          const pin = JSON.parse(fs.readFileSync("scripts/cli-checksums.json", "utf8"));
+          const targets = Object.entries(pin.targets || {});
+          const missing = targets.filter(([, entry]) => !/^[a-f0-9]{64}$/.test(String(entry.sha256 || "")));
+          if (targets.length === 0 || missing.length > 0) {
+            console.error(
+              "Refusing to publish: pin a 64-hex SHA-256 for every target in scripts/cli-checksums.json. " +
+                "Unpinned: " + missing.map(([name]) => name).join(", "),
+            );
+            process.exit(1);
+          }
+          console.log(`pinned targets: ${targets.map(([name]) => name).join(", ")}`);
+          NODE
+
+      - name: Generate checksums
+        shell: bash
+        run: |
+          set -euo pipefail
+          find dist -type f ! -name SHA256SUMS.txt -print0 \
+            | sort -z \
+            | xargs -0 -r sha256sum > dist/SHA256SUMS.txt
+          cat dist/SHA256SUMS.txt
+
+      - name: Write release notes
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat > release-notes.md <<EOF
+          ## LV24 SEO Optimizer Desktop ${TAG}
+
+          Engine: lv24-seo ${{ inputs.engine_version }} (bundled PyInstaller onedir sidecar)
+          Platforms: Windows x64 (NSIS), Linux x64 (AppImage, deb, rpm), macOS arm64/x64 (DMG)
+
+          Signing requested: ${{ inputs.signed }}
+          Default policy: macOS ad-hoc signature only; Windows unsigned; Linux packages unsigned.
+          Gatekeeper, SmartScreen and Smart App Control may warn. Verify SHA256SUMS.txt before installing.
+          See the README for the documented first-launch flow. No paid signing or notarization is used.
+
+          Auto-update: available only if updater artifacts are present (Linux AppImage only). deb/rpm
+          and unsigned manual installs are upgraded manually.
+
+          Workflow run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          EOF
+          cat release-notes.md
+
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh release create "$TAG" \
+            --target "$GITHUB_SHA" \
+            --title "LV24 SEO Optimizer Desktop $TAG" \
+            --notes-file release-notes.md
+          find dist -type f -print0 | sort -z | xargs -0 -r gh release upload "$TAG" --clobber

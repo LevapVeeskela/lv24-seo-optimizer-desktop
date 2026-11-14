@@ -1,0 +1,73 @@
+{
+  "data": {
+    "project": {
+      "base_url": "",
+      "default_property": "",
+      "name": ""
+    },
+    "providers": [
+      {
+        "configured": false,
+        "provider": "gsc",
+        "ready": false,
+        "requires_token": true,
+        "target": "",
+        "token": "missing",
+        "token_present": false
+      },
+      {
+        "configured": false,
+        "provider": "yandex_webmaster",
+        "ready": false,
+        "requires_token": true,
+        "target": "",
+        "token": "missing",
+        "token_present": false
+      },
+      {
+        "configured": false,
+        "provider": "yandex_metrika",
+        "ready": false,
+        "requires_token": true,
+        "target": "",
+        "token": "missing",
+        "token_present": false
+      },
+      {
+        "configured": false,
+        "provider": "bing",
+        "ready": false,
+        "requires_token": true,
+        "target": "",
+        "token": "missing",
+        "token_present": false
+      },
+      {
+        "configured": false,
+        "provider": "crux",
+        "ready": false,
+        "requires_token": true,
+        "target": "",
+        "token": "missing",
+        "token_present": false
+      },
+      {
+        "configured": false,
+        "provider": "psi",
+        "ready": false,
+        "requires_token": false,
+        "target": "",
+        "token": "missing",
+        "token_present": false
+      }
+    ]
+  },
+  "meta": {
+    "configured": [],
+    "ready": [],
+    "tokens_present": [],
+    "version": "0.5.0"
+  },
+  "ok": true,
+  "warnings": []
+}

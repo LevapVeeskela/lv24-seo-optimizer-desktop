@@ -1,0 +1,61 @@
+{
+  "data": {
+    "config": {
+      "crawl": {
+        "concurrency": 4,
+        "max_urls": 500,
+        "respect_robots": true,
+        "user_agent": "lv24-seo/0.1"
+      },
+      "project": {
+        "base_url": "",
+        "default_property": "",
+        "name": ""
+      },
+      "providers": {
+        "bing": null,
+        "crux": null,
+        "gsc": null,
+        "psi": null,
+        "yandex_metrika": null,
+        "yandex_webmaster": null
+      },
+      "report": {
+        "email": {
+          "enabled": false,
+          "from": "",
+          "only_on_change": true,
+          "smtp_host": "",
+          "smtp_port": 587,
+          "smtp_user": "",
+          "to": []
+        },
+        "locale": "ru",
+        "telegram": {
+          "chat_id": "",
+          "enabled": false,
+          "severity": "critical"
+        },
+        "thresholds": {
+          "clicks_pct": 10.0,
+          "impressions_pct": 15.0,
+          "position_abs": 1.5
+        },
+        "timezone": "Europe/Minsk",
+        "week_start": "monday"
+      },
+      "storage": {
+        "data_dir": "<DATA_DIR>",
+        "raw_retention_days": 90
+      }
+    },
+    "data_dir": "<DATA_DIR>",
+    "path": null
+  },
+  "meta": {
+    "redacted": true,
+    "version": "0.5.0"
+  },
+  "ok": true,
+  "warnings": []
+}

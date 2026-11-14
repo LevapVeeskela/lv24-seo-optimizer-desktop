@@ -1,0 +1,59 @@
+name: Feature request
+description: Propose a desktop, workflow or documentation improvement
+title: "[feat] "
+labels: ["enhancement", "triage"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What is hard or missing today? Who is affected?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed change
+      description: Describe the behavior, not only the implementation.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+    validations:
+      required: false
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - Dashboard / stats
+        - Settings / configuration
+        - Reports / diff / crawl
+        - Providers / credentials
+        - Automation / MCP / schedule
+        - Desktop shell / install / update
+        - Contracts / CI / release
+        - Documentation
+        - Other
+    validations:
+      required: true
+  - type: checkboxes
+    id: constraints
+    attributes:
+      label: Project constraints
+      options:
+        - label: This can work on free tiers and does not require a paid provider, paid CI runner or paid signing service.
+          required: true
+        - label: This does not require scraping Google/Yandex result pages.
+          required: true
+        - label: This preserves read-only defaults and explicit confirmation for write actions.
+          required: true
+  - type: textarea
+    id: data
+    attributes:
+      label: Data and limitations
+      description: If this shows provider data, say what the provider can and cannot return.
+    validations:
+      required: false

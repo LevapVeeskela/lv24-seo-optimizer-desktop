@@ -1,0 +1,34 @@
+import { EngineStore } from "@/entities/engine/model/EngineStore";
+import { ReportsStore } from "@/entities/report/model/ReportsStore";
+import { StatsStore } from "@/entities/stats/model/StatsStore";
+import { makeAutoObservable } from "mobx";
+
+/**
+ * One store graph for the window. Bootstrap is idempotent and reads only:
+ * `shell_status` plus the read-only `stats` command.
+ */
+export class RootStore {
+  engine = new EngineStore();
+  stats = new StatsStore();
+  reports = new ReportsStore();
+  private bootstrapped = false;
+
+  constructor() {
+    makeAutoObservable<RootStore, "bootstrapped">(
+      this,
+      { bootstrapped: false, engine: false, stats: false, reports: false },
+      { autoBind: true },
+    );
+  }
+
+  async bootstrap(): Promise<void> {
+    if (this.bootstrapped) {
+      return;
+    }
+    this.bootstrapped = true;
+    await this.engine.load();
+    if (!this.engine.offline) {
+      await this.stats.refresh();
+    }
+  }
+}
