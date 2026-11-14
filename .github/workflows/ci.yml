@@ -108,6 +108,13 @@ jobs:
           targets: ${{ matrix.target }}
           components: rustfmt, clippy
 
+      - name: Create placeholder engine resource
+        # The committed tauri.conf.json maps engine/lv24-seo/ into the bundle.
+        # The Rust checks do not build the PyInstaller sidecar, so the resource
+        # path must exist for Tauri's build script. Release builds replace it.
+        shell: bash
+        run: mkdir -p src-tauri/engine/lv24-seo && touch src-tauri/engine/lv24-seo/.placeholder
+
       - name: Format
         working-directory: src-tauri
         run: cargo fmt --check
