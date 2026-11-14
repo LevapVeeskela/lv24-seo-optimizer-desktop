@@ -8,6 +8,7 @@ import {
   normalizeBundleKind,
 } from "../lib/bundle";
 import { classifyUpdateError } from "../lib/errors";
+import { prepareForUpdate } from "../lib/shell";
 import type { AvailableUpdate, UpdateState } from "./types";
 
 /** The updater check must not hang the startup probe indefinitely. */
@@ -219,6 +220,9 @@ export class UpdateStore {
    * Downloads, verifies and installs the pending release, then relaunches.
    * On Windows the installer exits the app before `relaunch` is reached.
    * Calling it again in the `ready` state only retries the restart.
+   *
+   * Engine sidecars are stopped first: a live sidecar keeps the installed
+   * `engine/lv24-seo/lv24-seo.exe` locked and the installer cannot replace it.
    */
   async install(): Promise<boolean> {
     if (!this.canAutoUpdate || this.securityBlocked) {
@@ -235,6 +239,12 @@ export class UpdateStore {
     this.state = "downloading";
     this.progress = 0;
     this.error = null;
+    if (!(await this.stopEngineSidecars(generation))) {
+      return false;
+    }
+    if (generation !== this.generation) {
+      return false;
+    }
     let total: number | null = null;
     let downloaded = 0;
     try {
@@ -294,6 +304,26 @@ export class UpdateStore {
       this.state = "idle";
     }
     void closeUpdate(update);
+  }
+
+  /**
+   * Stops engine sidecars before the installer replaces files. Failure blocks
+   * the install: replacing a locked sidecar is exactly what left the installed
+   * engine missing.
+   */
+  private async stopEngineSidecars(generation: number): Promise<boolean> {
+    try {
+      await prepareForUpdate();
+      return true;
+    } catch (error) {
+      if (generation !== this.generation) {
+        return false;
+      }
+      this.progress = null;
+      this.error = engineBusyError(error);
+      this.state = "error";
+      return false;
+    }
   }
 
   private disableAutoUpdate(): void {
@@ -356,6 +386,12 @@ export class UpdateStore {
 function securityError(error: unknown): AppError {
   const appError = toAppError(error, "UPDATE_SECURITY");
   return { ...appError, code: "UPDATE_SECURITY", retryable: false };
+}
+
+/** A sidecar that could not be stopped blocks the install but can be retried. */
+function engineBusyError(error: unknown): AppError {
+  const appError = toAppError(error, "UPDATE_ENGINE_BUSY");
+  return { ...appError, code: "UPDATE_ENGINE_BUSY", retryable: true };
 }
 
 async function closeUpdate(update: Update | null): Promise<void> {

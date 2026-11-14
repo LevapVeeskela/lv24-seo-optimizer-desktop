@@ -2,7 +2,7 @@ import { useEffect } from "react";
 import { observer } from "mobx-react-lite";
 import { useRootStore } from "@/app/providers/StoreProvider";
 import { useI18n, type MessageKey } from "@/shared/i18n";
-import { toAppError } from "@/shared/lib/errors";
+import { appErrorText, toAppError } from "@/shared/lib/errors";
 import { formatDateTime } from "@/shared/lib/format";
 import { Badge } from "@/shared/ui/Badge";
 import { Button } from "@/shared/ui/Button";
@@ -96,6 +96,10 @@ export const ConfigPage = observer(function ConfigPage() {
         return;
       }
       await engine.load();
+      if (engine.status?.configPath !== selected) {
+        notify(t("settings.chooseConfigFailed"), "error");
+        return;
+      }
       notify(t("settings.configSelected"), "success");
     } catch (error) {
       notify(toAppError(error, "PICK_CONFIG").message, "error");
@@ -104,6 +108,9 @@ export const ConfigPage = observer(function ConfigPage() {
 
   const validate = async () => {
     const ok = await config.validate();
+    if (config.path !== configPath) {
+      return;
+    }
     notify(
       ok ? t("settings.validation.valid") : t("settings.validation.invalid"),
       ok ? "success" : "error",
@@ -663,7 +670,7 @@ export const ConfigPage = observer(function ConfigPage() {
           }
         >
           <strong>{t("settings.loadError")}</strong>
-          <span>{config.loadError.message}</span>
+          <span>{appErrorText(config.loadError)}</span>
         </Notice>
       ) : null}
 

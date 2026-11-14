@@ -69,6 +69,26 @@ describe("copyText", () => {
     expect(area.remove).toHaveBeenCalledTimes(1);
   });
 
+  it("returns focus to the copy control after the textarea fallback", async () => {
+    class FakeElement {
+      isConnected = true;
+      focus = vi.fn();
+    }
+    const previous = new FakeElement();
+    const area = textareaStub();
+    vi.stubGlobal("HTMLElement", FakeElement);
+    vi.stubGlobal("navigator", {});
+    vi.stubGlobal("document", {
+      activeElement: previous,
+      createElement: vi.fn(() => area),
+      body: { appendChild: vi.fn() },
+      execCommand: vi.fn(() => true),
+    });
+
+    await expect(copyText("hello")).resolves.toBe(true);
+    expect(previous.focus).toHaveBeenCalledTimes(1);
+  });
+
   it("removes the textarea when execCommand throws", async () => {
     const area = textareaStub();
     vi.stubGlobal("navigator", {});

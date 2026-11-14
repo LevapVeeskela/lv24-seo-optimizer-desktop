@@ -1,5 +1,7 @@
+use std::collections::BTreeSet;
 use std::path::Path;
 use std::process::Stdio;
+use std::sync::{LazyLock, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
@@ -16,6 +18,11 @@ const MAX_STDERR: usize = 128 * 1024;
 
 const DEFAULT_DAYS: u32 = 7;
 const DEFAULT_LAG_DAYS: u32 = 2;
+
+/// How long `stop_tracked_children` waits for killed sidecars to disappear
+/// before the update is refused.
+pub const ENGINE_STOP_WAIT: Duration = Duration::from_millis(2_000);
+const ENGINE_STOP_POLL: Duration = Duration::from_millis(25);
 
 /// Every command the webview may run. There is no generic executable input.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -541,6 +548,248 @@ fn is_inherited_env(key: &str) -> bool {
     ALLOWED.contains(&upper.as_str()) || upper.starts_with("LV24_SEO_")
 }
 
+/// Exact PIDs of engine sidecars spawned by this process and not reaped yet.
+///
+/// Only this registry may be killed before an update: matching by image name
+/// (`taskkill /IM lv24*`, `pkill -f lv24`) would also hit another installed
+/// copy, a portable build, or an unrelated process on the same machine.
+#[derive(Default)]
+struct ChildRegistry {
+    pids: Mutex<BTreeSet<u32>>,
+}
+
+impl ChildRegistry {
+    /// Track `pid` until the returned guard is dropped.
+    fn track(&self, pid: u32) -> TrackedChild<'_> {
+        self.lock().insert(pid);
+        TrackedChild {
+            registry: self,
+            pid,
+        }
+    }
+
+    fn tracked(&self) -> Vec<u32> {
+        self.lock().iter().copied().collect()
+    }
+
+    fn untrack(&self, pid: u32) {
+        self.lock().remove(&pid);
+    }
+
+    fn forget(&self, pids: &[u32]) {
+        let mut tracked = self.lock();
+        for pid in pids {
+            tracked.remove(pid);
+        }
+    }
+
+    fn lock(&self) -> MutexGuard<'_, BTreeSet<u32>> {
+        // The lock only guards a set insert/remove, so poisoning carries no
+        // partial state; recover instead of panicking the whole app.
+        self.pids
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+}
+
+static ENGINE_CHILDREN: LazyLock<ChildRegistry> = LazyLock::new(ChildRegistry::default);
+
+/// Unregisters an engine PID when its run ends: normal completion, timeout,
+/// stdin error, panic, or an explicit kill before an update.
+struct TrackedChild<'a> {
+    registry: &'a ChildRegistry,
+    pid: u32,
+}
+
+impl Drop for TrackedChild<'_> {
+    fn drop(&mut self) {
+        self.registry.untrack(self.pid);
+    }
+}
+
+fn track_engine_child(pid: u32) -> TrackedChild<'static> {
+    ENGINE_CHILDREN.track(pid)
+}
+
+/// Exact PIDs of engine sidecars this app instance still tracks.
+pub fn tracked_engine_pids() -> Vec<u32> {
+    ENGINE_CHILDREN.tracked()
+}
+
+/// Kill every engine sidecar this app instance still tracks, wait until those
+/// PIDs are gone, and report how many processes were terminated.
+///
+/// Called before the updater replaces files: a live sidecar keeps
+/// `engine/lv24-seo/lv24-seo.exe` locked and the NSIS installer cannot replace
+/// it. Only exact tracked PIDs are signalled; nothing is matched by name.
+pub async fn stop_tracked_children(wait: Duration) -> AppResult<u32> {
+    stop_children(&ENGINE_CHILDREN, wait).await
+}
+
+async fn stop_children(registry: &ChildRegistry, wait: Duration) -> AppResult<u32> {
+    let pids = registry.tracked();
+    if pids.is_empty() {
+        return Ok(0);
+    }
+
+    let mut killed = 0u32;
+    let mut failed = Vec::new();
+    for pid in &pids {
+        match terminate(*pid).await {
+            Ok(true) => killed += 1,
+            // The sidecar exited on its own between the snapshot and the kill.
+            Ok(false) => {}
+            Err(err) => {
+                log::warn!("cannot stop engine sidecar {pid}: {err}");
+                failed.push(*pid);
+            }
+        }
+    }
+    if !failed.is_empty() {
+        return Err(AppError::new(
+            "ENGINE_STOP_FAILED",
+            format!(
+                "cannot stop engine sidecar process {}; the installer must not replace a locked engine",
+                join_pids(&failed)
+            ),
+        )
+        .with_details(serde_json::json!({ "pids": failed })));
+    }
+
+    let deadline = Instant::now() + wait;
+    loop {
+        let mut alive = Vec::new();
+        for pid in &pids {
+            if process_alive(*pid).await {
+                alive.push(*pid);
+            }
+        }
+        if alive.is_empty() {
+            break;
+        }
+        if Instant::now() >= deadline {
+            return Err(AppError::new(
+                "ENGINE_STOP_FAILED",
+                format!(
+                    "engine sidecar {} is still running; close it before installing",
+                    join_pids(&alive)
+                ),
+            )
+            .with_details(serde_json::json!({
+                "pids": alive,
+                "waitedMs": wait.as_millis() as u64,
+            })));
+        }
+        tokio::time::sleep(ENGINE_STOP_POLL).await;
+    }
+
+    // The guards of finished runs may already have removed their PIDs; this
+    // only clears entries whose child was killed here.
+    registry.forget(&pids);
+    if killed > 0 {
+        log::info!("stopped {killed} engine sidecar process(es) before the update");
+    }
+    Ok(killed)
+}
+
+fn join_pids(pids: &[u32]) -> String {
+    pids.iter()
+        .map(u32::to_string)
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+/// `Ok(true)` when the process was signalled, `Ok(false)` when it was already
+/// gone.
+///
+/// Windows kills the exact PID's tree because the PyInstaller bootloader can
+/// start a helper; Unix signals the exact PID only. Both use the numeric PID,
+/// never an image name.
+#[cfg(windows)]
+async fn terminate(pid: u32) -> std::io::Result<bool> {
+    let status = Command::new("taskkill")
+        .args(["/PID", &pid.to_string(), "/T", "/F"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .await?;
+    Ok(status.success())
+}
+
+#[cfg(unix)]
+async fn terminate(pid: u32) -> std::io::Result<bool> {
+    let status = Command::new("kill")
+        .args(["-9", &pid.to_string()])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .await?;
+    Ok(status.success())
+}
+
+#[cfg(windows)]
+async fn process_alive(pid: u32) -> bool {
+    let output = Command::new("tasklist")
+        .args(["/FI", &format!("PID eq {pid}"), "/FO", "CSV", "/NH"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .output()
+        .await;
+    let Ok(output) = output else {
+        // Without a reliable answer, fail closed: report a still-running
+        // sidecar instead of installing over a locked file.
+        return true;
+    };
+    let needle = pid.to_string();
+    String::from_utf8_lossy(&output.stdout).lines().any(|line| {
+        let mut fields = line.split("\",\"");
+        fields.next(); // image name
+        fields
+            .next()
+            .map(|field| field.trim_matches('"').trim() == needle)
+            .unwrap_or(false)
+    })
+}
+
+#[cfg(unix)]
+async fn process_alive(pid: u32) -> bool {
+    let output = Command::new("ps")
+        .args(["-o", "stat=", "-p", &pid.to_string()])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .output()
+        .await;
+    let Ok(output) = output else {
+        return true;
+    };
+    if !output.status.success() {
+        return false; // ps found no such process
+    }
+    let stat = String::from_utf8_lossy(&output.stdout);
+    let stat = stat.trim();
+    // A zombie is already dead; its parent (this app) still has to reap it.
+    !stat.is_empty() && !stat.starts_with('Z')
+}
+
+/// Tauri ships Windows, Linux and macOS only; refuse instead of pretending on
+/// any other target.
+#[cfg(all(not(windows), not(unix)))]
+async fn terminate(_pid: u32) -> std::io::Result<bool> {
+    Err(std::io::Error::new(
+        std::io::ErrorKind::Unsupported,
+        "stopping engine sidecars is not implemented on this platform",
+    ))
+}
+
+#[cfg(all(not(windows), not(unix)))]
+async fn process_alive(_pid: u32) -> bool {
+    false
+}
+
 pub async fn run(
     location: &EngineLocation,
     config_path: Option<&Path>,
@@ -574,6 +823,9 @@ pub async fn run_with_stdin(
             ),
         )
     })?;
+    // The guard lives until `supervise` returns, so the PID is untracked on
+    // every path (success, timeout, stdin error, panic).
+    let _tracked = child.id().map(track_engine_child);
     supervise(child, command, stdin_data, command.timeout(), started).await
 }
 
@@ -1260,6 +1512,78 @@ mod tests {
             command.arg("30");
             command
         }
+    }
+
+    /// A synthetic sidecar: it lives long enough to be killed on purpose.
+    fn synthetic_child() -> tokio::process::Child {
+        let mut command = hanging_command();
+        command
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .kill_on_drop(true);
+        command.spawn().unwrap()
+    }
+
+    #[tokio::test]
+    async fn the_registry_tracks_and_forgets_engine_pids() {
+        let registry = ChildRegistry::default();
+        let first = registry.track(4242);
+        let second = registry.track(4243);
+        assert_eq!(registry.tracked(), vec![4242, 4243]);
+        drop(first);
+        assert_eq!(registry.tracked(), vec![4243]);
+        drop(second);
+        assert!(registry.tracked().is_empty());
+
+        // The same guard protects the process-wide registry used by real runs.
+        let mut child = synthetic_child();
+        let pid = child.id().unwrap();
+        {
+            let tracked = track_engine_child(pid);
+            assert_eq!(tracked.pid, pid);
+            assert!(tracked_engine_pids().contains(&pid));
+        }
+        assert!(!tracked_engine_pids().contains(&pid));
+        let _ = child.start_kill();
+        let _ = child.wait().await;
+    }
+
+    #[tokio::test]
+    async fn stopping_tracked_children_kills_only_the_tracked_pid() {
+        let registry = ChildRegistry::default();
+        let mut tracked = synthetic_child();
+        let mut unrelated = synthetic_child();
+        let tracked_pid = tracked.id().unwrap();
+        let unrelated_pid = unrelated.id().unwrap();
+        let guard = registry.track(tracked_pid);
+
+        let killed = stop_children(&registry, Duration::from_secs(5))
+            .await
+            .unwrap();
+
+        assert_eq!(killed, 1);
+        assert!(registry.tracked().is_empty());
+        assert!(!process_alive(tracked_pid).await);
+        // An unrelated process with a similar role is never touched.
+        assert!(process_alive(unrelated_pid).await);
+        assert_eq!(unrelated.id(), Some(unrelated_pid));
+
+        let _ = tracked.wait().await;
+        drop(guard);
+        let _ = unrelated.start_kill();
+        let _ = unrelated.wait().await;
+    }
+
+    #[tokio::test]
+    async fn an_empty_registry_stops_nothing() {
+        let registry = ChildRegistry::default();
+        assert_eq!(
+            stop_children(&registry, Duration::from_secs(1))
+                .await
+                .unwrap(),
+            0
+        );
     }
 
     #[tokio::test]

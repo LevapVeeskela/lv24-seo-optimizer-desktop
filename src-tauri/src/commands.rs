@@ -132,6 +132,23 @@ pub struct SettingsResponse {
     pub path: String,
 }
 
+/// Stop every engine sidecar this app instance spawned before the updater
+/// replaces files. A live sidecar keeps `engine/lv24-seo/lv24-seo.exe` locked,
+/// which is what broke the 0.2.1 install. Only exact tracked PIDs are killed;
+/// nothing is matched by image name, so another installed copy, a portable
+/// build, or an unrelated process is untouched. Returns the number killed.
+#[tauri::command]
+pub async fn prepare_update() -> Result<u32, AppError> {
+    let tracked = cli::tracked_engine_pids();
+    if tracked.is_empty() {
+        return Ok(0);
+    }
+    log::info!("prepare_update: stopping tracked engine sidecar(s) {tracked:?}");
+    let killed = cli::stop_tracked_children(cli::ENGINE_STOP_WAIT).await?;
+    log::info!("prepare_update: stopped {killed} engine sidecar process(es)");
+    Ok(killed)
+}
+
 /// Startup handshake. It never fails because the engine is missing: the
 /// missing/broken engine is returned as status data.
 #[tauri::command]

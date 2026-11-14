@@ -1,8 +1,9 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { observer } from "mobx-react-lite";
+import { Link } from "react-router-dom";
 import { useRootStore } from "@/app/providers/StoreProvider";
 import { useI18n } from "@/shared/i18n";
-import { toAppError, type AppError } from "@/shared/lib/errors";
+import { appErrorText, toAppError, type AppError } from "@/shared/lib/errors";
 import { formatDateTime } from "@/shared/lib/format";
 import { Badge } from "@/shared/ui/Badge";
 import { Button } from "@/shared/ui/Button";
@@ -22,11 +23,13 @@ import {
 
 export const ReportsPage = observer(function ReportsPage() {
   const { t, locale } = useI18n();
-  const { reports } = useRootStore();
+  const { engine, reports } = useRootStore();
   const { notify } = useFeedback();
   const [opening, setOpening] = useState(false);
   const [openError, setOpenError] = useState<AppError | null>(null);
   const [confirmOpen, setConfirmOpen] = useState(false);
+  const configPath = engine.status?.configPath ?? null;
+  const blocked = engine.offline || engine.loading || !configPath;
 
   const report = reports.report;
   const meta = reports.meta;
@@ -37,12 +40,29 @@ export const ReportsPage = observer(function ReportsPage() {
     ...new Set([...(report?.warnings ?? []), ...reports.warnings]),
   ].filter((item) => typeof item === "string" && item.trim());
 
+  useEffect(() => {
+    // A report from another workspace must not keep an open error from the
+    // previous HTML path.
+    setOpenError(null);
+  }, [htmlPath]);
+
   const buildWeekly = async () => {
+    if (blocked) {
+      return;
+    }
     const ok = await reports.buildWeekly();
     notify(
-      ok ? t("reports.built") : reports.error?.message ?? t("reports.buildFailed"),
+      ok
+        ? t("reports.built")
+        : reports.error
+          ? appErrorText(reports.error)
+          : t("reports.buildFailed"),
       ok ? "success" : "error",
     );
+  };
+
+  const reconnect = async () => {
+    await engine.load();
   };
 
   const openHtml = async () => {
@@ -79,6 +99,7 @@ export const ReportsPage = observer(function ReportsPage() {
             variant="primary"
             loading={reports.loading}
             onClick={requestBuild}
+            disabled={blocked}
           >
             {reports.loading ? t("actions.building") : t("actions.buildWeekly")}
           </Button>
@@ -93,7 +114,35 @@ export const ReportsPage = observer(function ReportsPage() {
         </div>
       </header>
 
-      {!htmlPath ? (
+      {engine.offline ? (
+        <Notice
+          variant="info"
+          action={
+            <Button variant="secondary" onClick={() => void reconnect()}>
+              {t("common.retry")}
+            </Button>
+          }
+        >
+          <strong>{t("reports.offlineTitle")}</strong>
+          <span>{t("reports.offlineHint")}</span>
+        </Notice>
+      ) : null}
+
+      {!configPath && !engine.loading && !engine.offline ? (
+        <Notice
+          variant="info"
+          action={
+            <Link className="btn btn-secondary" to="/settings">
+              {t("reports.openSettings")}
+            </Link>
+          }
+        >
+          <strong>{t("reports.noWorkspaceTitle")}</strong>
+          <span>{t("reports.noWorkspaceHint")}</span>
+        </Notice>
+      ) : null}
+
+      {report && !htmlPath ? (
         <Notice variant="info">
           <span>{t("reports.openHtmlUnavailable")}</span>
         </Notice>
@@ -102,7 +151,7 @@ export const ReportsPage = observer(function ReportsPage() {
       {openError ? (
         <Notice variant="error">
           <strong>{t("reports.openHtmlError")}</strong>
-          <span>{openError.message}</span>
+          <span>{appErrorText(openError)}</span>
         </Notice>
       ) : null}
 
@@ -110,22 +159,23 @@ export const ReportsPage = observer(function ReportsPage() {
         <Notice
           variant="error"
           action={
-            <Button variant="secondary" onClick={requestBuild}>
+            <Button
+              variant="secondary"
+              onClick={requestBuild}
+              disabled={blocked}
+            >
               {t("common.retry")}
             </Button>
           }
         >
           <strong>{t("reports.error")}</strong>
-          <span>
-            {reports.error.message}
-            {reports.error.nextAction ? ` ${reports.error.nextAction}` : ""}
-          </span>
+          <span>{appErrorText(reports.error)}</span>
         </Notice>
       ) : null}
 
       {reports.loading && !report ? <Loading label={t("reports.loading")} /> : null}
 
-      {!report && !reports.loading ? (
+      {!report && !reports.loading && !blocked ? (
         <Card>
           <EmptyState
             title={t("reports.emptyTitle")}

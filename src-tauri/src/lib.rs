@@ -34,6 +34,7 @@ pub fn run() {
             commands::settings_get,
             commands::settings_set,
             commands::open_path,
+            commands::prepare_update,
         ])
         .run(tauri::generate_context!())
         .expect("error while running LV24 SEO Optimizer");

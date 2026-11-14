@@ -3,6 +3,7 @@ import { observer } from "mobx-react-lite";
 import { Link, useNavigate } from "react-router-dom";
 import { useRootStore } from "@/app/providers/StoreProvider";
 import { useI18n } from "@/shared/i18n";
+import { appErrorText } from "@/shared/lib/errors";
 import { formatDateTime } from "@/shared/lib/format";
 import { Button } from "@/shared/ui/Button";
 import { Card } from "@/shared/ui/Card";
@@ -22,6 +23,7 @@ export const DashboardPage = observer(function DashboardPage() {
   const { notify } = useFeedback();
   const [confirmOpen, setConfirmOpen] = useState(false);
   const configPath = engine.status?.configPath ?? null;
+  const blocked = engine.offline || engine.loading || !configPath;
 
   useEffect(() => {
     // Without a workspace configuration `stats` is a guaranteed failure.
@@ -39,16 +41,26 @@ export const DashboardPage = observer(function DashboardPage() {
   };
 
   const buildWeekly = async () => {
+    if (blocked) {
+      return;
+    }
     const ok = await reports.buildWeekly();
     if (ok) {
       notify(t("reports.built"));
       navigate("/reports");
       return;
     }
-    notify(reports.error?.message ?? t("reports.buildFailed"), "error");
+    notify(
+      reports.error ? appErrorText(reports.error) : t("reports.buildFailed"),
+      "error",
+    );
   };
 
-  const requestBuild = () => setConfirmOpen(true);
+  const requestBuild = () => {
+    if (!blocked) {
+      setConfirmOpen(true);
+    }
+  };
 
   const data = stats.data;
   const services = data?.services ?? [];
@@ -71,7 +83,7 @@ export const DashboardPage = observer(function DashboardPage() {
             variant="secondary"
             loading={stats.loading}
             onClick={() => void stats.refresh()}
-            disabled={engine.offline || !configPath}
+            disabled={blocked}
           >
             {stats.loading
               ? t("actions.refreshing")
@@ -81,7 +93,7 @@ export const DashboardPage = observer(function DashboardPage() {
             variant="primary"
             loading={reports.loading}
             onClick={requestBuild}
-            disabled={engine.offline || !configPath}
+            disabled={blocked}
           >
             {reports.loading
               ? t("actions.building")
@@ -111,16 +123,17 @@ export const DashboardPage = observer(function DashboardPage() {
         <Notice
           variant="error"
           action={
-            <Button variant="secondary" onClick={() => void stats.refresh()}>
+            <Button
+              variant="secondary"
+              onClick={() => void stats.refresh()}
+              disabled={blocked}
+            >
               {t("common.retry")}
             </Button>
           }
         >
           <strong>{t("dashboard.error")}</strong>
-          <span>
-            {stats.error.message}
-            {stats.error.nextAction ? ` ${stats.error.nextAction}` : ""}
-          </span>
+          <span>{appErrorText(stats.error)}</span>
         </Notice>
       ) : null}
 

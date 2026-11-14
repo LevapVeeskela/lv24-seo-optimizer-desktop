@@ -20,6 +20,11 @@ export async function copyText(text: string): Promise<boolean> {
   if (typeof document === "undefined") {
     return false;
   }
+  const previousFocus =
+    typeof HTMLElement !== "undefined" &&
+    document.activeElement instanceof HTMLElement
+      ? document.activeElement
+      : null;
   let area: HTMLTextAreaElement | null = null;
   try {
     area = document.createElement("textarea");
@@ -40,5 +45,10 @@ export async function copyText(text: string): Promise<boolean> {
     return false;
   } finally {
     area?.remove();
+    // The temporary textarea steals focus; return it to the copy control so
+    // keyboard users do not land on <body> after a fallback copy.
+    if (previousFocus?.isConnected) {
+      previousFocus.focus();
+    }
   }
 }

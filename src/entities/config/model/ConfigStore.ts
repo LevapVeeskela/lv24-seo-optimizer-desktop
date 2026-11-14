@@ -158,6 +158,10 @@ export class ConfigStore {
     this.engineError = null;
     this.unknownKeys = [];
     this.parseWarnings = [];
+    // Warnings belong to the file that produced them. A failed load must not
+    // leave the previous workspace's warnings on screen.
+    this.warnings = [];
+    this.doctorLoading = false;
 
     try {
       const result = await configRead(path);
@@ -300,7 +304,11 @@ export class ConfigStore {
       this.lastValidatedAt = checkedAt;
       return false;
     } finally {
-      this.validating = false;
+      // A newer load/validation may already own the flag after a workspace
+      // switch; an older request must not clear it.
+      if (generation === this.generation) {
+        this.validating = false;
+      }
     }
   }
 
@@ -390,7 +398,11 @@ export class ConfigStore {
       this.saveError = appError;
       return false;
     } finally {
-      this.saving = false;
+      // Same guard as validate: a workspace switch resets the flags and may
+      // start a new save before this one settles.
+      if (generation === this.generation) {
+        this.saving = false;
+      }
     }
   }
 
@@ -452,12 +464,22 @@ export class ConfigStore {
     if (this.doctorLoading) {
       return false;
     }
+    const generation = this.generation;
+    const path = this.path;
     this.doctorLoading = true;
     try {
-      this.doctor = await runDoctor(this.path);
-      return this.doctor.ok;
+      const doctor = await runDoctor(path);
+      // A workspace switch while doctor ran makes this result belong to the
+      // previous file; dropping it avoids showing stale diagnostics.
+      if (generation !== this.generation) {
+        return false;
+      }
+      this.doctor = doctor;
+      return doctor.ok;
     } finally {
-      this.doctorLoading = false;
+      if (generation === this.generation) {
+        this.doctorLoading = false;
+      }
     }
   }
 

@@ -19,6 +19,7 @@ import {
   exportRecommendationPrompt,
 } from "@/features/agent-task/lib/actions";
 import { useI18n } from "@/shared/i18n";
+import { appErrorText } from "@/shared/lib/errors";
 import { formatDateTime } from "@/shared/lib/format";
 import { Button } from "@/shared/ui/Button";
 import { Card } from "@/shared/ui/Card";
@@ -48,6 +49,7 @@ export const RecommendationsPage = observer(function RecommendationsPage({
   const [severityFilter, setSeverityFilter] = useState("all");
   const [confirmOpen, setConfirmOpen] = useState(false);
   const configPath = engine.status?.configPath ?? null;
+  const blocked = engine.offline || engine.loading || !configPath;
 
   useEffect(() => {
     // Without a workspace configuration `stats` is a guaranteed failure.
@@ -88,16 +90,25 @@ export const RecommendationsPage = observer(function RecommendationsPage({
   );
 
   const buildWeekly = async () => {
+    if (blocked) {
+      return;
+    }
     const ok = await reports.buildWeekly();
     notify(
       ok
         ? copy.reportBuilt
-        : reports.error?.message ?? copy.reportError,
+        : reports.error
+          ? appErrorText(reports.error)
+          : copy.reportError,
       ok ? "success" : "error",
     );
   };
 
-  const requestBuild = () => setConfirmOpen(true);
+  const requestBuild = () => {
+    if (!blocked) {
+      setConfirmOpen(true);
+    }
+  };
 
   const reconnect = async () => {
     await engine.load();
@@ -139,17 +150,20 @@ export const RecommendationsPage = observer(function RecommendationsPage({
     if (!recommendation) {
       return;
     }
-    const outcome = await exportRecommendationPrompt(
+    const result = await exportRecommendationPrompt(
       recommendation,
       context.property,
       context.period,
       { defaultDir: engine.status?.paths?.exportDir ?? null },
     );
-    if (outcome === "exported") {
+    if (result.status === "exported") {
       queue.markExported(id);
       notify(copy.exported);
-    } else if (outcome === "failed") {
-      notify(copy.exportFailed, "error");
+    } else if (result.status === "failed") {
+      notify(
+        result.error ? appErrorText(result.error) : copy.exportFailed,
+        "error",
+      );
     }
   };
 
@@ -170,7 +184,7 @@ export const RecommendationsPage = observer(function RecommendationsPage({
             variant="secondary"
             loading={stats.loading}
             onClick={() => void stats.refresh()}
-            disabled={engine.offline || !configPath}
+            disabled={blocked}
           >
             {stats.loading ? copy.refreshing : copy.refreshStats}
           </Button>
@@ -178,7 +192,7 @@ export const RecommendationsPage = observer(function RecommendationsPage({
             variant="primary"
             loading={reports.loading}
             onClick={requestBuild}
-            disabled={engine.offline || !configPath}
+            disabled={blocked}
           >
             {reports.loading ? copy.building : copy.buildWeekly}
           </Button>
@@ -217,16 +231,17 @@ export const RecommendationsPage = observer(function RecommendationsPage({
         <Notice
           variant="error"
           action={
-            <Button variant="secondary" onClick={requestBuild}>
+            <Button
+              variant="secondary"
+              onClick={requestBuild}
+              disabled={blocked}
+            >
               {copy.retry}
             </Button>
           }
         >
           <strong>{copy.reportError}</strong>
-          <span>
-            {reports.error.message}
-            {reports.error.nextAction ? ` ${reports.error.nextAction}` : ""}
-          </span>
+          <span>{appErrorText(reports.error)}</span>
         </Notice>
       ) : null}
 
@@ -237,17 +252,14 @@ export const RecommendationsPage = observer(function RecommendationsPage({
             <Button
               variant="secondary"
               onClick={() => void stats.refresh()}
-              disabled={!configPath}
+              disabled={blocked}
             >
               {copy.retry}
             </Button>
           }
         >
           <strong>{copy.statsError}</strong>
-          <span>
-            {stats.error.message}
-            {stats.error.nextAction ? ` ${stats.error.nextAction}` : ""}
-          </span>
+          <span>{appErrorText(stats.error)}</span>
         </Notice>
       ) : null}
 
@@ -267,7 +279,7 @@ export const RecommendationsPage = observer(function RecommendationsPage({
                 variant="primary"
                 loading={reports.loading}
                 onClick={requestBuild}
-                disabled={engine.offline || !configPath}
+                disabled={blocked}
               >
                 {reports.loading ? copy.building : copy.buildWeekly}
               </Button>
@@ -352,7 +364,7 @@ export const RecommendationsPage = observer(function RecommendationsPage({
                 variant="secondary"
                 loading={stats.loading}
                 onClick={() => void stats.refresh()}
-                disabled={engine.offline || !configPath}
+                disabled={blocked}
               >
                 {stats.loading ? copy.refreshing : copy.refreshStats}
               </Button>

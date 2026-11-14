@@ -8,6 +8,7 @@ import {
   exportRecommendationPrompt,
 } from "../lib/actions";
 import { useI18n } from "@/shared/i18n";
+import { appErrorText } from "@/shared/lib/errors";
 import { formatDateTime } from "@/shared/lib/format";
 import { Badge } from "@/shared/ui/Badge";
 import { Button } from "@/shared/ui/Button";
@@ -53,17 +54,20 @@ export const AgentQueue = observer(function AgentQueue({
   };
 
   const exportTask = async (task: AgentTask) => {
-    const outcome = await exportRecommendationPrompt(
+    const result = await exportRecommendationPrompt(
       task.recommendation,
       task.property,
       task.period,
       { defaultDir: exportDir },
     );
-    if (outcome === "exported") {
+    if (result.status === "exported") {
       store.markExported(task.id);
       notify(copy.exported);
-    } else if (outcome === "failed") {
-      notify(copy.exportFailed, "error");
+    } else if (result.status === "failed") {
+      notify(
+        result.error ? appErrorText(result.error) : copy.exportFailed,
+        "error",
+      );
     }
   };
 

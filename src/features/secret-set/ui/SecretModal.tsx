@@ -6,14 +6,16 @@ import { Field } from "@/shared/ui/Field";
 import { Input } from "@/shared/ui/Input";
 import { Notice } from "@/shared/ui/Notice";
 import { Select } from "@/shared/ui/Select";
-import { CopyButton } from "@/entities/config";
+import { AUTH_PROVIDERS, CopyButton } from "@/entities/config";
 import {
   AUTH_DELETE_AVAILABLE,
   AUTH_SET_AVAILABLE,
   SECRET_PROVIDER_KEYS,
   authDeleteCommand,
   authSetCommand,
+  isSecretEditable,
   removeSecret,
+  secretPresence,
   secretSourceKey,
   storeSecret,
 } from "@/features/secret-set/model/SecretStore";
@@ -21,17 +23,6 @@ import type {
   AuthProvider,
   AuthProviderStatus,
 } from "@/entities/config/model/types";
-
-const PROVIDERS: readonly AuthProvider[] = [
-  "gsc",
-  "yandex",
-  "metrika",
-  "bing",
-  "crux",
-  "psi",
-  "smtp",
-  "telegram",
-];
 
 interface ModalMessage {
   text: string;
@@ -59,13 +50,18 @@ export function SecretModal({
   const titleId = useId();
   const inputId = useId();
   const providerId = useId();
-  const [selected, setSelected] = useState<AuthProvider>("gsc");
+  // Seed from the row that opened the dialog so the first paint is already the
+  // requested provider; the effect below still resets it on reopen.
+  const [selected, setSelected] = useState<AuthProvider>(provider ?? "gsc");
   const [secret, setSecret] = useState("");
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<ModalMessage | null>(null);
   const [unsupported, setUnsupported] = useState(false);
   const status = entries.find((entry) => entry.provider === selected);
-  const authAvailable = AUTH_SET_AVAILABLE && !unsupported;
+  const presence = secretPresence(entries, selected);
+  const statusKnown = presence !== "unknown";
+  const envLocked = !isSecretEditable(status);
+  const authAvailable = AUTH_SET_AVAILABLE && !unsupported && !envLocked;
 
   useEffect(() => {
     if (open) {
@@ -77,6 +73,12 @@ export function SecretModal({
       setSecret("");
     }
   }, [open, provider]);
+
+  useEffect(() => {
+    // A result from the previous workspace must not linger in the dialog.
+    setSecret("");
+    setMessage(null);
+  }, [configPath]);
 
   useEffect(() => {
     const dialog = dialogRef.current;
@@ -102,6 +104,17 @@ export function SecretModal({
       target.focus();
     }
   }, [open]);
+
+  useEffect(
+    () => () => {
+      const target = restoreFocus.current;
+      restoreFocus.current = null;
+      if (target?.isConnected) {
+        target.focus();
+      }
+    },
+    [],
+  );
 
   const close = () => {
     if (!busy) {
@@ -141,7 +154,13 @@ export function SecretModal({
     const result = await removeSecret(selected, configPath);
     setBusy(false);
     if (result.ok) {
-      setMessage({ text: t("secrets.removed"), variant: "info" });
+      setMessage({
+        text:
+          result.removed === false
+            ? t("secrets.removeStillPresent")
+            : t("secrets.removed"),
+        variant: "info",
+      });
       onChanged();
       return;
     }
@@ -158,7 +177,6 @@ export function SecretModal({
 
   const setCommand = authSetCommand(selected, configPath);
   const deleteCommand = authDeleteCommand(selected, configPath);
-  const statusKnown = entries.length > 0;
 
   return (
     <dialog
@@ -175,6 +193,9 @@ export function SecretModal({
       <div className="dialog-body">
         <h2 id={titleId}>{t("secrets.title")}</h2>
         <p className="muted">{t("secrets.subtitle")}</p>
+        <Notice variant="info">
+          <span>{t("secrets.sharedHint")}</span>
+        </Notice>
 
         <Field id={providerId} label={t("secrets.provider")}>
           <Select
@@ -187,7 +208,7 @@ export function SecretModal({
               setMessage(null);
             }}
           >
-            {PROVIDERS.map((item) => (
+            {AUTH_PROVIDERS.map((item) => (
               <option key={item} value={item}>
                 {t(SECRET_PROVIDER_KEYS[item])}
               </option>
@@ -197,13 +218,19 @@ export function SecretModal({
 
         <div className="badge-row">
           <Badge
-            tone={!statusKnown ? "neutral" : status?.present ? "success" : "warning"}
+            tone={
+              presence === "present"
+                ? "success"
+                : presence === "missing"
+                  ? "warning"
+                  : "neutral"
+            }
           >
-            {!statusKnown
-              ? t("secrets.unknown")
-              : status?.present
-                ? t("secrets.present")
-                : t("secrets.missing")}
+            {presence === "present"
+              ? t("secrets.present")
+              : presence === "missing"
+                ? t("secrets.missing")
+                : t("secrets.unknown")}
           </Badge>
           {statusKnown ? (
             <Badge tone="neutral">
@@ -265,7 +292,7 @@ export function SecretModal({
               ) : null}
             </div>
           </>
-        ) : (
+        ) : envLocked ? null : (
           <Notice variant="info">
             <strong>{t("secrets.cliFallbackTitle")}</strong>
             <span>{t("secrets.cliFallbackHint")}</span>

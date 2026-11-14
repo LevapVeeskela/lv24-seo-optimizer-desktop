@@ -2,7 +2,12 @@ import { useEffect, useRef, useState } from "react";
 import { observer } from "mobx-react-lite";
 import { useRootStore } from "@/app/providers/StoreProvider";
 import { useI18n, type MessageKey } from "@/shared/i18n";
-import { toAppError, type AppError } from "@/shared/lib/errors";
+import {
+  appErrorText,
+  errorCodeKey,
+  toAppError,
+  type AppError,
+} from "@/shared/lib/errors";
 import { Badge } from "@/shared/ui/Badge";
 import { Button } from "@/shared/ui/Button";
 import { Card } from "@/shared/ui/Card";
@@ -26,6 +31,7 @@ import { pickConfigFile } from "@/shared/desktop/settings";
 import {
   SecretModal,
   SecretStore,
+  secretPresence,
   secretSourceKey,
 } from "@/features/secret-set";
 
@@ -65,6 +71,9 @@ export const SettingsPage = observer(function SettingsPage() {
 
   useEffect(() => {
     if (!configPath) {
+      // A transient offline status must not make the next status for the same
+      // path look like a cache hit: force a fresh token read on recovery.
+      secretsPath.current = null;
       return;
     }
     // Only reload when the active path changed; an unsaved draft must survive
@@ -79,6 +88,11 @@ export const SettingsPage = observer(function SettingsPage() {
   }, [configPath, config, secrets]);
 
   const draft = config.draft;
+  // The effect below updates this ref after paint. Gate the badges on the ref
+  // so a workspace switch cannot show the previous workspace's token presence
+  // for one frame before the new auth status starts loading.
+  const secretsForPath = secretsPath.current === configPath;
+  const secretEntries = secretsForPath ? secrets.entries : [];
   const warnings = [
     ...new Set([
       ...config.warnings,
@@ -120,6 +134,11 @@ export const SettingsPage = observer(function SettingsPage() {
       return;
     }
     const ok = await config.reload();
+    // A workspace switch while this reload was in flight already started a
+    // newer load; do not overwrite its token status or show a stale toast.
+    if (config.path !== configPath) {
+      return;
+    }
     await secrets.load(configPath);
     notify(
       ok ? t("settings.reloaded") : config.loadError?.message ?? t("settings.loadError"),
@@ -129,19 +148,31 @@ export const SettingsPage = observer(function SettingsPage() {
 
   const validate = async () => {
     const ok = await config.validate();
+    if (config.path !== configPath) {
+      return;
+    }
     notify(
       ok ? t("settings.validation.valid") : t("settings.validation.invalid"),
       ok ? "success" : "error",
     );
   };
 
-  const saveErrorText = (error: AppError | null): string | undefined =>
-    error?.code === "CONFIG_NOTHING_TO_WRITE"
-      ? t("settings.nothingToWrite")
-      : error?.message;
+  const saveErrorText = (error: AppError | null): string | undefined => {
+    if (!error) {
+      return undefined;
+    }
+    if (error.code === "CONFIG_NOTHING_TO_WRITE") {
+      return t("settings.nothingToWrite");
+    }
+    const key = errorCodeKey(error.code);
+    return key ? t(key) : appErrorText(error);
+  };
 
   const save = async () => {
     const ok = await config.save();
+    if (config.path !== configPath) {
+      return;
+    }
     notify(
       ok ? t("settings.saved") : saveErrorText(config.saveError) ?? t("settings.saveFailed"),
       ok ? "success" : "error",
@@ -167,24 +198,31 @@ export const SettingsPage = observer(function SettingsPage() {
   const openSecret = (provider: AuthProvider) => setSecretProvider(provider);
 
   const tokenBadge = (provider: AuthProvider) => {
-    const known = secrets.state === "ready";
+    const known = secretsForPath && secrets.state === "ready";
     const status: AuthProviderStatus | undefined = known
-      ? secrets.get(provider)
+      ? secretEntries.find((entry) => entry.provider === provider)
       : undefined;
+    const presence = secretPresence(known ? secretEntries : [], provider);
     return (
       <div className="badge-row">
         <Badge
-          tone={!known ? "neutral" : status?.present ? "success" : "warning"}
+          tone={
+            presence === "present"
+              ? "success"
+              : presence === "missing"
+                ? "warning"
+                : "neutral"
+          }
         >
-          {!known
-            ? t("secrets.unknown")
-            : status?.present
-              ? t("secrets.present")
-              : t("secrets.missing")}
+          {presence === "present"
+            ? t("secrets.present")
+            : presence === "missing"
+              ? t("secrets.missing")
+              : t("secrets.unknown")}
         </Badge>
-        {known ? (
+        {status ? (
           <span className="muted small">
-            {t("secrets.source")}: {t(secretSourceKey(status?.source))}
+            {t("secrets.source")}: {t(secretSourceKey(status.source))}
           </span>
         ) : null}
         <Button variant="link" onClick={() => openSecret(provider)}>
@@ -212,6 +250,12 @@ export const SettingsPage = observer(function SettingsPage() {
         return;
       }
       await engine.load();
+      // The picker persists the path, but the shell can still fail to load it.
+      // Do not report a successful workspace switch when status disagrees.
+      if (engine.status?.configPath !== selected) {
+        notify(t("settings.chooseConfigFailed"), "error");
+        return;
+      }
       notify(t("settings.configSelected"), "success");
     } catch (error) {
       notify(toAppError(error, "PICK_CONFIG").message, "error");
@@ -321,7 +365,7 @@ export const SettingsPage = observer(function SettingsPage() {
         </Notice>
       ) : null}
 
-      {secrets.error ? (
+      {secretsForPath && secrets.error ? (
         <Notice
           variant="error"
           action={
@@ -921,7 +965,7 @@ export const SettingsPage = observer(function SettingsPage() {
       <SecretModal
         open={secretProvider !== null}
         provider={secretProvider}
-        entries={secrets.entries}
+        entries={secretEntries}
         configPath={configPath}
         onClose={() => setSecretProvider(null)}
         onChanged={() => void secrets.load(configPath)}

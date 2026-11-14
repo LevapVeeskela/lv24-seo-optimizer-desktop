@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  LOCALES,
   LOCALE_STORAGE_KEY,
   detectLocale,
   normalizeLocale,
@@ -27,6 +28,32 @@ describe("i18n", () => {
       const expected = placeholders(en[key]);
       expect(placeholders(ru[key]), `ru ${key}`).toEqual(expected);
       expect(placeholders(zh[key]), `zh ${key}`).toEqual(expected);
+    }
+  });
+
+  it("keeps Metrika a separate provider from Webmaster in every locale", () => {
+    for (const locale of LOCALES) {
+      expect(translate(locale, "secrets.provider.metrika")).not.toBe(
+        translate(locale, "secrets.provider.yandex"),
+      );
+    }
+  });
+
+  it("states that desktop and CLI share one keychain entry", () => {
+    for (const locale of LOCALES) {
+      const hint = translate(locale, "secrets.sharedHint");
+      expect(hint).toContain("lv24-seo");
+      expect(hint.length).toBeGreaterThan(40);
+    }
+  });
+
+  it("does not keep stale 0.2.0 release claims in UI copy", () => {
+    for (const locale of LOCALES) {
+      for (const value of Object.values(
+        locale === "en" ? en : locale === "ru" ? ru : zh,
+      )) {
+        expect(value).not.toContain("0.2.0");
+      }
     }
   });
 

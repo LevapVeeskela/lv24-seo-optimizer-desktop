@@ -4,11 +4,28 @@ import type {
   RecommendationPeriod,
 } from "@/entities/recommendation/model/types";
 import { writeTextFile } from "@/shared/desktop/files";
+import { toAppError, type AppError } from "@/shared/lib/errors";
 import { copyText } from "./clipboard";
 import { buildAgentPrompt } from "./prompt";
 import { agentTaskFilename } from "./queue";
 
 export type ExportOutcome = "exported" | "canceled" | "failed";
+
+export interface ExportResult {
+  status: ExportOutcome;
+  /** Why the native write failed; the shell's PATH_NOT_ALLOWED is actionable. */
+  error?: AppError;
+}
+
+/** A save dialog may return a bare path; the shell only accepts known extensions. */
+export function ensureMarkdownPath(path: string): string {
+  const trimmed = path.trim();
+  if (!trimmed) {
+    return trimmed;
+  }
+  const name = trimmed.split(/[\\/]/).pop() ?? "";
+  return /\.[^./\\]+$/.test(name) ? trimmed : `${trimmed}.md`;
+}
 
 /** Copy the exact brief an external agent should receive. */
 export async function copyRecommendationPrompt(
@@ -36,7 +53,7 @@ export async function exportRecommendationPrompt(
   property: string | null | undefined,
   period: RecommendationPeriod | null | undefined,
   options: { defaultDir?: string | null } = {},
-): Promise<ExportOutcome> {
+): Promise<ExportResult> {
   const filename = agentTaskFilename(recommendation.id);
   try {
     const selected = await save({
@@ -47,14 +64,14 @@ export async function exportRecommendationPrompt(
       filters: [{ name: "Markdown", extensions: ["md"] }],
     });
     if (!selected) {
-      return "canceled";
+      return { status: "canceled" };
     }
     await writeTextFile(
-      selected,
+      ensureMarkdownPath(selected),
       buildAgentPrompt(recommendation, property, period),
     );
-    return "exported";
-  } catch {
-    return "failed";
+    return { status: "exported" };
+  } catch (error) {
+    return { status: "failed", error: toAppError(error, "EXPORT_WRITE") };
   }
 }

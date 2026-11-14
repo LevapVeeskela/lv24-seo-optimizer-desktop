@@ -1,5 +1,5 @@
-use std::fs::{self, OpenOptions};
-use std::io::Write;
+use std::fs::{self, File, OpenOptions};
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -9,7 +9,7 @@ use serde_json::Value;
 use toml_edit::{DocumentMut, Item, Table, TableLike, Value as TomlValue};
 
 use crate::cli::{self, CliArgs, CliCommandId};
-use crate::error::{AppError, AppResult};
+use crate::error::{redact_secrets, AppError, AppResult};
 use crate::paths::EngineLocation;
 
 const BACKUP_KEEP: usize = 5;
@@ -240,24 +240,60 @@ fn json_to_toml_value(value: &Value) -> AppResult<toml_edit::Value> {
 }
 
 pub fn read_raw(path: &Path) -> AppResult<String> {
-    if let Ok(metadata) = fs::metadata(path) {
-        if metadata.len() > MAX_CONFIG_BYTES {
-            return Err(AppError::new(
-                "CONFIG_READ",
-                format!(
-                    "config {} is larger than {} bytes",
-                    path.display(),
-                    MAX_CONFIG_BYTES
-                ),
-            ));
-        }
-    }
-    fs::read_to_string(path).map_err(|err| {
+    let metadata = fs::metadata(path).map_err(|err| {
         AppError::new(
             "CONFIG_READ",
             format!("cannot read config {}: {err}", path.display()),
         )
+    })?;
+    if !metadata.is_file() {
+        // A FIFO or device would block or read forever; a directory has no
+        // TOML to show. Both are reported instead of attempted.
+        return Err(AppError::new(
+            "CONFIG_READ",
+            format!("config {} is not a regular file", path.display()),
+        ));
+    }
+    if metadata.len() > MAX_CONFIG_BYTES {
+        return Err(config_too_large(path));
+    }
+    let file = File::open(path).map_err(|err| {
+        AppError::new(
+            "CONFIG_READ",
+            format!("cannot read config {}: {err}", path.display()),
+        )
+    })?;
+    // Bound the read as well: the file can grow between `metadata` and the
+    // read, and a symlink can point at something much larger than it looked.
+    let mut buffer = Vec::new();
+    file.take(MAX_CONFIG_BYTES + 1)
+        .read_to_end(&mut buffer)
+        .map_err(|err| {
+            AppError::new(
+                "CONFIG_READ",
+                format!("cannot read config {}: {err}", path.display()),
+            )
+        })?;
+    if buffer.len() as u64 > MAX_CONFIG_BYTES {
+        return Err(config_too_large(path));
+    }
+    String::from_utf8(buffer).map_err(|_| {
+        AppError::new(
+            "CONFIG_READ",
+            format!("config {} is not valid UTF-8", path.display()),
+        )
     })
+}
+
+fn config_too_large(path: &Path) -> AppError {
+    AppError::new(
+        "CONFIG_READ",
+        format!(
+            "config {} is larger than {} bytes",
+            path.display(),
+            MAX_CONFIG_BYTES
+        ),
+    )
 }
 
 pub fn parse_toml(content: &str) -> AppResult<DocumentMut> {
@@ -278,13 +314,20 @@ pub fn data_dir_from_document(document: &DocumentMut, config_path: &Path) -> Opt
 }
 
 pub fn resolve_data_dir(raw: &str, config_path: &Path) -> PathBuf {
+    resolve_data_dir_with_home(raw, config_path, home_dir().as_deref())
+}
+
+fn resolve_data_dir_with_home(raw: &str, config_path: &Path, home: Option<&Path>) -> PathBuf {
     let trimmed = raw.trim();
-    if let Some(rest) = trimmed
-        .strip_prefix("~/")
-        .or_else(|| trimmed.strip_prefix("~\\"))
-    {
-        if let Some(home) = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")) {
-            return PathBuf::from(home).join(rest);
+    if let Some(home) = home {
+        if trimmed == "~" {
+            return home.to_path_buf();
+        }
+        if let Some(rest) = trimmed
+            .strip_prefix("~/")
+            .or_else(|| trimmed.strip_prefix("~\\"))
+        {
+            return home.join(rest);
         }
     }
     let path = PathBuf::from(trimmed);
@@ -296,6 +339,20 @@ pub fn resolve_data_dir(raw: &str, config_path: &Path) -> PathBuf {
             .map(|parent| parent.join(path.clone()))
             .unwrap_or(path)
     }
+}
+
+/// `HOME`/`USERPROFILE`, but only when it is a usable absolute directory. An
+/// empty or relative value must not silently turn `~/data` into a path relative
+/// to the desktop's cwd.
+fn home_dir() -> Option<PathBuf> {
+    ["HOME", "USERPROFILE"].iter().find_map(|name| {
+        let value = std::env::var_os(name)?;
+        if value.is_empty() {
+            return None;
+        }
+        let path = PathBuf::from(value);
+        path.is_absolute().then_some(path)
+    })
 }
 
 /// Write `content` to a unique temporary file next to `target`.
@@ -320,11 +377,7 @@ pub fn stage_temp(target: &Path, content: &str) -> AppResult<PathBuf> {
     for _ in 0..16 {
         let sequence = TEMP_COUNTER.fetch_add(1, Ordering::Relaxed);
         let candidate = parent.join(format!(".{base}.{}.{}.tmp", std::process::id(), sequence));
-        match OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&candidate)
-        {
+        match create_private_file(&candidate) {
             Ok(file) => {
                 finish_temp(file, &candidate, content)?;
                 return Ok(candidate);
@@ -347,6 +400,20 @@ pub fn stage_temp(target: &Path, content: &str) -> AppResult<PathBuf> {
     ))
 }
 
+/// Create a new file that only the current user can read. A config draft can
+/// hold a token that the user pasted before validation rejects it, and the
+/// process umask must not make that draft world-readable.
+fn create_private_file(candidate: &Path) -> std::io::Result<File> {
+    let mut options = OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    options.open(candidate)
+}
+
 /// Write and fsync a freshly created temp file. On failure the partial file is
 /// removed so a failed write never leaves debris next to the config.
 fn finish_temp(mut file: fs::File, candidate: &Path, content: &str) -> AppResult<()> {
@@ -356,7 +423,10 @@ fn finish_temp(mut file: fs::File, candidate: &Path, content: &str) -> AppResult
     if let Err(err) = written {
         drop(file);
         let _ = fs::remove_file(candidate);
-        return Err(err.into());
+        return Err(AppError::new(
+            "IO",
+            format!("cannot write {}: {err}", candidate.display()),
+        ));
     }
     Ok(())
 }
@@ -390,7 +460,12 @@ pub fn commit_temp(temp: &Path, target: &Path) -> AppResult<WriteOutcome> {
                     ),
                 )
             })?;
-            prune_backups(target, BACKUP_KEEP)?;
+            // The backup is the recovery point, so it must reach the disk
+            // before the original is replaced. It also inherits the restrictive
+            // permissions documented for backups instead of the source mode.
+            sync_backup(&backup_path);
+            restrict_backup(&backup_path);
+            prune_backups(target, BACKUP_KEEP);
             backup = Some(backup_path);
             Some(metadata.permissions())
         }
@@ -413,6 +488,7 @@ pub fn commit_temp(temp: &Path, target: &Path) -> AppResult<WriteOutcome> {
     }
 
     atomic_replace(temp, target)?;
+    sync_parent(target);
     let bytes = fs::metadata(target)
         .map(|meta| meta.len() as usize)
         .unwrap_or(0);
@@ -421,6 +497,82 @@ pub fn commit_temp(temp: &Path, target: &Path) -> AppResult<WriteOutcome> {
         backup: backup.map(|path| path.display().to_string()),
         bytes,
     })
+}
+
+/// Reopen the copied backup and flush it. A crash after the rename must not
+/// leave a zero-length or truncated recovery point.
+fn sync_backup(path: &Path) {
+    match OpenOptions::new().write(true).open(path) {
+        Ok(file) => {
+            if let Err(err) = file.sync_all() {
+                log::warn!("cannot fsync config backup {}: {err}", path.display());
+            }
+        }
+        Err(err) => log::warn!(
+            "cannot reopen config backup {} to fsync it: {err}",
+            path.display()
+        ),
+    }
+}
+
+/// Backups stay readable only by the owner on Unix. Best effort: a filesystem
+/// that rejects the mode must not block saving the user's configuration.
+fn restrict_backup(path: &Path) {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if let Err(err) = fs::set_permissions(path, fs::Permissions::from_mode(0o600)) {
+            log::warn!(
+                "cannot restrict config backup permissions on {}: {err}",
+                path.display()
+            );
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = path;
+    }
+}
+
+/// Flush the directory entry so a rename survives a power loss. The file
+/// contents were already fsynced before the rename.
+fn sync_parent(target: &Path) {
+    #[cfg(unix)]
+    {
+        if let Some(parent) = target.parent() {
+            match File::open(parent) {
+                Ok(dir) => {
+                    if let Err(err) = dir.sync_all() {
+                        log::warn!("cannot fsync {}: {err}", parent.display());
+                    }
+                }
+                Err(err) => log::warn!("cannot open {} to fsync it: {err}", parent.display()),
+            }
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = target;
+    }
+}
+
+/// Install a staged temp file over `target`: keep the previous file mode, swap
+/// atomically and flush the directory entry.
+pub(crate) fn install_temp(temp: &Path, target: &Path) -> AppResult<()> {
+    if let Ok(metadata) = fs::metadata(target) {
+        if metadata.is_file() {
+            if let Err(err) = fs::set_permissions(temp, metadata.permissions()) {
+                log::warn!(
+                    "cannot preserve permissions of {} on {}: {err}",
+                    target.display(),
+                    temp.display()
+                );
+            }
+        }
+    }
+    atomic_replace(temp, target)?;
+    sync_parent(target);
+    Ok(())
 }
 
 /// Convenience path used by tests and by callers that already validated the
@@ -442,7 +594,7 @@ pub fn write_atomic_unchecked(target: &Path, content: &str) -> AppResult<WriteOu
 /// after the caller has checked the path allow-list.
 pub fn write_text_atomic(target: &Path, content: &str) -> AppResult<WriteOutcome> {
     let temp = stage_temp(target, content)?;
-    match atomic_replace(&temp, target) {
+    match install_temp(&temp, target) {
         Ok(()) => {
             let bytes = fs::metadata(target)
                 .map(|meta| meta.len() as usize)
@@ -498,7 +650,9 @@ pub(crate) async fn validate_with_engine_in(
         valid,
         exit_code: result.exit_code,
         envelope: result.envelope,
-        stderr: result.stderr,
+        // The engine can quote a config line or an argv in a traceback; the
+        // webview must never receive a credential through `stderr`.
+        stderr: redact_secrets(&result.stderr),
     })
 }
 
@@ -516,7 +670,23 @@ fn stage_validation_temp(
     }
 }
 
+/// Replace `target` with `temp`, refusing a directory target.
+///
+/// A symlink target is replaced, never followed: the rename acts on the
+/// directory entry, so a link inside an allow-listed directory cannot redirect
+/// the write to a file outside it. The link's own target keeps its content and
+/// the caller's backup holds the previous bytes.
 pub(crate) fn atomic_replace(temp: &Path, target: &Path) -> AppResult<()> {
+    // A directory must never be moved aside by the Windows fallback below; the
+    // caller would lose a whole tree for a mistyped config path.
+    if let Ok(metadata) = fs::symlink_metadata(target) {
+        if metadata.is_dir() {
+            return Err(AppError::new(
+                "CONFIG_WRITE",
+                format!("target is a directory: {}", target.display()),
+            ));
+        }
+    }
     match fs::rename(temp, target) {
         Ok(()) => Ok(()),
         Err(first) => {
@@ -528,7 +698,7 @@ pub(crate) fn atomic_replace(temp: &Path, target: &Path) -> AppResult<()> {
                 // install the new one, then delete the old copy. The backup
                 // written by commit_temp is the recovery point if this process
                 // dies in between.
-                if target.exists() {
+                if fs::symlink_metadata(target).is_ok() {
                     let name = target
                         .file_name()
                         .and_then(|value| value.to_str())
@@ -549,7 +719,16 @@ pub(crate) fn atomic_replace(temp: &Path, target: &Path) -> AppResult<()> {
                     })?;
                     match fs::rename(temp, target) {
                         Ok(()) => {
-                            let _ = fs::remove_file(&old);
+                            // The new file is installed; failing to delete the
+                            // old copy is debris, not a failed write, but the
+                            // path must be visible in the log.
+                            if let Err(err) = fs::remove_file(&old) {
+                                log::warn!(
+                                    "config was replaced but the previous copy at {} could not be \
+                                     removed: {err}",
+                                    old.display()
+                                );
+                            }
                             Ok(())
                         }
                         Err(second) => match fs::rename(&old, target) {
@@ -637,22 +816,20 @@ fn backup_path(target: &Path) -> AppResult<PathBuf> {
     Ok(candidate)
 }
 
-fn prune_backups(target: &Path, keep: usize) -> AppResult<()> {
+fn prune_backups(target: &Path, keep: usize) {
     let mut backups = backup_files(target);
     if backups.len() <= keep {
-        return Ok(());
+        return;
     }
     backups.sort();
     let remove_count = backups.len() - keep;
     for path in backups.into_iter().take(remove_count) {
-        fs::remove_file(&path).map_err(|err| {
-            AppError::new(
-                "CONFIG_WRITE",
-                format!("cannot remove old backup {}: {err}", path.display()),
-            )
-        })?;
+        // Retention is housekeeping: an old backup that cannot be deleted must
+        // not block saving the new configuration.
+        if let Err(err) = fs::remove_file(&path) {
+            log::warn!("cannot remove old config backup {}: {err}", path.display());
+        }
     }
-    Ok(())
 }
 
 fn backup_files(target: &Path) -> Vec<PathBuf> {
@@ -663,8 +840,18 @@ fn backup_files(target: &Path) -> Vec<PathBuf> {
         return Vec::new();
     };
     let prefix = format!("{name}.bak-");
-    let Ok(entries) = fs::read_dir(parent) else {
-        return Vec::new();
+    let entries = match fs::read_dir(parent) {
+        Ok(entries) => entries,
+        Err(err) => {
+            // Retention and the reported backup list silently lose entries if
+            // the directory cannot be listed; say so instead of pretending
+            // there are no backups.
+            log::warn!(
+                "cannot list {} to find config backups: {err}",
+                parent.display()
+            );
+            return Vec::new();
+        }
     };
     entries
         .filter_map(Result::ok)
@@ -828,7 +1015,145 @@ mod tests {
         let read_only = OpenOptions::new().read(true).open(&candidate).unwrap();
         let error = finish_temp(read_only, &candidate, "version = 1\n").unwrap_err();
         assert_eq!(error.code(), "IO");
+        assert!(error.message().contains(&candidate.display().to_string()));
         assert!(!candidate.exists());
+    }
+
+    #[test]
+    fn reads_are_bounded_and_reject_non_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let oversized = dir.path().join("big.toml");
+        fs::write(&oversized, vec![b'x'; MAX_CONFIG_BYTES as usize + 1]).unwrap();
+        let error = read_raw(&oversized).unwrap_err();
+        assert_eq!(error.code(), "CONFIG_READ");
+        assert!(error.message().contains("larger than"));
+
+        let error = read_raw(dir.path()).unwrap_err();
+        assert_eq!(error.code(), "CONFIG_READ");
+        assert!(error.message().contains("not a regular file"));
+
+        let binary = dir.path().join("binary.toml");
+        fs::write(&binary, [0xff, 0xfe, 0x00]).unwrap();
+        let error = read_raw(&binary).unwrap_err();
+        assert_eq!(error.code(), "CONFIG_READ");
+        assert!(error.message().contains("not valid UTF-8"));
+
+        let missing = dir.path().join("missing.toml");
+        assert_eq!(read_raw(&missing).unwrap_err().code(), "CONFIG_READ");
+    }
+
+    #[test]
+    fn data_dir_expands_home_only_for_a_usable_home() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = dir.path().join("seo.toml");
+        let home = dir.path().join("home");
+
+        assert_eq!(resolve_data_dir_with_home("~", &config, Some(&home)), home);
+        assert_eq!(
+            resolve_data_dir_with_home("~/data", &config, Some(&home)),
+            home.join("data")
+        );
+        assert_eq!(
+            resolve_data_dir_with_home("~\\data", &config, Some(&home)),
+            home.join("data")
+        );
+        // A bare `~user` is not a home reference; it stays a relative path.
+        assert_eq!(
+            resolve_data_dir_with_home("~other/data", &config, Some(&home)),
+            dir.path().join("~other").join("data")
+        );
+        // Without a home directory the value must not become absolute by
+        // accident; it resolves next to the config like any relative path.
+        assert_eq!(
+            resolve_data_dir_with_home("~/data", &config, None),
+            dir.path().join("~").join("data")
+        );
+        let absolute = dir.path().join("elsewhere");
+        assert_eq!(
+            resolve_data_dir_with_home(&absolute.display().to_string(), &config, Some(&home)),
+            absolute
+        );
+    }
+
+    #[test]
+    fn staged_config_files_are_private_on_unix() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("seo.toml");
+        let temp = stage_temp(&target, "version = 1\n").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = fs::metadata(&temp).unwrap().permissions().mode() & 0o777;
+            assert_eq!(mode, 0o600, "temp config mode was {mode:o}");
+        }
+        fs::remove_file(&temp).unwrap();
+    }
+
+    #[test]
+    fn config_writes_keep_the_existing_file_mode() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("seo.toml");
+        fs::write(&target, "version = 1\n").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(&target, fs::Permissions::from_mode(0o640)).unwrap();
+        }
+        write_atomic_unchecked(&target, "version = 2\n").unwrap();
+        assert_eq!(fs::read_to_string(&target).unwrap(), "version = 2\n");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = fs::metadata(&target).unwrap().permissions().mode() & 0o777;
+            assert_eq!(mode, 0o640, "config mode was {mode:o}");
+        }
+    }
+
+    #[test]
+    fn backups_are_restricted_on_unix() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("seo.toml");
+        fs::write(&target, "version = 1\n").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(&target, fs::Permissions::from_mode(0o644)).unwrap();
+        }
+        write_atomic_unchecked(&target, "version = 2\n").unwrap();
+        let backups = backup_files(&target);
+        assert_eq!(backups.len(), 1);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = fs::metadata(&backups[0]).unwrap().permissions().mode() & 0o777;
+            assert_eq!(mode, 0o600, "backup mode was {mode:o}");
+        }
+        assert_eq!(fs::read_to_string(&backups[0]).unwrap(), "version = 1\n");
+    }
+
+    #[test]
+    fn replacing_a_directory_is_refused_instead_of_moving_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("seo.toml");
+        fs::create_dir(&target).unwrap();
+        fs::write(target.join("keep.txt"), "keep").unwrap();
+        let temp = stage_temp(&dir.path().join("other.toml"), "version = 1\n").unwrap();
+
+        let error = atomic_replace(&temp, &target).unwrap_err();
+        assert_eq!(error.code(), "CONFIG_WRITE");
+        assert!(target.is_dir());
+        assert_eq!(fs::read_to_string(target.join("keep.txt")).unwrap(), "keep");
+        fs::remove_file(&temp).unwrap();
+    }
+
+    #[test]
+    fn a_failed_install_keeps_the_previous_export() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("report.json");
+        fs::write(&target, "{\"ok\":true}\n").unwrap();
+        let temp = dir.path().join("missing.tmp");
+        assert!(install_temp(&temp, &target).is_err());
+        assert_eq!(fs::read_to_string(&target).unwrap(), "{\"ok\":true}\n");
     }
 
     #[test]

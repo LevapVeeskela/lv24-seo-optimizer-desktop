@@ -38,6 +38,34 @@ export function secretSourceKey(source: string | undefined): MessageKey {
 
 export type SecretsState = "idle" | "loading" | "ready" | "error";
 
+export type SecretPresence = "unknown" | "present" | "missing";
+
+/**
+ * Presence must be derived from the provider entry, not from the length of the
+ * whole list: an older shell or a partial `auth status` can omit a provider,
+ * and that is unknown, not "missing".
+ */
+export function secretPresence(
+  entries: readonly AuthProviderStatus[],
+  provider: string,
+): SecretPresence {
+  const entry = entries.find((item) => item.provider === provider);
+  if (!entry) {
+    return "unknown";
+  }
+  return entry.present ? "present" : "missing";
+}
+
+/**
+ * Environment-provided secrets always win over the keychain. The window must
+ * not offer store/remove actions that the engine would ignore.
+ */
+export function isSecretEditable(
+  status: AuthProviderStatus | undefined,
+): boolean {
+  return status?.source !== "env";
+}
+
 /**
  * Compile-time expectations, verified against `src-tauri/src/commands.rs`:
  * `auth_set` and `auth_delete` pipe the value over stdin and never return it.
@@ -64,6 +92,8 @@ export function isUnsupportedCommand(error: unknown, fallbackCode = "AUTH_SET"):
 export interface SecretActionResult {
   ok: boolean;
   unsupported: boolean;
+  /** `auth logout` can succeed while an env/file source still supplies the token. */
+  removed?: boolean;
   message?: string;
   envelope?: Envelope<unknown>;
 }
@@ -112,6 +142,9 @@ export class SecretStore {
     }
     this.state = "loading";
     this.error = null;
+    // Drop the previous workspace's badges immediately; the modal reads
+    // `entries` directly, so keeping them would show stale token presence.
+    this.entries = [];
     const result = await runAuthStatus(configPath);
     if (generation !== this.generation) {
       return false;
@@ -179,9 +212,15 @@ export async function removeSecret(
     }
     const raw = await invoke<RawCliRunResult>("auth_delete", payload);
     const envelope = parseEnvelope<unknown>(raw.envelope ?? raw);
+    const data = envelope.ok
+      ? (envelope.data as { deleted?: unknown } | null)
+      : null;
     return {
       ok: envelope.ok,
       unsupported: false,
+      // `deleted:false` means the keychain entry is gone but env/file still
+      // supplies the token; claiming "removed" would be false.
+      removed: envelope.ok ? data?.deleted !== false : undefined,
       message: envelope.ok ? undefined : envelope.error.message,
       envelope,
     };

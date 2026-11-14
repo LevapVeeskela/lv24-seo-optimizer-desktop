@@ -1,5 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { ConfigReadResult } from "@/entities/config/model/types";
+import type {
+  ConfigPatchOutcome,
+  ConfigReadResult,
+  ConfigValidateResult,
+} from "@/entities/config/model/types";
 
 vi.mock("@/entities/config/api/configApi", () => ({
   configRead: vi.fn(),
@@ -14,13 +18,16 @@ import {
   configRead,
   configValidate,
   configWrite,
+  runDoctor,
 } from "@/entities/config/api/configApi";
 import { ConfigStore } from "@/entities/config/model/ConfigStore";
+import type { DoctorRun } from "@/entities/config/model/types";
 
 const readMock = vi.mocked(configRead);
 const validateMock = vi.mocked(configValidate);
 const patchMock = vi.mocked(configPatch);
 const writeMock = vi.mocked(configWrite);
+const doctorMock = vi.mocked(runDoctor);
 
 const RAW = `[project]
 name = "example"
@@ -264,6 +271,145 @@ describe("ConfigStore", () => {
     expect(store.lastBackup).toBe("C:\\w\\seo.toml.bak-fallback");
     expect(store.usedFullWrite).toBe(true);
     expect(store.dirty).toBe(false);
+  });
+
+  it("clears warnings from the previous workspace when a new load fails", async () => {
+    readMock.mockResolvedValueOnce({
+      ...readResult("C:\\a\\seo.toml", RAW),
+      warnings: ["old workspace warning"],
+    });
+    const store = new ConfigStore();
+    expect(await store.load("C:\\a\\seo.toml")).toBe(true);
+    expect(store.warnings).toEqual(["old workspace warning"]);
+
+    readMock.mockRejectedValueOnce(new Error("file disappeared"));
+    expect(await store.load("C:\\b\\seo.toml")).toBe(false);
+    expect(store.warnings).toEqual([]);
+    expect(store.allWarnings).toEqual([]);
+    expect(store.state).toBe("error");
+  });
+
+  it("ignores doctor results that arrive after a workspace switch", async () => {
+    readMock.mockResolvedValue(readResult("C:\\a\\seo.toml", RAW));
+    let resolveDoctor!: (value: DoctorRun) => void;
+    doctorMock.mockReturnValueOnce(
+      new Promise((resolve) => {
+        resolveDoctor = resolve;
+      }),
+    );
+
+    const store = new ConfigStore();
+    await store.load("C:\\a\\seo.toml");
+    const doctor = store.runDoctor();
+
+    await store.load("C:\\b\\seo.toml");
+    resolveDoctor({
+      ok: true,
+      healthy: true,
+      checks: [{ id: "config", ok: true, detail: "old workspace" }],
+      message: null,
+      meta: {},
+      warnings: [],
+      ranAt: "2026-11-14T12:00:00.000Z",
+    });
+
+    expect(await doctor).toBe(false);
+    expect(store.doctor).toBeNull();
+  });
+
+  it("does not let a stale validation clear a newer validation flag", async () => {
+    readMock.mockResolvedValue(readResult("C:\\w\\seo.toml", RAW));
+    const store = new ConfigStore();
+    await store.load("C:\\w\\seo.toml");
+    store.set("project.name", "first");
+
+    let resolveOld!: (value: ConfigValidateResult) => void;
+    validateMock.mockReturnValueOnce(
+      new Promise((resolve) => {
+        resolveOld = resolve;
+      }),
+    );
+    const oldValidation = store.validate();
+    expect(store.validating).toBe(true);
+
+    // A reload bumps the generation and clears the flag, then a newer
+    // validation starts while the old request is still in flight.
+    await store.load("C:\\w\\seo.toml");
+    store.set("project.name", "second");
+    let resolveNew!: (value: ConfigValidateResult) => void;
+    validateMock.mockReturnValueOnce(
+      new Promise((resolve) => {
+        resolveNew = resolve;
+      }),
+    );
+    const newValidation = store.validate();
+    expect(store.validating).toBe(true);
+
+    resolveOld({
+      path: "C:\\w\\seo.toml",
+      valid: true,
+      syntaxError: null,
+      envelope: { ok: true, data: {}, meta: {}, warnings: [] },
+      exitCode: 0,
+      stderr: "",
+    });
+    expect(await oldValidation).toBe(false);
+    expect(store.validating).toBe(true);
+
+    resolveNew({
+      path: "C:\\w\\seo.toml",
+      valid: true,
+      syntaxError: null,
+      envelope: { ok: true, data: {}, meta: {}, warnings: [] },
+      exitCode: 0,
+      stderr: "",
+    });
+    expect(await newValidation).toBe(true);
+    expect(store.validating).toBe(false);
+  });
+
+  it("does not let a stale save clear a newer save flag", async () => {
+    readMock.mockResolvedValue(readResult("C:\\w\\seo.toml", RAW));
+    const store = new ConfigStore();
+    await store.load("C:\\w\\seo.toml");
+    store.set("project.name", "first");
+
+    let resolveOld!: (value: ConfigPatchOutcome) => void;
+    patchMock.mockReturnValueOnce(
+      new Promise((resolve) => {
+        resolveOld = resolve;
+      }),
+    );
+    const oldSave = store.save();
+    expect(store.saving).toBe(true);
+
+    await store.load("C:\\w\\seo.toml");
+    store.set("project.name", "second");
+    let resolveNew!: (value: ConfigPatchOutcome) => void;
+    patchMock.mockReturnValueOnce(
+      new Promise((resolve) => {
+        resolveNew = resolve;
+      }),
+    );
+    const newSave = store.save();
+    expect(store.saving).toBe(true);
+
+    const outcome = (name: string): ConfigPatchOutcome => ({
+      path: "C:\\w\\seo.toml",
+      raw: RAW.replace('name = "example"', `name = "${name}"`),
+      backup: null,
+      bytes: 1,
+      config: { project: { name } },
+      warnings: [],
+      engineError: null,
+    });
+    resolveOld(outcome("first"));
+    expect(await oldSave).toBe(false);
+    expect(store.saving).toBe(true);
+
+    resolveNew(outcome("second"));
+    expect(await newSave).toBe(true);
+    expect(store.saving).toBe(false);
   });
 
   it("keeps the draft when the patch fails", async () => {

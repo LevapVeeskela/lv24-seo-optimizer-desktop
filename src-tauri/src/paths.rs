@@ -39,7 +39,9 @@ impl AppPaths {
             .map_err(|err| AppError::new("PATHS", format!("cannot resolve app log dir: {err}")))?;
         let export_dir = data_dir.join("exports");
         for dir in [&config_dir, &data_dir, &log_dir, &export_dir] {
-            fs::create_dir_all(dir)?;
+            fs::create_dir_all(dir).map_err(|err| {
+                AppError::new("PATHS", format!("cannot create {}: {err}", dir.display()))
+            })?;
         }
         Ok(Self {
             config_dir,
@@ -74,9 +76,10 @@ pub fn engine_exe_name() -> &'static str {
 /// Resolve the CLI without invoking a shell.
 ///
 /// Order: `LV24_SEO_BIN` (absolute only), bundled resource
-/// `engine/lv24-seo/lv24-seo[.exe]`, sibling `lv24-seo/lv24-seo[.exe]`, then
-/// PATH only when `LV24_SEO_ALLOW_PATH_ENGINE=1`. Nothing is downloaded
-/// automatically.
+/// `engine/lv24-seo/lv24-seo[.exe]`, flat resource `lv24-seo/lv24-seo[.exe]`,
+/// a Linux AppImage `usr/lib/<app>/engine/...` tree, sibling
+/// `lv24-seo/lv24-seo[.exe]`, then PATH only when `LV24_SEO_ALLOW_PATH_ENGINE=1`.
+/// Nothing is downloaded automatically.
 pub fn locate_engine(app: &AppHandle) -> AppResult<EngineLocation> {
     let exe_name = engine_exe_name();
 
@@ -117,18 +120,36 @@ pub fn locate_engine(app: &AppHandle) -> AppResult<EngineLocation> {
     }
 
     let mut candidates: Vec<(PathBuf, &'static str)> = Vec::new();
-    if let Ok(resource_dir) = app.path().resource_dir() {
-        candidates.push((
-            resource_dir
-                .join(ENGINE_DIR)
-                .join(ENGINE_FOLDER)
-                .join(exe_name),
-            "bundled",
-        ));
-        candidates.push((
-            resource_dir.join(ENGINE_FOLDER).join(exe_name),
-            "bundled-flat",
-        ));
+    match app.path().resource_dir() {
+        Ok(resource_dir) => {
+            candidates.push((
+                resource_dir
+                    .join(ENGINE_DIR)
+                    .join(ENGINE_FOLDER)
+                    .join(exe_name),
+                "bundled",
+            ));
+            candidates.push((
+                resource_dir.join(ENGINE_FOLDER).join(exe_name),
+                "bundled-flat",
+            ));
+        }
+        Err(err) => {
+            // A missing resource dir is not fatal (a portable/sibling layout
+            // still works), but the reason must not disappear: it explains why
+            // the bundled candidates are absent from the error details.
+            log::warn!("cannot resolve the app resource dir: {err}");
+        }
+    }
+    #[cfg(target_os = "linux")]
+    {
+        if let Some(appdir) = env::var_os("APPDIR").map(PathBuf::from) {
+            if appdir.is_absolute() {
+                for path in appdir_candidates(&appdir, exe_name) {
+                    candidates.push((path, "appimage"));
+                }
+            }
+        }
     }
     if let Ok(exe) = env::current_exe() {
         if let Some(parent) = exe.parent() {
@@ -136,13 +157,9 @@ pub fn locate_engine(app: &AppHandle) -> AppResult<EngineLocation> {
         }
     }
 
-    for (candidate, source) in &candidates {
-        if candidate.is_file() && is_executable(candidate) {
-            return Ok(EngineLocation {
-                path: candidate.clone(),
-                source: (*source).to_string(),
-            });
-        }
+    let mut blocked: Vec<(PathBuf, &'static str)> = Vec::new();
+    if let Some(location) = pick_engine(&candidates, &mut blocked) {
+        return Ok(location);
     }
 
     let path_fallback = flag_enabled(env_nonempty(ALLOW_PATH_ENGINE_ENV).as_deref());
@@ -155,27 +172,63 @@ pub fn locate_engine(app: &AppHandle) -> AppResult<EngineLocation> {
         }
     }
 
-    Err(AppError::new(
-        "ENGINE_NOT_FOUND",
-        format!(
-            "lv24-seo engine not found; set {ENGINE_ENV} to an absolute executable path, bundle \
-             {ENGINE_DIR}/{ENGINE_FOLDER}/{exe_name}, install a sibling {ENGINE_FOLDER}/{exe_name}, \
-             or set {ALLOW_PATH_ENGINE_ENV}=1 to allow a PATH lookup"
-        ),
+    let mut message = format!(
+        "lv24-seo engine not found; set {ENGINE_ENV} to an absolute executable path, bundle \
+         {ENGINE_DIR}/{ENGINE_FOLDER}/{exe_name}, install a sibling {ENGINE_FOLDER}/{exe_name}, \
+         or set {ALLOW_PATH_ENGINE_ENV}=1 to allow a PATH lookup"
+    );
+    if let Some((path, _)) = blocked.first() {
+        // A portable archive extracted without the executable bit must not look
+        // like "no engine at all".
+        message.push_str(&format!(
+            "; {} exists but is not executable",
+            path.display()
+        ));
+    }
+    Err(
+        AppError::new("ENGINE_NOT_FOUND", message).with_details(serde_json::json!({
+            "candidates": candidates
+                .iter()
+                .map(|(path, source)| serde_json::json!({
+                    "path": path.display().to_string(),
+                    "source": source,
+                }))
+                .collect::<Vec<_>>(),
+            "notExecutable": blocked
+                .iter()
+                .map(|(path, source)| serde_json::json!({
+                    "path": path.display().to_string(),
+                    "source": source,
+                }))
+                .collect::<Vec<_>>(),
+            "pathFallback": {
+                "allowed": path_fallback,
+                "env": ALLOW_PATH_ENGINE_ENV,
+            },
+        })),
     )
-    .with_details(serde_json::json!({
-        "candidates": candidates
-            .iter()
-            .map(|(path, source)| serde_json::json!({
-                "path": path.display().to_string(),
-                "source": source,
-            }))
-            .collect::<Vec<_>>(),
-        "pathFallback": {
-            "allowed": path_fallback,
-            "env": ALLOW_PATH_ENGINE_ENV,
-        },
-    })))
+}
+
+/// First candidate that exists and is executable. Candidates that exist but
+/// lack the executable bit are reported to the caller so the final error can
+/// name them instead of pretending nothing was found.
+fn pick_engine(
+    candidates: &[(PathBuf, &'static str)],
+    blocked: &mut Vec<(PathBuf, &'static str)>,
+) -> Option<EngineLocation> {
+    for (candidate, source) in candidates {
+        if !candidate.is_file() {
+            continue;
+        }
+        if is_executable(candidate) {
+            return Some(EngineLocation {
+                path: candidate.clone(),
+                source: (*source).to_string(),
+            });
+        }
+        blocked.push((candidate.clone(), source));
+    }
+    None
 }
 
 fn flag_enabled(value: Option<&str>) -> bool {
@@ -183,9 +236,10 @@ fn flag_enabled(value: Option<&str>) -> bool {
 }
 
 fn env_nonempty(name: &str) -> Option<String> {
-    env::var(name)
-        .ok()
-        .map(|value| value.trim().trim_matches('"').to_string())
+    // `var_os` keeps a non-UTF-8 value visible: `var` would report "not set"
+    // and silently fall back to the bundled engine.
+    env::var_os(name)
+        .map(|value| value.to_string_lossy().trim().trim_matches('"').to_string())
         .filter(|value| !value.is_empty())
 }
 
@@ -195,13 +249,63 @@ fn find_on_path(name: &str) -> Option<PathBuf> {
         if dir.as_os_str().is_empty() {
             continue;
         }
-        let dir = PathBuf::from(dir.to_string_lossy().trim_matches('"').to_string());
-        let candidate = dir.join(name);
-        if candidate.is_file() && is_executable(&candidate) {
-            return Some(candidate);
+        // Try the entry as-is first: a non-UTF-8 PATH entry must not be
+        // corrupted by a lossy string round-trip.
+        if let Some(found) = engine_in(&dir, name) {
+            return Some(found);
+        }
+        if let Some(unquoted) = unquote_path(&dir) {
+            if let Some(found) = engine_in(&unquoted, name) {
+                return Some(found);
+            }
         }
     }
     None
+}
+
+fn engine_in(dir: &Path, name: &str) -> Option<PathBuf> {
+    let candidate = dir.join(name);
+    (candidate.is_file() && is_executable(&candidate)).then_some(candidate)
+}
+
+/// A PATH entry is sometimes stored as `"C:\Program Files\LV24"`; strip the
+/// quotes only when the entry really is valid UTF-8.
+fn unquote_path(dir: &Path) -> Option<PathBuf> {
+    let raw = dir.to_str()?;
+    let trimmed = raw.trim_matches('"');
+    (trimmed != raw).then(|| PathBuf::from(trimmed))
+}
+
+/// Engine trees inside a mounted Linux AppImage. `resource_dir()` normally
+/// points at `<APPDIR>/usr/lib/<product>`, but when the inner binary is started
+/// directly (or the product directory name differs) the engine still sits one
+/// level below `usr/lib`. Scanning that single level keeps the layout
+/// independent of the bundle's product name.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+fn appdir_candidates(appdir: &Path, exe_name: &str) -> Vec<PathBuf> {
+    let mut found = Vec::new();
+    let entries = match fs::read_dir(appdir.join("usr").join("lib")) {
+        Ok(entries) => entries,
+        Err(err) => {
+            log::debug!(
+                "no AppImage engine directory under {}: {err}",
+                appdir.display()
+            );
+            return found;
+        }
+    };
+    for entry in entries.filter_map(Result::ok) {
+        let base = entry.path();
+        if !base.is_dir() {
+            continue;
+        }
+        let candidate = base.join(ENGINE_DIR).join(ENGINE_FOLDER).join(exe_name);
+        if candidate.is_file() {
+            found.push(candidate);
+        }
+    }
+    found.sort();
+    found
 }
 
 #[cfg(unix)]
@@ -298,23 +402,49 @@ pub fn validate_absolute_path(raw: &str, label: &str) -> AppResult<PathBuf> {
         ));
     }
     #[cfg(windows)]
-    if is_reserved_windows_name(name) {
-        return Err(AppError::new(
-            "INVALID_PATH",
-            format!("{label} path uses a reserved Windows file name: {name}"),
-        ));
-    }
-    #[cfg(windows)]
-    if name
-        .chars()
-        .any(|ch| matches!(ch, ':' | '*' | '?' | '<' | '>' | '|' | '"'))
-    {
-        return Err(AppError::new(
-            "INVALID_PATH",
-            format!("{label} path contains characters invalid on Windows: {name}"),
-        ));
-    }
+    validate_windows_components(&normalized, label)?;
     Ok(normalized)
+}
+
+/// Windows silently strips trailing dots and spaces and maps reserved device
+/// names to devices. Checking only the last component would let
+/// `C:\CON\seo.toml` or `C:\tmp. \seo.toml` through, so every component is
+/// checked before the path is used.
+#[cfg(windows)]
+fn validate_windows_components(path: &Path, label: &str) -> AppResult<()> {
+    for component in path.components() {
+        let Component::Normal(raw) = component else {
+            continue;
+        };
+        let name = raw.to_str().ok_or_else(|| {
+            AppError::new(
+                "INVALID_PATH",
+                format!("{label} path has a non-UTF-8 component"),
+            )
+        })?;
+        if name.ends_with(' ') || name.ends_with('.') {
+            return Err(AppError::new(
+                "INVALID_PATH",
+                format!("{label} path has a component ending in a space or dot: {name:?}"),
+            ));
+        }
+        if is_reserved_windows_name(name) {
+            return Err(AppError::new(
+                "INVALID_PATH",
+                format!("{label} path uses a reserved Windows file name: {name}"),
+            ));
+        }
+        if name
+            .chars()
+            .any(|ch| matches!(ch, ':' | '*' | '?' | '<' | '>' | '|' | '"'))
+        {
+            return Err(AppError::new(
+                "INVALID_PATH",
+                format!("{label} path contains characters invalid on Windows: {name}"),
+            ));
+        }
+    }
+    Ok(())
 }
 
 #[cfg(windows)]
@@ -325,7 +455,10 @@ fn is_reserved_windows_name(name: &str) -> bool {
         .unwrap_or("")
         .trim_end_matches(' ')
         .to_ascii_uppercase();
-    if matches!(stem.as_str(), "CON" | "PRN" | "AUX" | "NUL") {
+    if matches!(
+        stem.as_str(),
+        "CON" | "PRN" | "AUX" | "NUL" | "CONIN$" | "CONOUT$" | "CLOCK$"
+    ) {
         return true;
     }
     stem.len() == 4
@@ -374,18 +507,41 @@ pub fn ensure_within_roots(path: &Path, roots: &[PathBuf]) -> AppResult<PathBuf>
             format!("cannot resolve {}: {err}", path.display()),
         )
     })?;
-    for root in roots {
-        let Ok(canonical_root) = fs::canonicalize(root) else {
-            continue;
-        };
-        if canonical_root.parent().is_none() {
-            continue;
-        }
+    for canonical_root in canonical_roots(roots) {
         if path_starts_with(&canonical, &canonical_root) {
             return Ok(canonical);
         }
     }
-    Err(AppError::new(
+    Err(outside_roots(path, roots))
+}
+
+/// Canonical, real-directory roots. A root that cannot be resolved (deleted
+/// project folder, unmounted share) or that is not a directory is skipped, but
+/// the reason is logged instead of silently shrinking the allow-list.
+fn canonical_roots(roots: &[PathBuf]) -> Vec<PathBuf> {
+    let mut canonical = Vec::with_capacity(roots.len());
+    for root in roots {
+        match fs::canonicalize(root) {
+            Ok(path) => {
+                if !path.is_dir() {
+                    log::warn!("ignoring non-directory allow-list root {}", root.display());
+                } else if path.parent().is_none() {
+                    log::warn!(
+                        "ignoring filesystem root {} as an allow-list root",
+                        root.display()
+                    );
+                } else {
+                    canonical.push(path);
+                }
+            }
+            Err(err) => log::warn!("cannot resolve allow-list root {}: {err}", root.display()),
+        }
+    }
+    canonical
+}
+
+fn outside_roots(path: &Path, roots: &[PathBuf]) -> AppError {
+    AppError::new(
         "PATH_NOT_ALLOWED",
         format!(
             "{} is outside the approved config/data directories",
@@ -395,7 +551,7 @@ pub fn ensure_within_roots(path: &Path, roots: &[PathBuf]) -> AppResult<PathBuf>
     .with_details(serde_json::json!({
         "path": path.display().to_string(),
         "roots": roots.iter().map(|root| root.display().to_string()).collect::<Vec<_>>(),
-    })))
+    }))
 }
 
 fn path_starts_with(path: &Path, root: &Path) -> bool {
@@ -439,13 +595,7 @@ pub fn ensure_write_within_roots(path: &Path, roots: &[PathBuf]) -> AppResult<Pa
             format!("cannot resolve {}: {err}", parent.display()),
         )
     })?;
-    for root in roots {
-        let Ok(canonical_root) = fs::canonicalize(root) else {
-            continue;
-        };
-        if canonical_root.parent().is_none() {
-            continue;
-        }
+    for canonical_root in canonical_roots(roots) {
         if path_starts_with(&canonical_parent, &canonical_root) {
             let name = path
                 .file_name()
@@ -453,17 +603,7 @@ pub fn ensure_write_within_roots(path: &Path, roots: &[PathBuf]) -> AppResult<Pa
             return Ok(canonical_parent.join(name));
         }
     }
-    Err(AppError::new(
-        "PATH_NOT_ALLOWED",
-        format!(
-            "{} is outside the approved config/data directories",
-            path.display()
-        ),
-    )
-    .with_details(serde_json::json!({
-        "path": path.display().to_string(),
-        "roots": roots.iter().map(|root| root.display().to_string()).collect::<Vec<_>>(),
-    })))
+    Err(outside_roots(path, roots))
 }
 
 /// Like [`ensure_write_within_roots`], but for a directory that may not exist
@@ -508,28 +648,12 @@ pub fn ensure_dir_within_roots(path: &Path, roots: &[PathBuf]) -> AppResult<Path
             .ok_or_else(|| AppError::new("INVALID_PATH", "path has no file name"))?;
         canonical_parent.join(name)
     };
-    for root in roots {
-        let Ok(canonical_root) = fs::canonicalize(root) else {
-            continue;
-        };
-        if canonical_root.parent().is_none() {
-            continue;
-        }
+    for canonical_root in canonical_roots(roots) {
         if path_starts_with(&canonical, &canonical_root) {
             return Ok(canonical);
         }
     }
-    Err(AppError::new(
-        "PATH_NOT_ALLOWED",
-        format!(
-            "{} is outside the approved config/data directories",
-            path.display()
-        ),
-    )
-    .with_details(serde_json::json!({
-        "path": path.display().to_string(),
-        "roots": roots.iter().map(|root| root.display().to_string()).collect::<Vec<_>>(),
-    })))
+    Err(outside_roots(path, roots))
 }
 
 #[cfg(test)]
@@ -578,10 +702,30 @@ mod tests {
     #[test]
     fn reserved_windows_names_are_rejected() {
         let dir = tempfile::tempdir().unwrap();
-        for name in ["CON.toml", "NUL.toml", "COM1.toml", "LPT9.toml"] {
+        for name in [
+            "CON.toml",
+            "NUL.toml",
+            "COM1.toml",
+            "LPT9.toml",
+            "COM0.toml",
+            "conin$.toml",
+            "CONOUT$.toml",
+            "CLOCK$.toml",
+        ] {
             let path = dir.path().join(name);
             let error = validate_config_path(&path.display().to_string()).unwrap_err();
             assert_eq!(error.code(), "INVALID_PATH", "{name}");
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn reserved_names_and_trailing_dots_in_parent_components_are_rejected() {
+        let dir = tempfile::tempdir().unwrap();
+        for parent in ["CON", "NUL", "aux", "tmp.", "tmp "] {
+            let path = dir.path().join(parent).join("seo.toml");
+            let error = validate_config_path(&path.display().to_string()).unwrap_err();
+            assert_eq!(error.code(), "INVALID_PATH", "{parent:?}");
         }
     }
 
@@ -663,5 +807,168 @@ mod tests {
         assert!(!flag_enabled(Some("")));
         assert!(!flag_enabled(None));
         assert_eq!(ALLOW_PATH_ENGINE_ENV, "LV24_SEO_ALLOW_PATH_ENGINE");
+    }
+
+    #[test]
+    fn a_sibling_directory_with_the_root_as_a_prefix_is_not_inside() {
+        let parent = tempfile::tempdir().unwrap();
+        let root = parent.path().join("data");
+        let sibling = parent.path().join("data-evil");
+        fs::create_dir(&root).unwrap();
+        fs::create_dir(&sibling).unwrap();
+        let inside = root.join("report.html");
+        let escaped = sibling.join("report.html");
+        fs::write(&inside, "ok").unwrap();
+        fs::write(&escaped, "no").unwrap();
+
+        assert!(ensure_within_roots(&inside, std::slice::from_ref(&root)).is_ok());
+        let error = ensure_within_roots(&escaped, std::slice::from_ref(&root)).unwrap_err();
+        assert_eq!(error.code(), "PATH_NOT_ALLOWED");
+    }
+
+    #[test]
+    fn a_file_cannot_be_an_allow_list_root() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("data");
+        fs::create_dir(&root).unwrap();
+        let file_root = dir.path().join("not-a-dir");
+        fs::write(&file_root, "x").unwrap();
+        let target = dir.path().join("report.html");
+        fs::write(&target, "x").unwrap();
+
+        let roots = vec![file_root, root];
+        // The invalid root is skipped, the real directory root still applies.
+        assert!(ensure_within_roots(&target, &roots).is_err());
+        let inside = roots[1].join("report.html");
+        fs::write(&inside, "x").unwrap();
+        assert!(ensure_within_roots(&inside, &roots).is_ok());
+    }
+
+    #[test]
+    fn missing_roots_do_not_grant_access() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("report.html");
+        fs::write(&target, "x").unwrap();
+        let missing = dir.path().join("gone");
+        let error = ensure_within_roots(&target, &[missing]).unwrap_err();
+        assert_eq!(error.code(), "PATH_NOT_ALLOWED");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_symlinked_parent_cannot_escape_the_write_root() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("exports");
+        let outside = dir.path().join("outside");
+        fs::create_dir(&root).unwrap();
+        fs::create_dir(&outside).unwrap();
+        std::os::unix::fs::symlink(&outside, root.join("link")).unwrap();
+
+        let target = root.join("link").join("report.json");
+        let error = ensure_write_within_roots(&target, &[root]).unwrap_err();
+        assert_eq!(error.code(), "PATH_NOT_ALLOWED");
+    }
+
+    #[test]
+    fn paths_with_spaces_and_unicode_are_accepted() {
+        let dir = tempfile::tempdir().unwrap();
+        let parent = dir.path().join("Мой проект").join("with space");
+        fs::create_dir_all(&parent).unwrap();
+        let path = parent.join("seo — копия.toml");
+        fs::write(&path, "version = 1\n").unwrap();
+
+        let validated = validate_config_path(&path.display().to_string()).unwrap();
+        assert_eq!(validated, path);
+        assert_eq!(
+            normalize_absolute(&path).unwrap(),
+            path,
+            "normalization must not touch spaces or non-ASCII characters"
+        );
+    }
+
+    #[test]
+    fn quoted_path_entries_are_unquoted_without_loss() {
+        assert_eq!(
+            unquote_path(Path::new("\"C:\\Program Files\\LV24\"")),
+            Some(PathBuf::from("C:\\Program Files\\LV24"))
+        );
+        assert_eq!(unquote_path(Path::new("/opt/lv24")), None);
+    }
+
+    #[test]
+    fn the_first_executable_candidate_wins() {
+        let dir = tempfile::tempdir().unwrap();
+        let bundled = dir.path().join("bundled").join(engine_exe_name());
+        fs::create_dir_all(bundled.parent().unwrap()).unwrap();
+        fs::write(&bundled, "binary").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(&bundled, fs::Permissions::from_mode(0o755)).unwrap();
+        }
+
+        let candidates = vec![
+            (dir.path().join("missing").join(engine_exe_name()), "flat"),
+            (bundled.clone(), "bundled"),
+        ];
+        let mut blocked = Vec::new();
+        let found = pick_engine(&candidates, &mut blocked).unwrap();
+        assert_eq!(found.path, bundled);
+        assert_eq!(found.source, "bundled");
+        assert!(blocked.is_empty());
+    }
+
+    #[test]
+    fn an_existing_but_non_executable_engine_is_reported_as_blocked() {
+        let dir = tempfile::tempdir().unwrap();
+        let first = dir.path().join("first");
+        let second = dir.path().join("second");
+        fs::create_dir_all(&first).unwrap();
+        fs::create_dir_all(&second).unwrap();
+
+        // No `.exe` extension on Windows, no executable bit on Unix.
+        let name = if cfg!(windows) {
+            "lv24-seo.txt"
+        } else {
+            "lv24-seo"
+        };
+        let not_executable = second.join(name);
+        fs::write(&not_executable, "binary").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(&not_executable, fs::Permissions::from_mode(0o644)).unwrap();
+        }
+
+        let candidates = vec![
+            (first.join(engine_exe_name()), "bundled"),
+            (not_executable.clone(), "sibling"),
+        ];
+        let mut blocked = Vec::new();
+        assert!(pick_engine(&candidates, &mut blocked).is_none());
+        assert_eq!(blocked.len(), 1);
+        assert_eq!(blocked[0].0, not_executable);
+        assert_eq!(blocked[0].1, "sibling");
+    }
+
+    #[test]
+    fn appimage_layout_finds_the_engine_under_usr_lib() {
+        let dir = tempfile::tempdir().unwrap();
+        let appdir = dir.path().join("squashfs-root");
+        let engine = appdir
+            .join("usr")
+            .join("lib")
+            .join("LV24 SEO Optimizer")
+            .join(ENGINE_DIR)
+            .join(ENGINE_FOLDER);
+        fs::create_dir_all(&engine).unwrap();
+        let exe = engine.join(engine_exe_name());
+        fs::write(&exe, "binary").unwrap();
+
+        // An unrelated directory without an engine must be ignored.
+        fs::create_dir_all(appdir.join("usr").join("lib").join("other")).unwrap();
+
+        assert_eq!(appdir_candidates(&appdir, engine_exe_name()), vec![exe]);
+        assert!(appdir_candidates(&dir.path().join("missing"), engine_exe_name()).is_empty());
     }
 }

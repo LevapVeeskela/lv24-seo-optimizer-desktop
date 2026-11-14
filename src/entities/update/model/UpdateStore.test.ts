@@ -1,10 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@tauri-apps/api/app", () => ({ getVersion: vi.fn() }));
+vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
 vi.mock("@tauri-apps/plugin-process", () => ({ relaunch: vi.fn() }));
 vi.mock("@tauri-apps/plugin-updater", () => ({ check: vi.fn() }));
 
 import { getVersion } from "@tauri-apps/api/app";
+import { invoke } from "@tauri-apps/api/core";
 import { relaunch } from "@tauri-apps/plugin-process";
 import {
   check,
@@ -14,6 +16,7 @@ import {
 import { UpdateStore } from "./UpdateStore";
 
 const getVersionMock = vi.mocked(getVersion);
+const invokeMock = vi.mocked(invoke);
 const checkMock = vi.mocked(check);
 const relaunchMock = vi.mocked(relaunch);
 
@@ -37,6 +40,7 @@ describe("UpdateStore", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     getVersionMock.mockResolvedValue("0.1.0");
+    invokeMock.mockResolvedValue(0);
     relaunchMock.mockResolvedValue(undefined);
   });
 
@@ -166,6 +170,60 @@ describe("UpdateStore", () => {
     expect(relaunchMock).toHaveBeenCalledTimes(1);
   });
 
+  it("stops engine sidecars before downloading the update", async () => {
+    const order: string[] = [];
+    invokeMock.mockImplementation(async (command) => {
+      order.push(command);
+      return 0;
+    });
+    const update = fakeUpdate();
+    update.downloadAndInstall.mockImplementation(async () => {
+      order.push("downloadAndInstall");
+    });
+    checkMock.mockResolvedValue(asUpdate(update));
+    const store = new UpdateStore();
+    await store.check();
+
+    await expect(store.install()).resolves.toBe(true);
+
+    // A running sidecar keeps the installed engine locked, so the shell must
+    // stop it before the installer touches any file.
+    expect(invokeMock).toHaveBeenCalledWith("prepare_update");
+    expect(order).toEqual(["prepare_update", "downloadAndInstall"]);
+  });
+
+  it("does not stop engine sidecars on a mere check", async () => {
+    checkMock.mockResolvedValue(asUpdate(fakeUpdate()));
+    const store = new UpdateStore();
+
+    await store.check();
+    await store.check({ silent: true });
+
+    expect(invokeMock).not.toHaveBeenCalled();
+    expect(store.state).toBe("available");
+  });
+
+  it("blocks the install when the engine sidecar cannot be stopped", async () => {
+    const update = fakeUpdate();
+    checkMock.mockResolvedValue(asUpdate(update));
+    invokeMock.mockRejectedValue({
+      code: "ENGINE_STOP_FAILED",
+      message: "engine sidecar 4242 is still running; close it before installing",
+      details: null,
+    });
+    const store = new UpdateStore();
+    await store.check();
+
+    await expect(store.install()).resolves.toBe(false);
+
+    expect(store.state).toBe("error");
+    expect(store.error?.code).toBe("UPDATE_ENGINE_BUSY");
+    expect(store.error?.message).toContain("still running");
+    expect(store.progress).toBeNull();
+    expect(update.downloadAndInstall).not.toHaveBeenCalled();
+    expect(relaunchMock).not.toHaveBeenCalled();
+  });
+
   it("keeps an unknown download size indeterminate", async () => {
     const update = fakeUpdate();
     checkMock.mockResolvedValue(asUpdate(update));
@@ -232,6 +290,10 @@ describe("UpdateStore", () => {
 
     const installing = store.install();
     expect(store.state).toBe("downloading");
+    // The sidecar cleanup is awaited before the download starts.
+    await vi.waitFor(() =>
+      expect(update.downloadAndInstall).toHaveBeenCalledTimes(1),
+    );
 
     store.dismiss();
     expect(store.state).toBe("idle");

@@ -6,7 +6,10 @@ vi.mock("@/shared/desktop/files", () => ({ writeTextFile: vi.fn() }));
 import { save } from "@tauri-apps/plugin-dialog";
 import { writeTextFile } from "@/shared/desktop/files";
 import type { Recommendation } from "@/entities/recommendation/model/types";
-import { exportRecommendationPrompt } from "./actions";
+import {
+  ensureMarkdownPath,
+  exportRecommendationPrompt,
+} from "./actions";
 
 const saveMock = vi.mocked(save);
 const writeMock = vi.mocked(writeTextFile);
@@ -38,7 +41,7 @@ describe("exportRecommendationPrompt", () => {
       exportRecommendationPrompt(recommendation, "https://example.com", null, {
         defaultDir: "C:\\exports",
       }),
-    ).resolves.toBe("exported");
+    ).resolves.toEqual({ status: "exported" });
 
     expect(saveMock).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -73,18 +76,31 @@ describe("exportRecommendationPrompt", () => {
   it("treats a closed dialog as canceled, not as a failure", async () => {
     saveMock.mockResolvedValue(null);
 
-    await expect(exportRecommendationPrompt(recommendation, null, null)).resolves.toBe(
-      "canceled",
+    await expect(exportRecommendationPrompt(recommendation, null, null)).resolves.toEqual(
+      { status: "canceled" },
     );
     expect(writeMock).not.toHaveBeenCalled();
   });
 
-  it("reports a rejected write as failed", async () => {
+  it("reports a rejected write with the shell's actionable error", async () => {
     saveMock.mockResolvedValue("C:\\Windows\\task.md");
-    writeMock.mockRejectedValue(new Error("PATH_NOT_ALLOWED"));
+    writeMock.mockRejectedValue({
+      code: "PATH_NOT_ALLOWED",
+      message: "export is outside the export root",
+    });
 
-    await expect(
-      exportRecommendationPrompt(recommendation, null, null),
-    ).resolves.toBe("failed");
+    const result = await exportRecommendationPrompt(recommendation, null, null);
+
+    expect(result.status).toBe("failed");
+    expect(result.error?.code).toBe("PATH_NOT_ALLOWED");
+    expect(result.error?.message).toContain("export root");
+  });
+
+  it("adds the Markdown extension when the native dialog returns a bare path", () => {
+    expect(ensureMarkdownPath("C:\\exports\\task")).toBe("C:\\exports\\task.md");
+    expect(ensureMarkdownPath("/home/user/task")).toBe("/home/user/task.md");
+    expect(ensureMarkdownPath("C:\\exports\\task.md")).toBe("C:\\exports\\task.md");
+    expect(ensureMarkdownPath("C:\\exports\\task.MD")).toBe("C:\\exports\\task.MD");
+    expect(ensureMarkdownPath("")).toBe("");
   });
 });

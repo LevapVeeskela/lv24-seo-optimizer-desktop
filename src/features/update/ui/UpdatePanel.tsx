@@ -117,7 +117,8 @@ export const UpdatePanel = observer(function UpdatePanel() {
   );
 
   const errorTitle =
-    update.error?.code === "UPDATE_INSTALL"
+    update.error?.code === "UPDATE_INSTALL" ||
+    update.error?.code === "UPDATE_ENGINE_BUSY"
       ? t("update.installError")
       : t("update.checkError");
 
