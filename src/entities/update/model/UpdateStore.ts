@@ -13,6 +13,30 @@ import type { AvailableUpdate, UpdateState } from "./types";
 /** The updater check must not hang the startup probe indefinitely. */
 export const UPDATE_CHECK_TIMEOUT_MS = 30_000;
 
+/** Persisted across restarts so a bad artifact is not retried after relaunch. */
+const BLOCKED_VERSION_KEY = "lv24-seo.update.blockedVersion";
+
+function readBlockedVersion(): string | null {
+  try {
+    return globalThis.localStorage?.getItem(BLOCKED_VERSION_KEY) ?? null;
+  } catch {
+    return null;
+  }
+}
+
+function writeBlockedVersion(version: string | null): void {
+  try {
+    if (version) {
+      globalThis.localStorage?.setItem(BLOCKED_VERSION_KEY, version);
+    } else {
+      globalThis.localStorage?.removeItem(BLOCKED_VERSION_KEY);
+    }
+  } catch {
+    // Storage can be unavailable in a locked-down webview; the in-memory block
+    // still protects the current session.
+  }
+}
+
 /**
  * Wraps the Tauri updater for the whole window.
  *
@@ -43,6 +67,8 @@ export class UpdateStore {
   private generation = 0;
 
   constructor() {
+    this.blockedVersion = readBlockedVersion();
+    this.securityBlocked = this.blockedVersion !== null;
     makeAutoObservable<UpdateStore, "pending" | "generation">(
       this,
       { pending: false, generation: false },
@@ -170,6 +196,7 @@ export class UpdateStore {
         this.securityBlocked = true;
         this.blockedVersion =
           this.available?.version ?? this.pending?.version ?? null;
+        writeBlockedVersion(this.blockedVersion);
         this.state = "error";
         return false;
       }
@@ -238,6 +265,7 @@ export class UpdateStore {
         this.securityBlocked = true;
         this.blockedVersion =
           this.pending?.version ?? this.available?.version ?? this.blockedVersion;
+        writeBlockedVersion(this.blockedVersion);
       } else {
         this.error = toAppError(error, "UPDATE_INSTALL");
       }
@@ -281,6 +309,7 @@ export class UpdateStore {
   private clearSecurityBlock(): void {
     this.securityBlocked = false;
     this.blockedVersion = null;
+    writeBlockedVersion(null);
   }
 
   private async loadCurrentVersion(): Promise<string | null> {

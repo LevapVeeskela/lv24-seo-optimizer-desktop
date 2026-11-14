@@ -333,6 +333,38 @@ describe("UpdateStore", () => {
     expect(update.downloadAndInstall).toHaveBeenCalledTimes(1);
   });
 
+  it("persists a signature failure across store instances", async () => {
+    const data = new Map<string, string>();
+    const storage = {
+      getItem: (key: string) => data.get(key) ?? null,
+      setItem: (key: string, value: string) => data.set(key, value),
+      removeItem: (key: string) => data.delete(key),
+    };
+    vi.stubGlobal("localStorage", storage);
+    try {
+      const update = fakeUpdate("0.2.1");
+      checkMock.mockResolvedValue(asUpdate(update));
+      update.downloadAndInstall.mockRejectedValue(
+        new Error("Signature verification failed"),
+      );
+      const store = new UpdateStore();
+      await store.check();
+      await store.install();
+      expect(store.blockedVersion).toBe("0.2.1");
+
+      const restarted = new UpdateStore();
+      expect(restarted.securityBlocked).toBe(true);
+      expect(restarted.blockedVersion).toBe("0.2.1");
+
+      checkMock.mockResolvedValue(asUpdate(fakeUpdate("0.2.2")));
+      await expect(restarted.check()).resolves.toBe(true);
+      expect(restarted.securityBlocked).toBe(false);
+      expect(data.size).toBe(0);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it("keeps the security block after dismiss and clears it for a new version", async () => {
     const update = fakeUpdate();
     checkMock.mockResolvedValue(asUpdate(update));
