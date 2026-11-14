@@ -1,5 +1,5 @@
 {
-  "$comment": "Generated from lv24-seo 0.5.1 SeoConfig.model_json_schema(). Do not edit by hand.",
+  "$comment": "Generated from lv24-seo 0.5.2 SeoConfig.model_json_schema(). Do not edit by hand.",
   "$defs": {
     "BingConfig": {
       "additionalProperties": false,
@@ -286,7 +286,7 @@
     },
     "StorageConfig": {
       "additionalProperties": false,
-      "description": "Local data directory and raw-response retention.",
+      "description": "Local data directory and raw-response retention.\n\nA relative ``data_dir`` written in a config file is anchored to that file's directory by\n:func:`load_config`; the built-in default and ``LV24_SEO_DATA_DIR`` stay relative to the\nprocess working directory.",
       "properties": {
         "data_dir": {
           "default": "data",

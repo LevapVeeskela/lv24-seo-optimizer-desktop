@@ -36,8 +36,12 @@
   },
   "meta": {
     "config": null,
-    "version": "0.5.1"
+    "data_dir": "<DATA_DIR>",
+    "data_dir_source": "working directory",
+    "version": "0.5.2"
   },
   "ok": true,
-  "warnings": []
+  "warnings": [
+    "data is relative, so it follows the working directory; set an absolute [storage].data_dir to pin it"
+  ]
 }

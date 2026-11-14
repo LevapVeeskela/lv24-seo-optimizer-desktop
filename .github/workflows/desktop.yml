@@ -8,7 +8,7 @@ on:
       engine_version:
         description: "Pinned lv24-seo engine version (must match scripts/cli-checksums.json)"
         required: true
-        default: "0.5.1"
+        default: "0.5.2"
         type: string
       signed:
         description: "Request OS code signing/notarization (requires paid certificates; leave false)"
