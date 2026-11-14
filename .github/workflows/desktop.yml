@@ -303,6 +303,7 @@ jobs:
           node -e "const fs=require('fs'); const p=process.env.TAURI_CI_CONFIG; const base=JSON.parse(fs.readFileSync('src-tauri/tauri.conf.json','utf8')); const cfg={bundle:{resources:{'engine/lv24-seo/':'engine/lv24-seo/'},createUpdaterArtifacts:process.env.UPDATER_SIGNING_ENABLED==='true'}}; if (process.env.UNSIGNED_MAC === 'true') { cfg.bundle.macOS={...(base.bundle.macOS||{}),signingIdentity:'-',hardenedRuntime:false}; } fs.writeFileSync(p, JSON.stringify(cfg));"
 
       - name: Build Tauri installers
+        shell: bash
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
@@ -312,11 +313,21 @@ jobs:
           APPLE_ID: ${{ inputs.signed && secrets.APPLE_ID || '' }}
           APPLE_PASSWORD: ${{ inputs.signed && secrets.APPLE_PASSWORD || '' }}
           APPLE_TEAM_ID: ${{ inputs.signed && secrets.APPLE_TEAM_ID || '' }}
-        run: >
-          npm run tauri build --
-          --target "${{ matrix.target }}"
-          --bundles "${{ matrix.bundles }}"
-          --config "${{ runner.temp }}/tauri.ci.json"
+        run: |
+          set -euo pipefail
+          # Empty APPLE_* values are not "unset" for Tauri: an empty
+          # APPLE_CERTIFICATE makes the macOS bundler try to import an empty
+          # certificate. Remove every empty Apple variable on the unsigned path.
+          for var in APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD \
+            APPLE_SIGNING_IDENTITY APPLE_ID APPLE_PASSWORD APPLE_TEAM_ID; do
+            if [ -z "${!var:-}" ]; then
+              unset "$var"
+            fi
+          done
+          npm run tauri build -- \
+            --target "${{ matrix.target }}" \
+            --bundles "${{ matrix.bundles }}" \
+            --config "${{ runner.temp }}/tauri.ci.json"
 
       - name: Package portable ZIP
         if: runner.os == 'Windows'
