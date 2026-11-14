@@ -12,6 +12,7 @@
     "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.node.json --noEmit",
     "test": "vitest run",
     "contract:check": "node scripts/check-contracts.mjs",
+    "package:portable": "node scripts/package-portable.mjs",
     "check": "npm run typecheck && npm run test && npm run build"
   },
   "dependencies": {

@@ -3,13 +3,20 @@
  * Verify a built lv24-seo PyInstaller sidecar against the reviewed pin.
  *
  * Checks: target exists, executable exists, `version --json` matches the pinned
- * engine, and SHA-256 matches a pinned hash. Placeholder hashes (null) warn by
- * default and fail with --require-pinned. Use --write to pin a verified build.
+ * engine, and SHA-256/size match the pinned values. Placeholder hashes (null)
+ * warn by default and fail with --require-pinned. Use --write to pin a verified
+ * build.
+ *
+ * PyInstaller onedir output is not byte-reproducible, so a CI rebuild cannot
+ * match the reviewed pin. `--no-hash` (alias `--allow-rebuild`) still verifies
+ * the target, executable and engine version, but records the actual SHA-256 and
+ * turns a hash/size mismatch into a warning. The default stays strict for local
+ * release verification.
  */
 
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { createReadStream, existsSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { createReadStream, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { dirname, isAbsolute, join, relative, resolve, basename } from "node:path";
 import { fileURLToPath } from "node:url";
 import { tmpdir } from "node:os";
@@ -21,7 +28,7 @@ function usage(message, code = 2) {
   console.error(
     "usage: node scripts/verify-sidecar.mjs --target <triple> [--root src-tauri/engine] " +
       "[--engine-version X] [--manifest scripts/cli-checksums.json] [--exe path] " +
-      "[--report file] [--json] [--write] [--require-pinned] [--no-exec] [--timeout ms]",
+      "[--report file] [--json] [--write] [--require-pinned] [--no-hash] [--no-exec] [--timeout ms]",
   );
   process.exit(code);
 }
@@ -49,6 +56,8 @@ const booleanFlags = new Set([
   "--json",
   "--write",
   "--require-pinned",
+  "--no-hash",
+  "--allow-rebuild",
   "--no-exec",
   "--help",
   "-h",
@@ -78,6 +87,7 @@ const target = readArg("--target", "");
 const exeOverride = readArg("--exe", "");
 const reportPath = readArg("--report", "");
 const requirePinned = has("--require-pinned");
+const allowRebuild = has("--no-hash") || has("--allow-rebuild");
 const noExec = has("--no-exec");
 const writePin = has("--write");
 const jsonMode = has("--json");
@@ -85,6 +95,7 @@ const timeout = Number.parseInt(readArg("--timeout", "30000"), 10);
 
 if (!target) usage("--target is required");
 if (!Number.isFinite(timeout) || timeout <= 0) usage("--timeout must be a positive integer");
+if (writePin && allowRebuild) usage("--write cannot be combined with --no-hash/--allow-rebuild");
 if (!existsSync(manifestPath)) {
   console.error(`verify-sidecar: missing manifest ${manifestPath}`);
   process.exit(1);
@@ -135,6 +146,9 @@ let size = null;
 let sha256 = null;
 let actualVersion = null;
 let pinned = false;
+let hashMatched = null;
+let sizeMatched = null;
+let pinnedSha256 = null;
 
 if (!existsSync(executable)) {
   errors.push(`executable not found: ${executable}`);
@@ -215,19 +229,34 @@ if (errors.length === 0) {
     entry.size = size;
     writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
     pinned = true;
+    hashMatched = true;
     warnings.push(`pinned ${target} sha256 in ${relative(scriptRoot, manifestPath)}`);
   } else if (pinnedHash && /^[a-f0-9]{64}$/.test(pinnedHash)) {
-    if (pinnedHash !== sha256) {
-      errors.push(`sha256 mismatch: built ${sha256}, pinned ${pinnedHash}`);
-    } else {
+    pinnedSha256 = pinnedHash;
+    if (pinnedHash === sha256) {
       pinned = true;
+      hashMatched = true;
+    } else if (allowRebuild) {
+      hashMatched = false;
+      warnings.push(
+        `sha256 differs from the reviewed pin (built ${sha256}, pinned ${pinnedHash}); ` +
+          "accepted by --no-hash because PyInstaller output is not byte-reproducible",
+      );
+    } else {
+      hashMatched = false;
+      errors.push(`sha256 mismatch: built ${sha256}, pinned ${pinnedHash}`);
     }
   } else {
     warnings.push("sha256 is not pinned (null placeholder)");
     if (requirePinned) errors.push("--require-pinned was requested but the hash is a placeholder");
   }
-  if (entry.size !== null && Number.isInteger(entry.size) && entry.size !== size) {
-    errors.push(`size mismatch: built ${size}, pinned ${entry.size}`);
+  if (entry.size !== null && Number.isInteger(entry.size)) {
+    sizeMatched = entry.size === size;
+    if (!sizeMatched) {
+      const message = `size mismatch: built ${size}, pinned ${entry.size}`;
+      if (allowRebuild) warnings.push(`${message}; accepted by --no-hash`);
+      else errors.push(message);
+    }
   }
 }
 
@@ -241,6 +270,10 @@ const report = {
   actualVersion,
   size,
   sha256,
+  pinnedSha256,
+  hashPolicy: allowRebuild ? "rebuild" : "strict",
+  hashMatched,
+  sizeMatched,
   pinned,
   ok,
   errors,
@@ -248,7 +281,9 @@ const report = {
 };
 
 if (reportPath) {
-  writeFileSync(resolve(scriptRoot, reportPath), `${JSON.stringify(report, null, 2)}\n`, "utf8");
+  const resolvedReport = resolve(scriptRoot, reportPath);
+  mkdirSync(dirname(resolvedReport), { recursive: true });
+  writeFileSync(resolvedReport, `${JSON.stringify(report, null, 2)}\n`, "utf8");
 }
 
 if (jsonMode) {
@@ -259,6 +294,7 @@ if (jsonMode) {
   console.log(`version:   ${actualVersion ?? "not checked"} (pinned ${expectedVersion})`);
   console.log(`sha256:    ${sha256 ?? "not computed"}`);
   console.log(`size:      ${size ?? "unknown"} bytes`);
+  console.log(`policy:    ${allowRebuild ? "rebuild (hash/size mismatch warns)" : "strict (hash/size mismatch fails)"}`);
   console.log(`pinned:    ${pinned ? "yes" : "no"}`);
   for (const warning of warnings) console.warn(`warning: ${warning}`);
   for (const error of errors) console.error(`error: ${error}`);

@@ -8,7 +8,7 @@ use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
 use tokio::process::Command;
 
 use crate::error::{AppError, AppResult};
-use crate::paths::EngineLocation;
+use crate::paths::{validate_absolute_path, EngineLocation};
 
 /// Upper bounds keep a runaway engine from exhausting webview memory.
 const MAX_STDOUT: usize = 4 * 1024 * 1024;
@@ -76,6 +76,9 @@ impl CliCommandId {
         }
     }
 
+    /// Commands that need an existing project config file. `version`, `stats`,
+    /// `doctor`, `properties` and `auth_status` may run without one; `auth_set`
+    /// and `auth_delete` are reached through their dedicated commands.
     pub fn requires_config(self) -> bool {
         matches!(
             self,
@@ -88,7 +91,9 @@ impl CliCommandId {
             Self::Crawl => Duration::from_secs(600),
             Self::AuthSet | Self::AuthLogout => Duration::from_secs(120),
             Self::Stats | Self::ReportWeekly | Self::ReportDiff => Duration::from_secs(120),
-            Self::Version => Duration::from_secs(10),
+            // A cold PyInstaller sidecar can spend well over ten seconds on
+            // unpacking and antivirus scanning before it prints a version.
+            Self::Version => Duration::from_secs(30),
             Self::ConfigShow | Self::Doctor | Self::Properties | Self::AuthStatus => {
                 Duration::from_secs(30)
             }
@@ -105,6 +110,10 @@ pub struct CliArgs {
     pub head: Option<String>,
     pub start: Option<String>,
     pub max_urls: Option<u32>,
+    /// Report output directory. Only `report_weekly` accepts it; the shell
+    /// resolves the default and checks that any webview value stays under the
+    /// app export directory.
+    pub out: Option<String>,
     /// Used only by the dedicated auth commands; never contains a secret.
     pub provider: Option<String>,
 }
@@ -158,15 +167,26 @@ pub fn build_argv(command: CliCommandId, args: &CliArgs) -> AppResult<Vec<String
         CliCommandId::AuthStatus => {
             vec!["auth".into(), "status".into(), "--json".into()]
         }
-        CliCommandId::ReportWeekly => vec![
-            "report".into(),
-            "weekly".into(),
-            "--days".into(),
-            days,
-            "--lag-days".into(),
-            lag_days,
-            "--json".into(),
-        ],
+        CliCommandId::ReportWeekly => {
+            let mut argv = vec![
+                "report".into(),
+                "weekly".into(),
+                "--days".into(),
+                days,
+                "--lag-days".into(),
+                lag_days,
+            ];
+            if let Some(out) = args.out.as_deref() {
+                argv.push("--out".into());
+                argv.push(
+                    validate_absolute_path(out, "report output")?
+                        .display()
+                        .to_string(),
+                );
+            }
+            argv.push("--json".into());
+            argv
+        }
         CliCommandId::ReportDiff => {
             let mut argv = vec!["report".into(), "diff".into()];
             if let Some(base) = args.base.as_deref() {
@@ -227,7 +247,20 @@ fn validate_args(command: CliCommandId, args: &CliArgs) -> AppResult<()> {
     };
 
     match command {
-        CliCommandId::Stats | CliCommandId::ReportWeekly => {
+        CliCommandId::Stats => {
+            if args.base.is_some()
+                || args.head.is_some()
+                || args.start.is_some()
+                || args.max_urls.is_some()
+                || args.provider.is_some()
+                || args.out.is_some()
+            {
+                return reject("base/head/start/maxUrls/provider/out");
+            }
+            validate_range(args.days.unwrap_or(DEFAULT_DAYS), 1, 365, "days")?;
+            validate_range(args.lag_days.unwrap_or(DEFAULT_LAG_DAYS), 0, 30, "lagDays")?;
+        }
+        CliCommandId::ReportWeekly => {
             if args.base.is_some()
                 || args.head.is_some()
                 || args.start.is_some()
@@ -238,6 +271,9 @@ fn validate_args(command: CliCommandId, args: &CliArgs) -> AppResult<()> {
             }
             validate_range(args.days.unwrap_or(DEFAULT_DAYS), 1, 365, "days")?;
             validate_range(args.lag_days.unwrap_or(DEFAULT_LAG_DAYS), 0, 30, "lagDays")?;
+            if let Some(out) = args.out.as_deref() {
+                validate_absolute_path(out, "report output")?;
+            }
         }
         CliCommandId::ReportDiff => {
             if args.days.is_some()
@@ -245,8 +281,9 @@ fn validate_args(command: CliCommandId, args: &CliArgs) -> AppResult<()> {
                 || args.start.is_some()
                 || args.max_urls.is_some()
                 || args.provider.is_some()
+                || args.out.is_some()
             {
-                return reject("days/lagDays/start/maxUrls/provider");
+                return reject("days/lagDays/start/maxUrls/provider/out");
             }
             if let Some(base) = args.base.as_deref() {
                 validate_period(base, "base")?;
@@ -261,8 +298,9 @@ fn validate_args(command: CliCommandId, args: &CliArgs) -> AppResult<()> {
                 || args.base.is_some()
                 || args.head.is_some()
                 || args.provider.is_some()
+                || args.out.is_some()
             {
-                return reject("days/lagDays/base/head/provider");
+                return reject("days/lagDays/base/head/provider/out");
             }
             if let Some(start) = args.start.as_deref() {
                 validate_url(start)?;
@@ -282,6 +320,7 @@ fn validate_args(command: CliCommandId, args: &CliArgs) -> AppResult<()> {
                 || args.head.is_some()
                 || args.start.is_some()
                 || args.max_urls.is_some()
+                || args.out.is_some()
                 || args.provider.is_some()
             {
                 return reject("all arguments");
@@ -294,8 +333,9 @@ fn validate_args(command: CliCommandId, args: &CliArgs) -> AppResult<()> {
                 || args.head.is_some()
                 || args.start.is_some()
                 || args.max_urls.is_some()
+                || args.out.is_some()
             {
-                return reject("days/lagDays/base/head/start/maxUrls");
+                return reject("days/lagDays/base/head/start/maxUrls/out");
             }
             if args.provider.is_none() {
                 return Err(AppError::new(
@@ -514,7 +554,8 @@ pub async fn run_with_stdin(
     if stdin_data.is_some() {
         prepared.stdin(Stdio::piped());
     }
-    let mut child = prepared.spawn().map_err(|err| {
+    let started = Instant::now();
+    let child = prepared.spawn().map_err(|err| {
         AppError::new(
             "ENGINE_SPAWN",
             format!(
@@ -523,7 +564,19 @@ pub async fn run_with_stdin(
             ),
         )
     })?;
+    supervise(child, command, stdin_data, command.timeout(), started).await
+}
 
+/// Collect one engine run under a single timeout budget. `started` is recorded
+/// before the spawn so `duration_ms` covers the whole run, and the same budget
+/// bounds both the stdin write and the process wait.
+async fn supervise(
+    mut child: tokio::process::Child,
+    command: CliCommandId,
+    stdin_data: Option<&[u8]>,
+    timeout: Duration,
+    started: Instant,
+) -> AppResult<CliRunResult> {
     let stdout = child
         .stdout
         .take()
@@ -536,17 +589,28 @@ pub async fn run_with_stdin(
     let stderr_task = tokio::spawn(read_bounded(stderr, MAX_STDERR));
 
     if let Some(data) = stdin_data {
-        if let Err(err) = write_stdin(&mut child, data).await {
-            let _ = child.start_kill();
-            let _ = child.wait().await;
-            stdout_task.abort();
-            stderr_task.abort();
-            return Err(err);
+        let budget = timeout.saturating_sub(started.elapsed());
+        match tokio::time::timeout(budget, write_stdin(&mut child, data)).await {
+            Ok(Ok(())) => {}
+            Ok(Err(err)) => {
+                let _ = child.start_kill();
+                let _ = child.wait().await;
+                stdout_task.abort();
+                stderr_task.abort();
+                return Err(err);
+            }
+            Err(_) => {
+                let _ = child.start_kill();
+                let _ = child.wait().await;
+                stdout_task.abort();
+                stderr_task.abort();
+                return Err(timeout_error(command, timeout));
+            }
         }
     }
 
-    let started = Instant::now();
-    let waited = tokio::time::timeout(command.timeout(), child.wait()).await;
+    let remaining = timeout.saturating_sub(started.elapsed());
+    let waited = tokio::time::timeout(remaining, child.wait()).await;
 
     let status = match waited {
         Ok(Ok(status)) => status,
@@ -563,18 +627,7 @@ pub async fn run_with_stdin(
             let _ = child.wait().await;
             stdout_task.abort();
             stderr_task.abort();
-            return Err(AppError::new(
-                "CLI_TIMEOUT",
-                format!(
-                    "lv24-seo {} timed out after {}s",
-                    command.id(),
-                    command.timeout().as_secs()
-                ),
-            )
-            .with_details(serde_json::json!({
-                "command": command.id(),
-                "timeoutSeconds": command.timeout().as_secs(),
-            })));
+            return Err(timeout_error(command, timeout));
         }
     };
 
@@ -628,8 +681,23 @@ pub async fn run_with_stdin(
         envelope,
         stderr: stderr_text,
         duration_ms: started.elapsed().as_millis() as u64,
-        truncated: stderr_truncated,
+        truncated: stdout_truncated || stderr_truncated,
     })
+}
+
+fn timeout_error(command: CliCommandId, timeout: Duration) -> AppError {
+    AppError::new(
+        "CLI_TIMEOUT",
+        format!(
+            "lv24-seo {} timed out after {}s",
+            command.id(),
+            timeout.as_secs()
+        ),
+    )
+    .with_details(serde_json::json!({
+        "command": command.id(),
+        "timeoutSeconds": timeout.as_secs(),
+    }))
 }
 
 async fn write_stdin(child: &mut tokio::process::Child, data: &[u8]) -> AppResult<()> {
@@ -1073,6 +1141,121 @@ mod tests {
     }
 
     #[test]
+    fn report_weekly_argv_appends_a_validated_out_directory() {
+        let dir = tempfile::tempdir().unwrap();
+        let out = dir.path().join("reports");
+        let argv = build_argv(
+            CliCommandId::ReportWeekly,
+            &CliArgs {
+                out: Some(out.display().to_string()),
+                ..CliArgs::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            argv,
+            vec![
+                "report".to_string(),
+                "weekly".to_string(),
+                "--days".to_string(),
+                "7".to_string(),
+                "--lag-days".to_string(),
+                "2".to_string(),
+                "--out".to_string(),
+                out.display().to_string(),
+                "--json".to_string(),
+            ]
+        );
+
+        assert_eq!(
+            build_argv(
+                CliCommandId::ReportWeekly,
+                &CliArgs {
+                    out: Some("relative/reports".into()),
+                    ..CliArgs::default()
+                }
+            )
+            .unwrap_err()
+            .code(),
+            "INVALID_PATH"
+        );
+    }
+
+    #[test]
+    fn out_is_rejected_by_every_other_command() {
+        for command in [
+            CliCommandId::Version,
+            CliCommandId::Stats,
+            CliCommandId::ConfigShow,
+            CliCommandId::Doctor,
+            CliCommandId::Properties,
+            CliCommandId::AuthStatus,
+            CliCommandId::ReportDiff,
+            CliCommandId::Crawl,
+        ] {
+            let error = build_argv(
+                command,
+                &CliArgs {
+                    out: Some(std::env::temp_dir().join("reports").display().to_string()),
+                    ..CliArgs::default()
+                },
+            )
+            .unwrap_err();
+            assert_eq!(error.code(), "INVALID_ARGUMENT", "{}", command.id());
+        }
+        for command in [CliCommandId::AuthSet, CliCommandId::AuthLogout] {
+            let error = build_argv(
+                command,
+                &CliArgs {
+                    provider: Some("gsc".into()),
+                    out: Some(std::env::temp_dir().join("reports").display().to_string()),
+                    ..CliArgs::default()
+                },
+            )
+            .unwrap_err();
+            assert_eq!(error.code(), "INVALID_ARGUMENT", "{}", command.id());
+        }
+    }
+
+    fn hanging_command() -> Command {
+        #[cfg(windows)]
+        {
+            let mut command = Command::new("ping");
+            command.args(["-n", "30", "127.0.0.1"]);
+            command
+        }
+        #[cfg(not(windows))]
+        {
+            let mut command = Command::new("sleep");
+            command.arg("30");
+            command
+        }
+    }
+
+    #[tokio::test]
+    async fn the_timeout_covers_the_stdin_write_and_the_process_wait() {
+        let started = Instant::now();
+        let mut command = hanging_command();
+        command
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .kill_on_drop(true);
+        let child = command.spawn().unwrap();
+        let error = supervise(
+            child,
+            CliCommandId::AuthSet,
+            Some(b"dummy-secret"),
+            Duration::from_millis(200),
+            started,
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(error.code(), "CLI_TIMEOUT");
+        assert!(started.elapsed() < Duration::from_secs(10));
+    }
+
+    #[test]
     fn timeouts_match_the_contract() {
         assert_eq!(CliCommandId::Stats.timeout(), Duration::from_secs(120));
         assert_eq!(
@@ -1081,5 +1264,6 @@ mod tests {
         );
         assert_eq!(CliCommandId::Crawl.timeout(), Duration::from_secs(600));
         assert_eq!(CliCommandId::Doctor.timeout(), Duration::from_secs(30));
+        assert_eq!(CliCommandId::Version.timeout(), Duration::from_secs(30));
     }
 }

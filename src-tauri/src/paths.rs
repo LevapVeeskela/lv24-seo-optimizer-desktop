@@ -9,6 +9,9 @@ use crate::error::{AppError, AppResult};
 
 pub const APP_IDENTIFIER: &str = "by.lv24.seo.desktop";
 pub const ENGINE_ENV: &str = "LV24_SEO_BIN";
+/// The PATH fallback is opt-in. Without it a stray `lv24-seo` on PATH must not
+/// redirect the shell (and the webview) to an arbitrary executable.
+pub const ALLOW_PATH_ENGINE_ENV: &str = "LV24_SEO_ALLOW_PATH_ENGINE";
 pub const ENGINE_DIR: &str = "engine";
 pub const ENGINE_FOLDER: &str = "lv24-seo";
 
@@ -71,8 +74,9 @@ pub fn engine_exe_name() -> &'static str {
 /// Resolve the CLI without invoking a shell.
 ///
 /// Order: `LV24_SEO_BIN` (absolute only), bundled resource
-/// `engine/lv24-seo/lv24-seo[.exe]`, sibling `lv24-seo/lv24-seo[.exe]`, PATH.
-/// Nothing is downloaded automatically.
+/// `engine/lv24-seo/lv24-seo[.exe]`, sibling `lv24-seo/lv24-seo[.exe]`, then
+/// PATH only when `LV24_SEO_ALLOW_PATH_ENGINE=1`. Nothing is downloaded
+/// automatically.
 pub fn locate_engine(app: &AppHandle) -> AppResult<EngineLocation> {
     let exe_name = engine_exe_name();
 
@@ -121,6 +125,10 @@ pub fn locate_engine(app: &AppHandle) -> AppResult<EngineLocation> {
                 .join(exe_name),
             "bundled",
         ));
+        candidates.push((
+            resource_dir.join(ENGINE_FOLDER).join(exe_name),
+            "bundled-flat",
+        ));
     }
     if let Ok(exe) = env::current_exe() {
         if let Some(parent) = exe.parent() {
@@ -137,18 +145,22 @@ pub fn locate_engine(app: &AppHandle) -> AppResult<EngineLocation> {
         }
     }
 
-    if let Some(path) = find_on_path(exe_name) {
-        return Ok(EngineLocation {
-            path,
-            source: "PATH".to_string(),
-        });
+    let path_fallback = flag_enabled(env_nonempty(ALLOW_PATH_ENGINE_ENV).as_deref());
+    if path_fallback {
+        if let Some(path) = find_on_path(exe_name) {
+            return Ok(EngineLocation {
+                path,
+                source: "PATH".to_string(),
+            });
+        }
     }
 
     Err(AppError::new(
         "ENGINE_NOT_FOUND",
         format!(
             "lv24-seo engine not found; set {ENGINE_ENV} to an absolute executable path, bundle \
-             {ENGINE_DIR}/{ENGINE_FOLDER}/{exe_name}, or put {exe_name} on PATH"
+             {ENGINE_DIR}/{ENGINE_FOLDER}/{exe_name}, install a sibling {ENGINE_FOLDER}/{exe_name}, \
+             or set {ALLOW_PATH_ENGINE_ENV}=1 to allow a PATH lookup"
         ),
     )
     .with_details(serde_json::json!({
@@ -159,7 +171,15 @@ pub fn locate_engine(app: &AppHandle) -> AppResult<EngineLocation> {
                 "source": source,
             }))
             .collect::<Vec<_>>(),
+        "pathFallback": {
+            "allowed": path_fallback,
+            "env": ALLOW_PATH_ENGINE_ENV,
+        },
     })))
+}
+
+fn flag_enabled(value: Option<&str>) -> bool {
+    value.map(|value| value == "1").unwrap_or(false)
 }
 
 fn env_nonempty(name: &str) -> Option<String> {
@@ -446,6 +466,72 @@ pub fn ensure_write_within_roots(path: &Path, roots: &[PathBuf]) -> AppResult<Pa
     })))
 }
 
+/// Like [`ensure_write_within_roots`], but for a directory that may not exist
+/// yet. An existing directory is canonicalized (so a symlink cannot redirect
+/// report writes outside the root); a missing one must have an existing parent
+/// under an approved root.
+pub fn ensure_dir_within_roots(path: &Path, roots: &[PathBuf]) -> AppResult<PathBuf> {
+    if path.exists() && !path.is_dir() {
+        return Err(AppError::new(
+            "INVALID_PATH",
+            format!("path is not a directory: {}", path.display()),
+        ));
+    }
+    let canonical = if path.exists() {
+        fs::canonicalize(path).map_err(|err| {
+            AppError::new(
+                "PATH_NOT_FOUND",
+                format!("cannot resolve {}: {err}", path.display()),
+            )
+        })?
+    } else {
+        let parent = path.parent().ok_or_else(|| {
+            AppError::new(
+                "INVALID_PATH",
+                format!("path has no parent: {}", path.display()),
+            )
+        })?;
+        if !parent.is_dir() {
+            return Err(AppError::new(
+                "INVALID_PATH",
+                format!("parent is not a directory: {}", parent.display()),
+            ));
+        }
+        let canonical_parent = fs::canonicalize(parent).map_err(|err| {
+            AppError::new(
+                "PATH_NOT_FOUND",
+                format!("cannot resolve {}: {err}", parent.display()),
+            )
+        })?;
+        let name = path
+            .file_name()
+            .ok_or_else(|| AppError::new("INVALID_PATH", "path has no file name"))?;
+        canonical_parent.join(name)
+    };
+    for root in roots {
+        let Ok(canonical_root) = fs::canonicalize(root) else {
+            continue;
+        };
+        if canonical_root.parent().is_none() {
+            continue;
+        }
+        if path_starts_with(&canonical, &canonical_root) {
+            return Ok(canonical);
+        }
+    }
+    Err(AppError::new(
+        "PATH_NOT_ALLOWED",
+        format!(
+            "{} is outside the approved config/data directories",
+            path.display()
+        ),
+    )
+    .with_details(serde_json::json!({
+        "path": path.display().to_string(),
+        "roots": roots.iter().map(|root| root.display().to_string()).collect::<Vec<_>>(),
+    })))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -542,5 +628,40 @@ mod tests {
         let outside = other.path().join("report.json");
         let error = ensure_write_within_roots(&outside, &[root.path().to_path_buf()]).unwrap_err();
         assert_eq!(error.code(), "PATH_NOT_ALLOWED");
+    }
+
+    #[test]
+    fn directory_allow_list_handles_existing_and_missing_targets() {
+        let root = tempfile::tempdir().unwrap();
+        let other = tempfile::tempdir().unwrap();
+        let existing = root.path().join("reports");
+        fs::create_dir(&existing).unwrap();
+        let accepted = ensure_dir_within_roots(&existing, &[root.path().to_path_buf()]).unwrap();
+        assert!(accepted.is_dir());
+
+        let missing = root.path().join("reports-2");
+        let accepted = ensure_dir_within_roots(&missing, &[root.path().to_path_buf()]).unwrap();
+        assert!(accepted.ends_with("reports-2"));
+        assert!(!accepted.exists());
+
+        let outside = other.path().join("reports");
+        fs::create_dir(&outside).unwrap();
+        let error = ensure_dir_within_roots(&outside, &[root.path().to_path_buf()]).unwrap_err();
+        assert_eq!(error.code(), "PATH_NOT_ALLOWED");
+
+        let file = root.path().join("report.html");
+        fs::write(&file, "x").unwrap();
+        let error = ensure_dir_within_roots(&file, &[root.path().to_path_buf()]).unwrap_err();
+        assert_eq!(error.code(), "INVALID_PATH");
+    }
+
+    #[test]
+    fn path_engine_fallback_needs_the_explicit_opt_in() {
+        assert!(flag_enabled(Some("1")));
+        assert!(!flag_enabled(Some("0")));
+        assert!(!flag_enabled(Some("true")));
+        assert!(!flag_enabled(Some("")));
+        assert!(!flag_enabled(None));
+        assert_eq!(ALLOW_PATH_ENGINE_ENV, "LV24_SEO_ALLOW_PATH_ENGINE");
     }
 }

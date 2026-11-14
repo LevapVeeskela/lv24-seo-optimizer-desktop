@@ -325,9 +325,8 @@ pub fn stage_temp(target: &Path, content: &str) -> AppResult<PathBuf> {
             .create_new(true)
             .open(&candidate)
         {
-            Ok(mut file) => {
-                file.write_all(content.as_bytes())?;
-                file.sync_all()?;
+            Ok(file) => {
+                finish_temp(file, &candidate, content)?;
                 return Ok(candidate);
             }
             Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => continue,
@@ -346,6 +345,20 @@ pub fn stage_temp(target: &Path, content: &str) -> AppResult<PathBuf> {
             target.display()
         ),
     ))
+}
+
+/// Write and fsync a freshly created temp file. On failure the partial file is
+/// removed so a failed write never leaves debris next to the config.
+fn finish_temp(mut file: fs::File, candidate: &Path, content: &str) -> AppResult<()> {
+    let written = file
+        .write_all(content.as_bytes())
+        .and_then(|()| file.sync_all());
+    if let Err(err) = written {
+        drop(file);
+        let _ = fs::remove_file(candidate);
+        return Err(err.into());
+    }
+    Ok(())
 }
 
 /// Back up the existing target (keep the last five) and atomically replace it
@@ -454,7 +467,19 @@ pub async fn validate_with_engine(
     target: &Path,
     content: &str,
 ) -> AppResult<ValidationOutcome> {
-    let temp = stage_temp(target, content)?;
+    validate_with_engine_in(location, target, content, None).await
+}
+
+/// Same as [`validate_with_engine`], but when the directory next to `target`
+/// is read-only the draft is staged in `fallback_dir` (the app config dir) so a
+/// valid file can still be checked before the user fixes permissions.
+pub(crate) async fn validate_with_engine_in(
+    location: &EngineLocation,
+    target: &Path,
+    content: &str,
+    fallback_dir: Option<&Path>,
+) -> AppResult<ValidationOutcome> {
+    let temp = stage_validation_temp(target, content, fallback_dir)?;
     let result = cli::run(
         location,
         Some(&temp),
@@ -477,16 +502,32 @@ pub async fn validate_with_engine(
     })
 }
 
+fn stage_validation_temp(
+    target: &Path,
+    content: &str,
+    fallback_dir: Option<&Path>,
+) -> AppResult<PathBuf> {
+    match stage_temp(target, content) {
+        Ok(temp) => Ok(temp),
+        Err(primary) => match fallback_dir {
+            Some(dir) => stage_temp(&dir.join("seo.toml"), content),
+            None => Err(primary),
+        },
+    }
+}
+
 pub(crate) fn atomic_replace(temp: &Path, target: &Path) -> AppResult<()> {
     match fs::rename(temp, target) {
         Ok(()) => Ok(()),
         Err(first) => {
             #[cfg(windows)]
             {
-                // std::fs::rename does not replace an existing file on Windows.
-                // Move the old file aside, install the new one, then delete the
-                // old copy. The backup written by commit_temp is the recovery
-                // point if this process dies in between.
+                // `std::fs::rename` replaces an existing file on Windows, but
+                // it can still fail when the destination is locked (antivirus,
+                // an editor, a running engine). Move the old file aside,
+                // install the new one, then delete the old copy. The backup
+                // written by commit_temp is the recovery point if this process
+                // dies in between.
                 if target.exists() {
                     let name = target
                         .file_name()
@@ -730,6 +771,40 @@ mod tests {
         let error = commit_temp(&temp, &target).unwrap_err();
         assert_eq!(error.code(), "CONFIG_WRITE");
         assert_eq!(fs::read_to_string(&target).unwrap(), "version = 1\n");
+    }
+
+    #[test]
+    fn partial_temp_files_are_removed_after_a_write_failure() {
+        let dir = tempfile::tempdir().unwrap();
+        let candidate = dir.path().join("partial.tmp");
+        fs::write(&candidate, "").unwrap();
+        let read_only = OpenOptions::new().read(true).open(&candidate).unwrap();
+        let error = finish_temp(read_only, &candidate, "version = 1\n").unwrap_err();
+        assert_eq!(error.code(), "IO");
+        assert!(!candidate.exists());
+    }
+
+    #[test]
+    fn validation_staging_falls_back_to_the_app_config_dir() {
+        let dir = tempfile::tempdir().unwrap();
+        let missing_parent = dir.path().join("read-only").join("seo.toml");
+        let fallback = dir.path().join("app-config");
+        fs::create_dir(&fallback).unwrap();
+
+        let temp =
+            stage_validation_temp(&missing_parent, "version = 1\n", Some(&fallback)).unwrap();
+        assert!(temp.starts_with(&fallback));
+        assert_eq!(fs::read_to_string(&temp).unwrap(), "version = 1\n");
+        fs::remove_file(&temp).unwrap();
+        assert!(!temp.exists());
+    }
+
+    #[test]
+    fn validation_staging_without_a_fallback_reports_the_original_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let missing_parent = dir.path().join("missing").join("seo.toml");
+        let error = stage_validation_temp(&missing_parent, "version = 1\n", None).unwrap_err();
+        assert_eq!(error.code(), "CONFIG_WRITE");
     }
 
     #[test]

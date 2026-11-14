@@ -194,7 +194,8 @@ pub async fn shell_status(
 
 /// Run one allow-listed CLI command. The webview cannot pass an executable, a
 /// shell string, or unvalidated arguments. `--json` and an absolute `--config`
-/// are always added by the Rust layer.
+/// are always added by the Rust layer, and a requested config may only name the
+/// project config selected in Settings.
 #[tauri::command(rename_all = "camelCase")]
 pub async fn cli_run(
     app: AppHandle,
@@ -204,15 +205,11 @@ pub async fn cli_run(
     config_path: Option<String>,
 ) -> Result<cli::CliRunResult, AppError> {
     let command = CliCommandId::parse(&command)?;
-    let args = args.unwrap_or_default();
-    let settings = state.settings.get();
-    let requested_config = config_path
-        .filter(|value| !value.trim().is_empty())
-        .or(settings.config_path);
-    let config_path = match requested_config {
-        Some(raw) => {
-            let path = paths::validate_config_path(&raw)?;
-            if command.requires_config() && !path.is_file() {
+    let mut args = args.unwrap_or_default();
+    let config_path = resolve_active_config_opt(state.inner(), config_path)?;
+    let config_path = match (config_path, command.requires_config()) {
+        (Some(path), true) => {
+            if !path.is_file() {
                 return Err(AppError::new(
                     "CONFIG_NOT_FOUND",
                     format!("config file not found: {}", path.display()),
@@ -220,16 +217,25 @@ pub async fn cli_run(
             }
             Some(path)
         }
-        None if command.requires_config() => {
-            // `version` is the only allow-listed command that may run before a
-            // config exists (shell_status uses the same handshake).
+        (Some(path), false) => Some(path),
+        (None, true) => {
+            // Only the commands in `CliCommandId::requires_config` need a
+            // project config; version/stats/doctor/properties/auth_status may
+            // run before onboarding finishes.
             return Err(AppError::new(
                 "CONFIG_PATH_REQUIRED",
                 format!("{} requires an absolute config path", command.id()),
             ));
         }
-        None => None,
+        (None, false) => None,
     };
+    if command == CliCommandId::ReportWeekly {
+        args.out = Some(
+            report_output_dir(state.inner(), args.out.take())?
+                .display()
+                .to_string(),
+        );
+    }
 
     let location = paths::locate_engine(&app)?;
     cli::run(&location, config_path.as_deref(), command, &args).await
@@ -265,7 +271,7 @@ pub async fn auth_set(
             "secret must not contain line breaks or NUL",
         ));
     }
-    let config_path = resolve_required_config(state.inner(), config_path)?;
+    let config_path = resolve_active_config(state.inner(), config_path)?;
     let location = paths::locate_engine(&app)?;
     let args = CliArgs {
         provider: Some(provider),
@@ -290,7 +296,7 @@ pub async fn auth_delete(
     config_path: Option<String>,
 ) -> Result<cli::CliRunResult, AppError> {
     let provider = cli::normalize_auth_provider(&provider)?;
-    let config_path = resolve_required_config(state.inner(), config_path)?;
+    let config_path = resolve_active_config(state.inner(), config_path)?;
     let location = paths::locate_engine(&app)?;
     let args = CliArgs {
         provider: Some(provider),
@@ -310,10 +316,11 @@ pub async fn auth_delete(
 #[tauri::command(rename_all = "camelCase")]
 pub async fn config_patch(
     app: AppHandle,
-    path: String,
+    state: State<'_, AppState>,
+    path: Option<String>,
     patches: Vec<Patch>,
 ) -> Result<ConfigPatchResult, AppError> {
-    let target = paths::validate_config_path(&path)?;
+    let target = resolve_active_config(state.inner(), path)?;
     if !target.is_file() {
         return Err(AppError::new(
             "CONFIG_NOT_FOUND",
@@ -440,6 +447,10 @@ pub fn write_text_file(
     }
     let roots = vec![state.paths.export_dir.clone()];
     let target = paths::ensure_write_within_roots(&requested, &roots)?;
+    // Re-check the resolved target: an 8.3 alias or a junction can name a file
+    // the raw string did not spell out, so the reserved/extension checks must
+    // run on what will actually be written.
+    ensure_export_target(&target)?;
     let outcome = config::write_text_atomic(&target, &content)?;
     Ok(WriteTextResult {
         path: requested.display().to_string(),
@@ -450,8 +461,12 @@ pub fn write_text_file(
 /// Raw TOML plus the redacted effective config from
 /// `lv24-seo config show --json`.
 #[tauri::command]
-pub async fn config_read(app: AppHandle, path: String) -> Result<ConfigReadResult, AppError> {
-    let config_path = paths::validate_config_path(&path)?;
+pub async fn config_read(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    path: Option<String>,
+) -> Result<ConfigReadResult, AppError> {
+    let config_path = resolve_active_config(state.inner(), path)?;
     if !config_path.is_file() {
         return Err(AppError::new(
             "CONFIG_NOT_FOUND",
@@ -532,10 +547,11 @@ pub async fn config_read(app: AppHandle, path: String) -> Result<ConfigReadResul
 #[tauri::command]
 pub async fn config_validate(
     app: AppHandle,
-    path: String,
+    state: State<'_, AppState>,
+    path: Option<String>,
     content: String,
 ) -> Result<ConfigValidateResult, AppError> {
-    let target = paths::validate_config_path(&path)?;
+    let target = resolve_active_config(state.inner(), path)?;
     if content.len() as u64 > config::MAX_CONFIG_BYTES {
         return Err(AppError::new(
             "INVALID_ARGUMENT",
@@ -558,7 +574,10 @@ pub async fn config_validate(
     }
 
     let location = paths::locate_engine(&app)?;
-    let outcome = config::validate_with_engine(&location, &target, &content).await?;
+    let fallback_dir = state.paths.config_dir.clone();
+    let outcome =
+        config::validate_with_engine_in(&location, &target, &content, Some(fallback_dir.as_path()))
+            .await?;
     Ok(ConfigValidateResult {
         path: target.display().to_string(),
         valid: outcome.valid,
@@ -573,10 +592,11 @@ pub async fn config_validate(
 #[tauri::command]
 pub async fn config_write(
     app: AppHandle,
-    path: String,
+    state: State<'_, AppState>,
+    path: Option<String>,
     content: String,
 ) -> Result<config::WriteOutcome, AppError> {
-    let target = paths::validate_config_path(&path)?;
+    let target = resolve_active_config(state.inner(), path)?;
     if content.len() as u64 > config::MAX_CONFIG_BYTES {
         return Err(AppError::new(
             "INVALID_ARGUMENT",
@@ -652,24 +672,81 @@ pub fn open_path(app: AppHandle, state: State<'_, AppState>, path: String) -> Re
         })
 }
 
-fn resolve_required_config(state: &AppState, requested: Option<String>) -> AppResult<PathBuf> {
-    let raw = requested
-        .filter(|value| !value.trim().is_empty())
-        .or_else(|| state.settings.get().config_path)
-        .ok_or_else(|| {
-            AppError::new(
-                "CONFIG_PATH_REQUIRED",
-                "an absolute config path is required",
+/// Resolve the config a command may touch. The webview may only name the
+/// project config chosen in Settings; `settings_set` is the only way to change
+/// the active project. A requested path that differs from the active one is
+/// rejected instead of being validated or executed.
+fn resolve_active_config_opt(
+    state: &AppState,
+    requested: Option<String>,
+) -> AppResult<Option<PathBuf>> {
+    let requested = requested.filter(|value| !value.trim().is_empty());
+    let settings = state.settings.get();
+    let active = settings
+        .config_path
+        .as_deref()
+        .map(paths::validate_config_path)
+        .transpose()?;
+    match (requested, active) {
+        (Some(requested), Some(active)) => {
+            let requested = paths::validate_config_path(&requested)?;
+            if same_path(&requested, &active) {
+                Ok(Some(active))
+            } else {
+                Err(AppError::new(
+                    "PATH_NOT_ALLOWED",
+                    "the requested config is not the active project config selected in Settings",
+                )
+                .with_details(serde_json::json!({
+                    "requested": requested.display().to_string(),
+                    "active": active.display().to_string(),
+                })))
+            }
+        }
+        (Some(requested), None) => {
+            let requested = paths::validate_config_path(&requested)?;
+            Err(AppError::new(
+                "PATH_NOT_ALLOWED",
+                "no active project config is selected in Settings; choose one with settings_set",
             )
-        })?;
-    let path = paths::validate_config_path(&raw)?;
-    if !path.is_file() {
-        return Err(AppError::new(
-            "CONFIG_NOT_FOUND",
-            format!("config file not found: {}", path.display()),
-        ));
+            .with_details(serde_json::json!({
+                "requested": requested.display().to_string(),
+                "active": serde_json::Value::Null,
+            })))
+        }
+        (None, active) => Ok(active),
     }
-    Ok(path)
+}
+
+fn resolve_active_config(state: &AppState, requested: Option<String>) -> AppResult<PathBuf> {
+    resolve_active_config_opt(state, requested)?.ok_or_else(|| {
+        AppError::new(
+            "CONFIG_PATH_REQUIRED",
+            "choose a project config in Settings first",
+        )
+    })
+}
+
+/// `report_weekly` always writes into `<export_dir>/reports` unless the webview
+/// supplies another absolute directory that resolves inside the export root.
+/// The directory is created before the engine runs.
+fn report_output_dir(state: &AppState, requested: Option<String>) -> AppResult<PathBuf> {
+    let export_dir = state.paths.export_dir.clone();
+    let requested = requested.filter(|value| !value.trim().is_empty());
+    let directory = match requested {
+        Some(raw) => {
+            let requested = paths::validate_absolute_path(&raw, "report output")?;
+            paths::ensure_dir_within_roots(&requested, std::slice::from_ref(&export_dir))?
+        }
+        None => export_dir.join("reports"),
+    };
+    fs::create_dir_all(&directory).map_err(|err| {
+        AppError::new(
+            "EXPORT_DIR",
+            format!("cannot create report output {}: {err}", directory.display()),
+        )
+    })?;
+    Ok(directory)
 }
 
 fn allowed_roots(state: &AppState) -> Vec<PathBuf> {
@@ -823,6 +900,105 @@ fn parse_semver(raw: &str) -> Option<(u64, u64, u64)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn app_state(dir: &Path, active: Option<&Path>) -> AppState {
+        let paths = paths::AppPaths {
+            config_dir: dir.join("app-config"),
+            data_dir: dir.join("app-data"),
+            log_dir: dir.join("app-logs"),
+            export_dir: dir.join("app-data").join("exports"),
+        };
+        for path in [
+            &paths.config_dir,
+            &paths.data_dir,
+            &paths.log_dir,
+            &paths.export_dir,
+        ] {
+            fs::create_dir_all(path).unwrap();
+        }
+        let settings =
+            SettingsStore::load(paths.config_dir.join(crate::settings::SETTINGS_FILE)).unwrap();
+        let mut current = settings.get();
+        current.config_path = active.map(|path| path.display().to_string());
+        settings.set(current).unwrap();
+        AppState { paths, settings }
+    }
+
+    #[test]
+    fn requested_config_must_be_the_active_config() {
+        let dir = tempfile::tempdir().unwrap();
+        let active = dir.path().join("seo.toml");
+        let other = dir.path().join("other.toml");
+        fs::write(&active, "version = 1\n").unwrap();
+        fs::write(&other, "version = 1\n").unwrap();
+        let state = app_state(dir.path(), Some(&active));
+
+        assert_eq!(resolve_active_config(&state, None).unwrap(), active);
+        assert_eq!(
+            resolve_active_config(&state, Some(active.display().to_string())).unwrap(),
+            active
+        );
+
+        let error = resolve_active_config(&state, Some(other.display().to_string())).unwrap_err();
+        assert_eq!(error.code(), "PATH_NOT_ALLOWED");
+        assert_eq!(
+            error.details().unwrap()["requested"],
+            other.display().to_string()
+        );
+    }
+
+    #[test]
+    fn no_active_config_is_required_or_forbidden() {
+        let dir = tempfile::tempdir().unwrap();
+        let requested = dir.path().join("seo.toml");
+        fs::write(&requested, "version = 1\n").unwrap();
+        let state = app_state(dir.path(), None);
+
+        assert!(resolve_active_config_opt(&state, None).unwrap().is_none());
+        assert_eq!(
+            resolve_active_config(&state, None).unwrap_err().code(),
+            "CONFIG_PATH_REQUIRED"
+        );
+        assert_eq!(
+            resolve_active_config(&state, Some(requested.display().to_string()))
+                .unwrap_err()
+                .code(),
+            "PATH_NOT_ALLOWED"
+        );
+    }
+
+    #[test]
+    fn report_output_defaults_to_the_export_directory() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = app_state(dir.path(), None);
+
+        let out = report_output_dir(&state, None).unwrap();
+        assert_eq!(out, state.paths.export_dir.join("reports"));
+        assert!(out.is_dir());
+
+        let custom = out.join("custom");
+        let resolved = report_output_dir(&state, Some(custom.display().to_string())).unwrap();
+        assert!(resolved.is_dir());
+        assert!(resolved.ends_with("custom"));
+
+        let outside = dir.path().join("outside");
+        fs::create_dir(&outside).unwrap();
+        assert_eq!(
+            report_output_dir(&state, Some(outside.display().to_string()))
+                .unwrap_err()
+                .code(),
+            "PATH_NOT_ALLOWED"
+        );
+
+        let file = state.paths.export_dir.join("report.html");
+        fs::write(&file, "x").unwrap();
+        assert_eq!(
+            report_output_dir(&state, Some(file.display().to_string()))
+                .unwrap_err()
+                .code(),
+            "INVALID_PATH"
+        );
+    }
 
     #[test]
     fn engine_version_comparison_is_numeric() {

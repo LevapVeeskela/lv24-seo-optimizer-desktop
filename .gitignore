@@ -10,6 +10,9 @@ dist-ssr
 *.local
 *.tsbuildinfo
 
+# Locally built installers and portable archives (release artifacts, not source)
+release/
+
 # Rust / Tauri
 src-tauri/target
 src-tauri/gen/schemas

@@ -5,8 +5,8 @@ use std::sync::Mutex;
 use serde::{Deserialize, Serialize};
 
 use crate::config::atomic_replace;
-use crate::error::{AppError, AppResult};
-use crate::paths::validate_absolute_path;
+use crate::error::AppResult;
+use crate::paths::validate_config_path;
 
 pub const SETTINGS_FILE: &str = "settings.json";
 pub const MIN_WINDOW_WIDTH: u32 = 960;
@@ -27,8 +27,8 @@ pub struct WindowBounds {
 impl Default for WindowBounds {
     fn default() -> Self {
         Self {
-            width: 1280,
-            height: 800,
+            width: 1180,
+            height: 700,
             x: None,
             y: None,
             maximized: false,
@@ -82,23 +82,10 @@ impl Settings {
 
     pub fn validate(&self) -> AppResult<()> {
         if let Some(raw) = &self.config_path {
-            let path = validate_absolute_path(raw, "config")?;
-            let extension = path
-                .extension()
-                .and_then(|value| value.to_str())
-                .unwrap_or("");
-            if !extension.eq_ignore_ascii_case("toml") {
-                return Err(AppError::new(
-                    "INVALID_PATH",
-                    format!("config path must end with .toml: {}", path.display()),
-                ));
-            }
-            if path.exists() && path.is_dir() {
-                return Err(AppError::new(
-                    "INVALID_PATH",
-                    format!("config path is a directory: {}", path.display()),
-                ));
-            }
+            // Use the same validation as the config commands so `settings_set`
+            // cannot persist a path that a later command rejects (relative,
+            // non-TOML, missing parent, reserved Windows name, directory).
+            validate_config_path(raw)?;
         }
         Ok(())
     }
@@ -298,6 +285,30 @@ mod tests {
         let store = SettingsStore::load(dir.path().join(SETTINGS_FILE)).unwrap();
         let mut settings = store.get();
         settings.config_path = Some("seo.toml".to_string());
+        let error = store.set(settings).unwrap_err();
+        assert_eq!(error.code(), "INVALID_PATH");
+    }
+
+    #[test]
+    fn config_parent_must_be_a_directory() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = SettingsStore::load(dir.path().join(SETTINGS_FILE)).unwrap();
+
+        let mut settings = store.get();
+        settings.config_path = Some(
+            dir.path()
+                .join("missing")
+                .join("seo.toml")
+                .display()
+                .to_string(),
+        );
+        let error = store.set(settings).unwrap_err();
+        assert_eq!(error.code(), "INVALID_PATH");
+
+        let not_a_dir = dir.path().join("not-a-dir");
+        fs::write(&not_a_dir, "x").unwrap();
+        let mut settings = store.get();
+        settings.config_path = Some(not_a_dir.join("seo.toml").display().to_string());
         let error = store.set(settings).unwrap_err();
         assert_eq!(error.code(), "INVALID_PATH");
     }

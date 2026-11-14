@@ -10,7 +10,7 @@ environment with the pinned engine and PyInstaller, then produces::
         lv24_seo/store/schema.sql
         lv24_seo_skills/...
 
-The Tauri bundle maps ``<out>/lv24-seo/`` to the app's ``lv24-seo/`` resource
+The Tauri bundle maps ``<out>/lv24-seo/`` to the app's ``engine/lv24-seo/`` resource
 directory. PyInstaller does not cross-compile: run this on the target OS/arch.
 No build is performed by the contract/CI scaffold itself.
 """
@@ -99,7 +99,14 @@ def _run(
         raise SystemExit(f"command failed with exit {exc.returncode}: {' '.join(command)}") from exc
 
 
-def _probe_skills(uv: str, python: str, engine_spec: str, env: dict[str, str], dry_run: bool) -> Path:
+def _probe_skills(
+    uv: str,
+    python: str,
+    engine_spec: str,
+    with_specs: list[str],
+    env: dict[str, str],
+    dry_run: bool,
+) -> Path:
     if dry_run:
         return Path("<skills-path>")
     code = (
@@ -107,8 +114,12 @@ def _probe_skills(uv: str, python: str, engine_spec: str, env: dict[str, str], d
         "d = distribution('lv24-seo')\n"
         "print(d.locate_file('lv24_seo_skills'))\n"
     )
+    command = [uv, "run", "--python", python, "--with", engine_spec]
+    for spec in with_specs:
+        command.extend(["--with", spec])
+    command.extend(["python", "-c", code])
     result = _run(
-        [uv, "run", "--python", python, "--with", engine_spec, "python", "-c", code],
+        command,
         env=env,
         capture=True,
         timeout=300,
@@ -226,6 +237,11 @@ def main(argv: list[str] | None = None) -> int:
     }
     engine_spec = f"lv24-seo[secrets]=={engine_version}"
     pyinstaller_spec = f"pyinstaller=={pyinstaller}"
+    with_specs: list[str] = []
+    for name in ("pydantic", "typer"):
+        value = pin.get(name)
+        if isinstance(value, str) and value:
+            with_specs.append(f"{name}=={value}")
 
     work_root = Path(tempfile.mkdtemp(prefix="lv24-seo-sidecar-"))
     try:
@@ -239,7 +255,7 @@ def main(argv: list[str] | None = None) -> int:
         workpath.mkdir()
         specpath.mkdir()
 
-        skills = _probe_skills(uv, python, engine_spec, env, args.dry_run)
+        skills = _probe_skills(uv, python, engine_spec, with_specs, env, args.dry_run)
         add_data_separator = os.pathsep
         command = [
             uv,
@@ -248,6 +264,7 @@ def main(argv: list[str] | None = None) -> int:
             python,
             "--with",
             engine_spec,
+            *[part for spec in with_specs for part in ("--with", spec)],
             "--with",
             pyinstaller_spec,
             "python",
