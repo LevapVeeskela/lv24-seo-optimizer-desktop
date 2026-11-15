@@ -808,8 +808,22 @@ async fn process_image_name(pid: u32) -> Option<String> {
         let name = line.split("\",\"").next()?.trim_matches('"').to_string();
         (!name.is_empty()).then_some(name)
     }
+    #[cfg(target_os = "linux")]
+    {
+        // `/proc/<pid>/exe` is the kernel's own answer: the resolved executable
+        // path, with no 15 byte `comm` truncation and no dependency on `ps`
+        // being installed in the image.
+        if let Ok(target) = std::fs::read_link(format!("/proc/{pid}/exe")) {
+            let name = target.to_string_lossy().trim().to_string();
+            if !name.is_empty() {
+                return Some(name);
+            }
+        }
+    }
     #[cfg(unix)]
     {
+        // macOS (and a Linux without `/proc`) reports the full executable path
+        // through `comm`; the caller compares only the final component.
         let output = Command::new("ps")
             .args(["-o", "comm=", "-p", &pid.to_string()])
             .stdin(Stdio::null())
@@ -835,7 +849,7 @@ async fn is_engine_sidecar(pid: u32) -> bool {
     let Some(name) = process_image_name(pid).await else {
         return false;
     };
-    // macOS reports the full executable path, Linux only the (15 byte) name.
+    // Linux and macOS report the full executable path, Windows the image name.
     Path::new(&name)
         .file_name()
         .and_then(|value| value.to_str())
@@ -1773,17 +1787,41 @@ mod tests {
         let registry = ChildRegistry::default();
         let mut tracked = engine_named_child(dir.path());
         let pid = tracked.id().unwrap();
+        // `spawn` returns before the child has necessarily exec'd: until then
+        // `/proc/<pid>/exe` (and the image name) still points at the test
+        // binary. Wait for the real image, then assert the name the platform
+        // actually reports.
+        wait_for_engine_image(pid).await;
+        let image = process_image_name(pid).await.expect("image name");
+        assert_eq!(
+            Path::new(&image)
+                .file_name()
+                .and_then(|value| value.to_str()),
+            Some(crate::paths::engine_exe_name()),
+            "unexpected image {image}"
+        );
         let guard = registry.track(pid);
 
         let killed = stop_children(&registry, Duration::from_secs(5))
             .await
             .unwrap();
 
-        assert_eq!(killed, 1);
+        assert_eq!(killed, 1, "image was {image}");
         assert!(!process_alive(pid).await);
 
         let _ = tracked.wait().await;
         drop(guard);
+    }
+
+    /// Polls until the child reports the engine image (exec has completed).
+    async fn wait_for_engine_image(pid: u32) {
+        for _ in 0..300 {
+            if is_engine_sidecar(pid).await {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        panic!("child {pid} never reported the engine image");
     }
 
     #[cfg(unix)]
