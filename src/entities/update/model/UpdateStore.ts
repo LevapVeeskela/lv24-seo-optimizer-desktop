@@ -1,4 +1,5 @@
 import { getVersion } from "@tauri-apps/api/app";
+import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { relaunch } from "@tauri-apps/plugin-process";
 import { check, type Update } from "@tauri-apps/plugin-updater";
 import { makeAutoObservable } from "mobx";
@@ -8,7 +9,13 @@ import {
   normalizeBundleKind,
 } from "../lib/bundle";
 import { classifyUpdateError } from "../lib/errors";
-import { prepareForUpdate } from "../lib/shell";
+import {
+  cancelUpdateInstall,
+  installUpdate,
+  prepareForUpdate,
+  UPDATE_PROGRESS_EVENT,
+  type UpdateProgress,
+} from "../lib/shell";
 import type { AvailableUpdate, UpdateState } from "./types";
 
 /** The updater check must not hang the startup probe indefinitely. */
@@ -223,6 +230,9 @@ export class UpdateStore {
    *
    * Engine sidecars are stopped first: a live sidecar keeps the installed
    * `engine/lv24-seo/lv24-seo.exe` locked and the installer cannot replace it.
+   * The download and the install run in Rust (`update_install`), which
+   * re-checks the endpoint and emits `update://progress`; the webview never
+   * calls the updater plugin's `downloadAndInstall` itself.
    */
   async install(): Promise<boolean> {
     if (!this.canAutoUpdate || this.securityBlocked) {
@@ -235,6 +245,7 @@ export class UpdateStore {
     if (!update) {
       return false;
     }
+    const version = update.version;
     const generation = ++this.generation;
     this.state = "downloading";
     this.progress = 0;
@@ -245,31 +256,22 @@ export class UpdateStore {
     if (generation !== this.generation) {
       return false;
     }
-    let total: number | null = null;
-    let downloaded = 0;
+    const unlisten = await this.listenProgress(generation);
     try {
-      await update.downloadAndInstall((event) => {
-        if (generation !== this.generation) {
-          return;
-        }
-        if (event.event === "Started") {
-          total = event.data.contentLength ?? null;
-          this.progress = total && total > 0 ? 0 : null;
-          return;
-        }
-        if (event.event === "Progress") {
-          downloaded += event.data.chunkLength;
-          this.progress =
-            total && total > 0 ? Math.min(downloaded / total, 1) : null;
-          return;
-        }
-        this.progress = 1;
-      });
+      await installUpdate(version);
     } catch (error) {
+      unlisten?.();
       if (generation !== this.generation) {
+        // The panel was dismissed while the shell was still working. A late
+        // failure must not resurrect it, and nothing may be installed.
         return false;
       }
       this.progress = null;
+      if (isCancelledError(error)) {
+        // The cancel click already returned the panel to idle.
+        this.state = "idle";
+        return false;
+      }
       if (classifyUpdateError(error) === "security") {
         this.error = securityError(error);
         this.securityBlocked = true;
@@ -282,12 +284,35 @@ export class UpdateStore {
       this.state = "error";
       return false;
     }
+    unlisten?.();
     if (generation !== this.generation) {
+      // Dismissed while downloading: the release is installed by the shell, but
+      // this window must never relaunch behind the user's back.
       return false;
     }
     this.progress = 1;
     this.state = "ready";
     return this.restart();
+  }
+
+  /**
+   * "Cancel" while downloading. The Rust side stops the download before the
+   * installer starts; when it reports that the install already began, the panel
+   * stays as it is instead of claiming a cancellation that did not happen.
+   */
+  async cancel(): Promise<void> {
+    if (this.state === "downloading") {
+      let cancelled = false;
+      try {
+        cancelled = await cancelUpdateInstall();
+      } catch {
+        cancelled = false;
+      }
+      if (!cancelled) {
+        return;
+      }
+    }
+    this.dismiss();
   }
 
   /** Releases the pending update resource and returns the panel to idle. */
@@ -304,6 +329,25 @@ export class UpdateStore {
       this.state = "idle";
     }
     void closeUpdate(update);
+  }
+
+  /** Follows the Rust download progress for one install attempt. */
+  private async listenProgress(
+    generation: number,
+  ): Promise<UnlistenFn | null> {
+    try {
+      return await listen<UpdateProgress>(UPDATE_PROGRESS_EVENT, (event) => {
+        if (generation !== this.generation) {
+          return;
+        }
+        const { downloaded, total } = event.payload;
+        this.progress =
+          total && total > 0 ? Math.min(downloaded / total, 1) : null;
+      });
+    } catch {
+      // Progress is cosmetic; a failed listener must not block the install.
+      return null;
+    }
   }
 
   /**
@@ -386,6 +430,15 @@ export class UpdateStore {
 function securityError(error: unknown): AppError {
   const appError = toAppError(error, "UPDATE_SECURITY");
   return { ...appError, code: "UPDATE_SECURITY", retryable: false };
+}
+
+/** The shell reports a cancelled download with this code; it is not an error. */
+function isCancelledError(error: unknown): boolean {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    (error as { code?: unknown }).code === "UPDATE_CANCELLED"
+  );
 }
 
 /** A sidecar that could not be stopped blocks the install but can be retried. */

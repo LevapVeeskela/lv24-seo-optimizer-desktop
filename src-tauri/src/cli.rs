@@ -483,6 +483,13 @@ fn build_command(
         .stderr(Stdio::piped())
         .kill_on_drop(true);
 
+    // A PyInstaller one-file bootloader starts the interpreter as its own
+    // child. Giving the engine its own process group lets a timeout kill the
+    // whole tree instead of leaving an interpreter that still locks the engine
+    // executable (the class of bug that broke the 0.2.1 update).
+    #[cfg(unix)]
+    command.process_group(0);
+
     command.env_clear();
     for (key, value) in std::env::vars_os() {
         if is_inherited_env(&key.to_string_lossy()) {
@@ -634,11 +641,25 @@ async fn stop_children(registry: &ChildRegistry, wait: Duration) -> AppResult<u3
 
     let mut killed = 0u32;
     let mut failed = Vec::new();
+    // PIDs that are gone, or that no longer name our engine. They are never
+    // signalled and never wait for the stop deadline.
+    let mut released = Vec::new();
     for pid in &pids {
+        if !process_alive(*pid).await {
+            released.push(*pid);
+            continue;
+        }
+        // SEC-08: the PID may have been reused after a crash. Only an engine
+        // image is ours; anything else is left untouched.
+        if !is_engine_sidecar(*pid).await {
+            log::warn!("tracked PID {pid} is no longer an engine sidecar; not killing it");
+            released.push(*pid);
+            continue;
+        }
         match terminate(*pid).await {
             Ok(true) => killed += 1,
             // The sidecar exited on its own between the snapshot and the kill.
-            Ok(false) => {}
+            Ok(false) => released.push(*pid),
             Err(err) => {
                 log::warn!("cannot stop engine sidecar {pid}: {err}");
                 failed.push(*pid);
@@ -656,10 +677,15 @@ async fn stop_children(registry: &ChildRegistry, wait: Duration) -> AppResult<u3
         .with_details(serde_json::json!({ "pids": failed })));
     }
 
+    let pending: Vec<u32> = pids
+        .iter()
+        .copied()
+        .filter(|pid| !released.contains(pid))
+        .collect();
     let deadline = Instant::now() + wait;
     loop {
         let mut alive = Vec::new();
-        for pid in &pids {
+        for pid in &pending {
             if process_alive(*pid).await {
                 alive.push(*pid);
             }
@@ -699,6 +725,124 @@ fn join_pids(pids: &[u32]) -> String {
         .join(", ")
 }
 
+/// Kill the whole tree of a child this process still owns.
+///
+/// The child handle is open while this runs, so the OS cannot have recycled the
+/// PID: the kill can only reach our own sidecar (SEC-08). On Unix the engine is
+/// its own process group leader, so a negative PID signals the bootloader and
+/// the interpreter it started.
+async fn kill_child_tree(child: &mut tokio::process::Child) {
+    if let Some(pid) = child.id() {
+        if let Err(err) = terminate_tree(pid).await {
+            log::warn!("cannot kill the engine process tree {pid}: {err}");
+        }
+    }
+    // `start_kill` is a no-op when the tree is already gone; `wait` reaps the
+    // direct child so no zombie is left behind.
+    let _ = child.start_kill();
+    let _ = child.wait().await;
+}
+
+#[cfg(windows)]
+async fn terminate_tree(pid: u32) -> std::io::Result<()> {
+    Command::new("taskkill")
+        .args(["/PID", &pid.to_string(), "/T", "/F"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .await?;
+    Ok(())
+}
+
+#[cfg(unix)]
+async fn terminate_tree(pid: u32) -> std::io::Result<()> {
+    // A negative PID names the process group whose leader is `pid`.
+    let group = Command::new("kill")
+        .args(["-9", &format!("-{pid}")])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .await?;
+    if !group.success() {
+        // Not a group leader (a child started outside `build_command`, or a
+        // spawn that raced the group setup): signal the exact PID instead.
+        Command::new("kill")
+            .args(["-9", &pid.to_string()])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .await?;
+    }
+    Ok(())
+}
+
+#[cfg(all(not(windows), not(unix)))]
+async fn terminate_tree(_pid: u32) -> std::io::Result<()> {
+    Ok(())
+}
+
+/// The image name of a live process. Used to confirm that a tracked PID still
+/// belongs to our engine before it is signalled: after a crash the PID can be
+/// reused by an unrelated process, and killing it would be collateral damage.
+async fn process_image_name(pid: u32) -> Option<String> {
+    #[cfg(windows)]
+    {
+        let output = Command::new("tasklist")
+            .args(["/FI", &format!("PID eq {pid}"), "/FO", "CSV", "/NH"])
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .output()
+            .await
+            .ok()?;
+        let line = String::from_utf8_lossy(&output.stdout)
+            .lines()
+            .next()
+            .unwrap_or("")
+            .trim()
+            .to_string();
+        // `"ping.exe","4242","Console","1","10 000 K"`
+        let name = line.split("\",\"").next()?.trim_matches('"').to_string();
+        (!name.is_empty()).then_some(name)
+    }
+    #[cfg(unix)]
+    {
+        let output = Command::new("ps")
+            .args(["-o", "comm=", "-p", &pid.to_string()])
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .output()
+            .await
+            .ok()?;
+        let name = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        (!name.is_empty()).then_some(name)
+    }
+    #[cfg(all(not(windows), not(unix)))]
+    {
+        let _ = pid;
+        None
+    }
+}
+
+/// True only when the live process behind `pid` is the engine executable.
+/// An unknown image fails closed: a locked sidecar blocks the update, a killed
+/// stranger cannot be undone.
+async fn is_engine_sidecar(pid: u32) -> bool {
+    let Some(name) = process_image_name(pid).await else {
+        return false;
+    };
+    // macOS reports the full executable path, Linux only the (15 byte) name.
+    Path::new(&name)
+        .file_name()
+        .and_then(|value| value.to_str())
+        .map(|value| value.eq_ignore_ascii_case(crate::paths::engine_exe_name()))
+        .unwrap_or(false)
+}
+
 /// `Ok(true)` when the process was signalled, `Ok(false)` when it was already
 /// gone.
 ///
@@ -719,6 +863,18 @@ async fn terminate(pid: u32) -> std::io::Result<bool> {
 
 #[cfg(unix)]
 async fn terminate(pid: u32) -> std::io::Result<bool> {
+    // The engine is a process-group leader; a negative PID reaches the
+    // PyInstaller bootloader and the interpreter it started.
+    let group = Command::new("kill")
+        .args(["-9", &format!("-{pid}")])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .await?;
+    if group.success() {
+        return Ok(true);
+    }
     let status = Command::new("kill")
         .args(["-9", &pid.to_string()])
         .stdin(Stdio::null())
@@ -855,15 +1011,13 @@ async fn supervise(
         match tokio::time::timeout(budget, write_stdin(&mut child, data)).await {
             Ok(Ok(())) => {}
             Ok(Err(err)) => {
-                let _ = child.start_kill();
-                let _ = child.wait().await;
+                kill_child_tree(&mut child).await;
                 stdout_task.abort();
                 stderr_task.abort();
                 return Err(err);
             }
             Err(_) => {
-                let _ = child.start_kill();
-                let _ = child.wait().await;
+                kill_child_tree(&mut child).await;
                 stdout_task.abort();
                 stderr_task.abort();
                 return Err(timeout_error(command, timeout));
@@ -885,8 +1039,7 @@ async fn supervise(
             ));
         }
         Err(_) => {
-            let _ = child.start_kill();
-            let _ = child.wait().await;
+            kill_child_tree(&mut child).await;
             stdout_task.abort();
             stderr_task.abort();
             return Err(timeout_error(command, timeout));
@@ -941,7 +1094,9 @@ async fn supervise(
         command: command.id().to_string(),
         exit_code: status.code(),
         envelope,
-        stderr: stderr_text,
+        // The engine quotes config lines and argv in tracebacks; a credential
+        // must never cross into the webview, the log or a screenshot.
+        stderr: crate::error::redact_secrets(&stderr_text),
         duration_ms: started.elapsed().as_millis() as u64,
         truncated: stdout_truncated || stderr_truncated,
     })
@@ -1080,7 +1235,12 @@ fn validate_envelope(value: Value) -> AppResult<Value> {
 
 fn preview(value: &str) -> String {
     const LIMIT: usize = 300;
-    let compact = value.split_whitespace().collect::<Vec<_>>().join(" ");
+    // Redact before truncating: a token cut in half by the preview would no
+    // longer match the `token = "..."` pattern and would reach the webview.
+    let compact = crate::error::redact_secrets(value)
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
     let mut preview: String = compact.chars().take(LIMIT).collect();
     if compact.chars().count() > LIMIT {
         preview.push('…');
@@ -1550,29 +1710,170 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn stopping_tracked_children_kills_only_the_tracked_pid() {
+    async fn a_recycled_pid_with_a_foreign_image_is_not_killed() {
         let registry = ChildRegistry::default();
-        let mut tracked = synthetic_child();
         let mut unrelated = synthetic_child();
-        let tracked_pid = tracked.id().unwrap();
-        let unrelated_pid = unrelated.id().unwrap();
-        let guard = registry.track(tracked_pid);
+        let pid = unrelated.id().unwrap();
+        let guard = registry.track(pid);
+
+        let killed = stop_children(&registry, Duration::from_secs(2))
+            .await
+            .unwrap();
+
+        // SEC-08: the tracked PID no longer names an engine sidecar, so it is
+        // released instead of signalled.
+        assert_eq!(killed, 0);
+        assert!(registry.tracked().is_empty());
+        assert!(
+            process_alive(pid).await,
+            "a foreign image must survive a stale PID entry"
+        );
+
+        let _ = unrelated.start_kill();
+        let _ = unrelated.wait().await;
+        drop(guard);
+    }
+
+    /// A real executable whose image name matches the engine's, so the identity
+    /// check accepts it and the kill path is exercised.
+    fn engine_named_child(dir: &Path) -> tokio::process::Child {
+        let exe = dir.join(crate::paths::engine_exe_name());
+        let mut command = {
+            #[cfg(windows)]
+            {
+                let root =
+                    std::env::var("SystemRoot").unwrap_or_else(|_| "C:\\Windows".to_string());
+                std::fs::copy(Path::new(&root).join("System32").join("ping.exe"), &exe).unwrap();
+                let mut command = Command::new(&exe);
+                command.args(["-n", "30", "127.0.0.1"]);
+                command
+            }
+            #[cfg(unix)]
+            {
+                std::fs::copy("/bin/sleep", &exe).unwrap();
+                use std::os::unix::fs::PermissionsExt;
+                std::fs::set_permissions(&exe, std::fs::Permissions::from_mode(0o755)).unwrap();
+                let mut command = Command::new(&exe);
+                command.arg("30");
+                command
+            }
+        };
+        command
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .kill_on_drop(true)
+            .spawn()
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn an_engine_named_tracked_child_is_stopped() {
+        let dir = tempfile::tempdir().unwrap();
+        let registry = ChildRegistry::default();
+        let mut tracked = engine_named_child(dir.path());
+        let pid = tracked.id().unwrap();
+        let guard = registry.track(pid);
 
         let killed = stop_children(&registry, Duration::from_secs(5))
             .await
             .unwrap();
 
         assert_eq!(killed, 1);
-        assert!(registry.tracked().is_empty());
-        assert!(!process_alive(tracked_pid).await);
-        // An unrelated process with a similar role is never touched.
-        assert!(process_alive(unrelated_pid).await);
-        assert_eq!(unrelated.id(), Some(unrelated_pid));
+        assert!(!process_alive(pid).await);
 
         let _ = tracked.wait().await;
         drop(guard);
-        let _ = unrelated.start_kill();
-        let _ = unrelated.wait().await;
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_timeout_kills_the_grandchild_too() {
+        let mut command = Command::new("sh");
+        command
+            .args(["-c", "sleep 30 & echo $!; wait"])
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .kill_on_drop(true)
+            .process_group(0);
+        let mut child = command.spawn().unwrap();
+        let grandchild: u32 = {
+            use tokio::io::AsyncBufReadExt;
+            let stdout = child.stdout.take().unwrap();
+            let mut lines = tokio::io::BufReader::new(stdout).lines();
+            lines
+                .next_line()
+                .await
+                .unwrap()
+                .unwrap()
+                .trim()
+                .parse()
+                .unwrap()
+        };
+        assert!(process_alive(grandchild).await);
+
+        kill_child_tree(&mut child).await;
+
+        assert!(
+            !process_alive(grandchild).await,
+            "the interpreter started by the bootloader must not survive a timeout"
+        );
+    }
+
+    #[test]
+    fn previews_never_carry_a_credential() {
+        let redacted = preview(r#"auth set failed: token = "sk-live-123" at line 3"#);
+        assert!(!redacted.contains("sk-live-123"), "{redacted}");
+        assert!(redacted.contains("***"), "{redacted}");
+    }
+
+    #[tokio::test]
+    async fn engine_stderr_is_redacted_before_it_reaches_the_webview() {
+        // A real child, so the test covers the whole `supervise` path: the
+        // envelope on stdout and the token the engine quoted on stderr.
+        let _dir = tempfile::tempdir().unwrap();
+        #[cfg(windows)]
+        let mut command = {
+            // `cmd` would echo the backslashes of an escaped JSON argument, so
+            // the envelope is read from a file instead of `echo`.
+            let envelope = _dir.path().join("envelope.json");
+            std::fs::write(&envelope, r#"{"ok":true}"#).unwrap();
+            let mut command = Command::new("cmd");
+            command.args([
+                "/C",
+                &format!("type {}&echo token=sk-live-123 1>&2", envelope.display()),
+            ]);
+            command
+        };
+        #[cfg(not(windows))]
+        let mut command = {
+            let mut command = Command::new("sh");
+            command.args([
+                "-c",
+                r#"printf '{"ok":true}'; printf 'token=sk-live-123\n' >&2"#,
+            ]);
+            command
+        };
+        command
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .kill_on_drop(true);
+        let child = command.spawn().unwrap();
+
+        let result = supervise(
+            child,
+            CliCommandId::Version,
+            None,
+            Duration::from_secs(10),
+            Instant::now(),
+        )
+        .await
+        .unwrap();
+
+        assert!(!result.stderr.contains("sk-live-123"), "{}", result.stderr);
+        assert!(result.stderr.contains("***"), "{}", result.stderr);
     }
 
     #[tokio::test]

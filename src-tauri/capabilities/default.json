@@ -8,7 +8,7 @@
     "dialog:default",
     "opener:default",
     "log:default",
-    "updater:default",
+    "updater:allow-check",
     "process:default"
   ]
 }

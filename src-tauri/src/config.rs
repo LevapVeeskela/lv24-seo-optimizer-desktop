@@ -303,14 +303,25 @@ pub fn parse_toml(content: &str) -> AppResult<DocumentMut> {
 /// Resolve `storage.data_dir` the same way the engine does: relative values are
 /// relative to the config file's parent, not the desktop's cwd. `~/` is
 /// expanded with HOME/USERPROFILE because the desktop has no shell.
-pub fn data_dir_from_document(document: &DocumentMut, config_path: &Path) -> Option<PathBuf> {
+///
+/// A network/device reference is rejected before it is resolved: joining it to
+/// the config directory would otherwise hide the `\\server\share` prefix and
+/// the shell would happily open an SMB connection on the UI thread.
+pub fn data_dir_from_document(
+    document: &DocumentMut,
+    config_path: &Path,
+) -> AppResult<Option<PathBuf>> {
     let raw = document
         .get("storage")
         .and_then(|storage| storage.get("data_dir"))
         .and_then(|item| item.as_str())
         .map(str::trim)
-        .filter(|value| !value.is_empty())?;
-    Some(resolve_data_dir(raw, config_path))
+        .filter(|value| !value.is_empty());
+    let Some(raw) = raw else {
+        return Ok(None);
+    };
+    crate::paths::ensure_local_path(raw, "storage.data_dir")?;
+    Ok(Some(resolve_data_dir(raw, config_path)))
 }
 
 pub fn resolve_data_dir(raw: &str, config_path: &Path) -> PathBuf {
@@ -379,6 +390,9 @@ pub fn stage_temp(target: &Path, content: &str) -> AppResult<PathBuf> {
         let candidate = parent.join(format!(".{base}.{}.{}.tmp", std::process::id(), sequence));
         match create_private_file(&candidate) {
             Ok(file) => {
+                // The directory ACL is inherited on Windows; replace it before
+                // any bytes (which may include a pasted token) are written.
+                restrict_private_file(&candidate);
                 finish_temp(file, &candidate, content)?;
                 return Ok(candidate);
             }
@@ -464,7 +478,7 @@ pub fn commit_temp(temp: &Path, target: &Path) -> AppResult<WriteOutcome> {
             // before the original is replaced. It also inherits the restrictive
             // permissions documented for backups instead of the source mode.
             sync_backup(&backup_path);
-            restrict_backup(&backup_path);
+            restrict_private_file(&backup_path);
             prune_backups(target, BACKUP_KEEP);
             backup = Some(backup_path);
             Some(metadata.permissions())
@@ -515,9 +529,12 @@ fn sync_backup(path: &Path) {
     }
 }
 
-/// Backups stay readable only by the owner on Unix. Best effort: a filesystem
-/// that rejects the mode must not block saving the user's configuration.
-fn restrict_backup(path: &Path) {
+/// Backups stay readable only by the owner. On Unix that is `0600`; on Windows
+/// a new file inherits the directory DACL, which on a share or under
+/// `C:\Users\Public` can grant other users read access to a backup that holds
+/// the same tokens as the config. Best effort: a filesystem that rejects the
+/// change must not block saving the user's configuration.
+fn restrict_private_file(path: &Path) {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -528,10 +545,36 @@ fn restrict_backup(path: &Path) {
             );
         }
     }
-    #[cfg(not(unix))]
+    #[cfg(windows)]
     {
-        let _ = path;
+        use std::process::{Command, Stdio};
+        // `S-1-3-4` is OWNER RIGHTS: it always resolves to the object owner, so
+        // no user name lookup (and no locale-dependent output) is needed. The
+        // arguments go through `Command::arg`, never a shell string.
+        let status = Command::new("icacls")
+            .arg(path)
+            .args(["/inheritance:r", "/grant:r", "*S-1-3-4:(F)"])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
+        match status {
+            Ok(status) if status.success() => {}
+            Ok(status) => log::warn!(
+                "icacls exited with {status} while restricting {}",
+                path.display()
+            ),
+            Err(err) => log::warn!(
+                "cannot restrict the ACL of config draft {}: {err}",
+                path.display()
+            ),
+        }
     }
+}
+
+#[cfg(all(not(unix), not(windows)))]
+fn restrict_private_file(path: &Path) {
+    let _ = path;
 }
 
 /// Flush the directory entry so a rename survives a power loss. The file
@@ -859,11 +902,35 @@ fn backup_files(target: &Path) -> Vec<PathBuf> {
         .filter(|path| {
             path.file_name()
                 .and_then(|value| value.to_str())
-                .map(|name| name.starts_with(&prefix))
+                .map(|name| is_app_backup_name(name, &prefix))
                 .unwrap_or(false)
                 && path.is_file()
         })
         .collect()
+}
+
+/// Only names this app writes are eligible for retention:
+/// `<config>.bak-YYYYMMDDTHHMMSSZ` or `<config>.bak-YYYYMMDDTHHMMSSZ-<n>`.
+/// A user file such as `seo.toml.bak-before-experiment` shares the prefix but
+/// must never be deleted by housekeeping.
+fn is_app_backup_name(name: &str, prefix: &str) -> bool {
+    let Some(rest) = name.strip_prefix(prefix) else {
+        return false;
+    };
+    let bytes = rest.as_bytes();
+    if bytes.len() < 16 {
+        return false;
+    }
+    let stamp = &bytes[..16];
+    let digits = |slice: &[u8]| slice.iter().all(u8::is_ascii_digit);
+    if !(digits(&stamp[..8]) && stamp[8] == b'T' && digits(&stamp[9..15]) && stamp[15] == b'Z') {
+        return false;
+    }
+    match &bytes[16..] {
+        [] => true,
+        [b'-', suffix @ ..] if !suffix.is_empty() && digits(suffix) => true,
+        _ => false,
+    }
 }
 
 fn utc_stamp() -> String {
@@ -907,9 +974,33 @@ mod tests {
         let config = dir.path().join("seo.toml");
         let document = parse_toml("[storage]\ndata_dir = \"data\"\n").unwrap();
         assert_eq!(
-            data_dir_from_document(&document, &config).unwrap(),
+            data_dir_from_document(&document, &config).unwrap().unwrap(),
             dir.path().join("data")
         );
+    }
+
+    #[test]
+    fn network_data_dir_is_rejected_before_it_is_resolved() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = dir.path().join("seo.toml");
+        for raw in [
+            r"\\attacker\share\data",
+            r"\\?\C:\data",
+            r"\\.\PhysicalDrive0",
+            "//attacker/share",
+        ] {
+            let document = parse_toml(&format!("[storage]\ndata_dir = {raw:?}\n")).unwrap();
+            let error = data_dir_from_document(&document, &config).unwrap_err();
+            assert_eq!(error.code(), "INVALID_PATH", "{raw}");
+            assert_eq!(
+                error.details().unwrap()["reason"],
+                "network_or_device_path",
+                "{raw}"
+            );
+        }
+        // A missing key is not an error.
+        let empty = parse_toml("[storage]\n").unwrap();
+        assert!(data_dir_from_document(&empty, &config).unwrap().is_none());
     }
 
     #[test]
@@ -923,7 +1014,7 @@ mod tests {
         ))
         .unwrap();
         assert_eq!(
-            data_dir_from_document(&document, &config).unwrap(),
+            data_dir_from_document(&document, &config).unwrap().unwrap(),
             absolute
         );
     }
@@ -1087,6 +1178,91 @@ mod tests {
             assert_eq!(mode, 0o600, "temp config mode was {mode:o}");
         }
         fs::remove_file(&temp).unwrap();
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn staged_config_files_do_not_inherit_a_shared_acl_on_windows() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("seo.toml");
+        let temp = stage_temp(&target, "token = \"draft-secret\"\n").unwrap();
+        let output = std::process::Command::new("icacls")
+            .arg(&temp)
+            .output()
+            .expect("icacls must be available on Windows");
+        let listing = String::from_utf8_lossy(&output.stdout);
+        // Inherited ACEs are marked `(I)` in every locale; the draft must carry
+        // an explicit owner-only DACL instead of the directory's.
+        assert!(
+            !listing.contains("(I)"),
+            "draft still inherits its directory ACL:\n{listing}"
+        );
+        fs::remove_file(&temp).unwrap();
+    }
+
+    #[test]
+    fn user_backup_lookalikes_are_never_pruned() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("seo.toml");
+        fs::write(&target, "version = 1\n").unwrap();
+
+        // Names a user could create by hand next to the config.
+        let foreign = [
+            "seo.toml.bak-before-experiment",
+            "seo.toml.bak-20250101",
+            "seo.toml.bak-20250101T000000Z-manual",
+            "seo.toml.backup-20250101T000000Z",
+        ];
+        for name in foreign {
+            fs::write(dir.path().join(name), "user data").unwrap();
+        }
+        // Real app backups, older than the retention window.
+        for stamp in [
+            "20240101T000000Z",
+            "20240102T000000Z",
+            "20240103T000000Z",
+            "20240104T000000Z",
+            "20240105T000000Z",
+            "20240106T000000Z",
+        ] {
+            fs::write(dir.path().join(format!("seo.toml.bak-{stamp}")), "app").unwrap();
+        }
+
+        prune_backups(&target, BACKUP_KEEP);
+
+        let remaining: Vec<String> = backup_files(&target)
+            .into_iter()
+            .map(|path| path.file_name().unwrap().to_string_lossy().to_string())
+            .collect();
+        assert_eq!(remaining.len(), BACKUP_KEEP, "{remaining:?}");
+        for name in foreign {
+            assert!(
+                dir.path().join(name).is_file(),
+                "{name} must survive retention"
+            );
+        }
+    }
+
+    #[test]
+    fn backup_names_are_matched_by_the_app_stamp_format() {
+        let prefix = "seo.toml.bak-";
+        for name in [
+            "seo.toml.bak-20260101T101010Z",
+            "seo.toml.bak-20260101T101010Z-2",
+        ] {
+            assert!(is_app_backup_name(name, prefix), "{name}");
+        }
+        for name in [
+            "seo.toml.bak-",
+            "seo.toml.bak-20260101T101010",
+            "seo.toml.bak-2026O101T101010Z",
+            "seo.toml.bak-20260101T101010Z-",
+            "seo.toml.bak-20260101T101010Z-x",
+            "seo.toml.bak-20260101T101010Z-2-3",
+            "other.toml.bak-20260101T101010Z",
+        ] {
+            assert!(!is_app_backup_name(name, prefix), "{name}");
+        }
     }
 
     #[test]

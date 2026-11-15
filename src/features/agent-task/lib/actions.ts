@@ -27,6 +27,22 @@ export function ensureMarkdownPath(path: string): string {
   return /\.[^./\\]+$/.test(name) ? trimmed : `${trimmed}.md`;
 }
 
+/**
+ * True when `path` is `root` or below it. This is the save dialog's pre-check;
+ * the shell's canonicalized `write_text_file` allow-list stays authoritative.
+ * Windows paths compare case-insensitively, so both sides are normalized.
+ */
+export function isWithinDirectory(path: string, root: string): boolean {
+  const normalize = (value: string) =>
+    value.replace(/[\\/]+/g, "/").replace(/\/+$/, "").toLowerCase();
+  const candidate = normalize(path);
+  const base = normalize(root);
+  if (!base) {
+    return false;
+  }
+  return candidate === base || candidate.startsWith(`${base}/`);
+}
+
 /** Copy the exact brief an external agent should receive. */
 export async function copyRecommendationPrompt(
   recommendation: Recommendation,
@@ -46,6 +62,9 @@ function joinPath(directory: string, name: string): string {
  * allow-listed `write_text_file`, so a denied write is visible to the user
  * instead of a Blob download that can fail silently.
  *
+ * The dialog starts in the app export root and a path outside it is rejected
+ * before the write, so the user never picks a folder the shell will refuse.
+ *
  * `canceled` is not an error: closing the dialog must not raise a toast.
  */
 export async function exportRecommendationPrompt(
@@ -55,19 +74,33 @@ export async function exportRecommendationPrompt(
   options: { defaultDir?: string | null } = {},
 ): Promise<ExportResult> {
   const filename = agentTaskFilename(recommendation.id);
+  const exportRoot = options.defaultDir?.trim() || null;
   try {
     const selected = await save({
       title: filename,
-      defaultPath: options.defaultDir
-        ? joinPath(options.defaultDir, filename)
+      defaultPath: exportRoot
+        ? joinPath(exportRoot, filename)
         : filename,
       filters: [{ name: "Markdown", extensions: ["md"] }],
     });
     if (!selected) {
       return { status: "canceled" };
     }
+    const target = ensureMarkdownPath(selected);
+    if (exportRoot && !isWithinDirectory(target, exportRoot)) {
+      // Fail before the write: the shell would reject the path anyway, and the
+      // user should learn why without a failed export record.
+      return {
+        status: "failed",
+        error: {
+          code: "PATH_NOT_ALLOWED",
+          message: `Exports must be saved under ${exportRoot}.`,
+          retryable: false,
+        },
+      };
+    }
     await writeTextFile(
-      ensureMarkdownPath(selected),
+      target,
       buildAgentPrompt(recommendation, property, period),
     );
     return { status: "exported" };
