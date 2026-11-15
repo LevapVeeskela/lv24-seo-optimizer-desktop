@@ -1,8 +1,8 @@
 # Architecture
 
-Status: **implementation contract for `0.2.2`.** The Rust command bridge and product screens are
-implemented in this repository. Where this document describes a control, it is the requirement that
-implementation must satisfy. The pinned engine is `lv24-seo 0.5.2`.
+Status: **implementation contract for `0.2.3` (draft).** The Rust command bridge and product screens
+are implemented in this repository. Where this document describes a control, it is the requirement
+that implementation must satisfy. The pinned engine is `lv24-seo 0.5.2`.
 
 ## 1. Shape
 
@@ -18,7 +18,7 @@ implementation must satisfy. The pinned engine is `lv24-seo 0.5.2`.
 │ Rust shell                                                   │
 │  config read / validate / write (toml_edit)                  │
 │  CLI runner: argv array, stdin, timeout, bounded output      │
-│  path allow-list · secret stdin bridge · updater plugin      │
+│  path allow-list · secret stdin bridge · Rust updater        │
 └───────────────────────────┬──────────────────────────────────┘
                             │ child process, one workspace at a time
 ┌───────────────────────────▼──────────────────────────────────┐
@@ -109,8 +109,19 @@ The command surface is fixed. The generic `cli_run` allow-list is:
 
 Dedicated Tauri commands cover the rest: `shell_status`, `config_read`, `config_validate`,
 `config_write`, `config_patch`, `auth_set` (secret over stdin), `auth_delete`, `write_text_file`,
-`settings_get`, `settings_set`, `prepare_update` and `open_path`. The webview cannot add a command at
-runtime.
+`settings_get`, `settings_set`, `pick_config`, `open_path`, `prepare_update`, `update_install`,
+`update_cancel`. The webview cannot add a command at runtime.
+
+`pick_config` is the only way to introduce a new workspace path: it opens the native dialog, records
+the canonical path as approved for this process and returns it. `settings_set` accepts a changed
+`configPath` only when it matches that approval, otherwise it fails with `PATH_NOT_APPROVED`. The
+webview no longer calls `@tauri-apps/plugin-dialog` for this, so it cannot name a file the dialog did
+not produce.
+
+`update_install` and `update_cancel` exist because the webview holds only `updater:allow-check`. The
+Rust side re-checks the endpoint, refuses a version that differs from the announced one, serializes
+one install at a time, emits `update://progress` and stops tracked sidecars before handing the bytes
+to the installer. See section 10.
 
 ## 5. Engine discovery and version gate
 
@@ -143,20 +154,46 @@ build cannot replace itself.
 Structured Settings forms edit a draft model. The save flow is:
 
 1. build a TOML patch with `toml_edit` so comments and key order survive;
-2. write a temporary `0600` file next to the target and fsync it;
+2. write a temporary file next to the target (owner-only ACL, see below) and fsync it;
 3. validate it with `lv24-seo config show --config <temp> --json`;
-4. create a timestamped `0600` backup, fsynced, keeping the last five;
+4. create a timestamped owner-only backup, fsynced, keeping the last five;
 5. atomically replace the target and fsync the parent directory;
 6. re-read and show the effective redacted config.
 
+The save runs on a blocking task with a deadline rather than on the UI thread, so a 64 MiB export or
+a dead network share cannot freeze the window; exceeding the deadline returns `PATH_TIMEOUT`. The
+blocking task itself cannot be aborted, so its thread survives a timeout.
+
 Reads are bounded (`8 MiB`) and reject a non-regular or oversized file. Settings load per field, so
-one malformed value does not discard the rest. A stale saved config path is tolerated and reported
-as missing instead of blocking startup. Windows reserved device names and trailing dots or spaces
-are rejected in every path component.
+one malformed value does not discard the rest. A stale saved config path is tolerated: the shell
+reports `configExists: false`, the dashboard shows a **workspace configuration not found** notice
+with a **Choose config** action, and stats/report calls are blocked instead of failing generically.
+Windows reserved device names and trailing dots or spaces are rejected in every path component.
+
+A workspace path is consent-gated. `pick_config` approves the canonical path for the process;
+`settings_set` rejects any other new value with `PATH_NOT_APPROVED`. The engine cannot be pointed at
+an arbitrary file by a config the webview merely read.
+
+`storage.data_dir` is rejected with `INVALID_PATH` (`reason: network_or_device_path`) when it names
+`\\server\share`, `\\?\C:\…`, `\\.\device`, `\??\…` or `//host/share`. The check is string-based and
+runs before the value is joined to the config directory, because joining would hide the prefix.
+Otherwise resolving it would authenticate to an SMB share and could block for the SMB timeout. The
+same filter applies to a data directory reported by the engine.
+
+On Windows, a temp draft inherits its directory's DACL, which on a share or under `C:\Users\Public`
+can grant other users read access to a file that holds the same tokens as the config. The shell
+removes inheritance and grants full control to `OWNER RIGHTS` (`S-1-3-4`) before any bytes are
+written; `icacls` receives arguments through `Command::arg`, never a shell string. A rejected ACL is
+logged and tolerated so it cannot block saving. Backup retention matches only names this app writes
+(`<config>.bak-YYYYMMDDTHHMMSSZ` or `…-<n>`), so a hand-made `seo.toml.bak-before-experiment` is never
+deleted by housekeeping.
 
 Form saves are field-level patches, so comments, key order and unrelated external edits survive. If
 another process changed the file, reload before saving so the form reflects the current file; the
 Diff tab shows saved-vs-draft fields. Windows file locks produce a retry message, not a partial write.
+The draft carries a revision counter: if the user typed while the engine was writing, the returned
+snapshot is **not** copied over the newer draft. The edits stay, the diff shows them and validation is
+cleared, instead of the silent data loss that replacing the draft would cause.
 
 Source TOML is shown read-only in the Configuration screen, with secret-looking values redacted.
 There is no raw editor. Edits go through the Settings form, which is validated by the engine before a
@@ -171,13 +208,14 @@ Engine calls are synchronous from the UI's perspective. Each command has a fixed
 `doctor`, `properties` and `auth status` 30 seconds; `auth set`/`auth delete` 120 seconds. A timeout
 kills the exact child process and returns a typed error.
 
-- There is no job queue, no percentage progress and no user-facing cancel button yet. The UI shows
-  an indeterminate busy state and waits for the call to finish.
+- Engine calls have no job queue and no cancel button. The update download is the one long operation
+  that reports progress (`update://progress`) and can be cancelled (`update_cancel`).
 - `stdout` is capped at 4 MiB and `stderr` at 128 KiB; an oversized response is an error, not a
   truncated success.
-- Configuration validation `stderr` is redacted (`redact_secrets`) before it reaches the webview or
-  the log, because the engine can quote a config line or an argv in a traceback while validating a
-  staged draft.
+- Every engine `stderr` and every bounded preview is redacted (`redact_secrets`) before it reaches the
+  webview or the log, not only the configuration-validation path. Redaction runs before truncation: a
+  300-character preview could split `token = "…"` so the pattern no longer matches. TOML syntax
+  errors are redacted the same way, because the parser quotes the offending line.
 - Partial failure (`ok=true` with incomplete meta, or exit `5`) is “completed with warnings”, never
   a clean success.
 - A missing token is configuration, not an outage. A no-data report is neutral, not an error.
@@ -203,13 +241,27 @@ There is no `widgets/` layer today. The header, navigation and update badge live
 - UI locale (`en`, `ru`, `zh`) is independent from `report.locale`. Machine codes are never
   translated; unknown codes are shown raw.
 - Accessibility is a requirement: WCAG 2.2 AA, visible focus, skip link, focus restoration after
-  dialogs, keyboard tables, no color-only meaning, reduced motion and 200% zoom.
+  dialogs, keyboard tables, no color-only meaning, reduced motion and 200% zoom. The skip link moves
+  focus to `#main-content` through a handler that calls `preventDefault`; a bare hash href would be
+  read by the hash router as a route and render NotFound.
 - State is scoped to the current workspace: changing the workspace or losing the engine clears
   report, stats, doctor and secret state instead of showing the previous project's data.
 - Actions that cannot succeed are disabled, not left to fail on click: no workspace selected, engine
-  offline, engine below `MIN_ENGINE_VERSION`.
+  offline, engine below `MIN_ENGINE_VERSION`, or a saved config path that no longer exists.
+- Validation is tri-state: `valid`, `invalid` and `skipped`. A call that returns no answer for the
+  current draft (one is already running, the workspace switched, or the user kept typing) is
+  `skipped` and produces no toast, instead of being reported as invalid.
+- Saving keeps a revision counter. A response for an older revision never overwrites a newer draft;
+  the draft stays, validation is cleared and the diff shows the unsaved edits.
+- A provider block has one explicit enable/disable toggle that writes `providers.<id>.present`.
+  Editing a field no longer implies `present = true`, so a disabled block cannot silently return on
+  the next save; its fields are hidden while disabled.
+- A route-level error boundary contains a render failure: the screen shows a reload action and the
+  error message instead of an empty window, and navigating to another route resets the boundary.
 - The en/ru/zh catalogues are at parity; a missing key is a test failure, not a silent English
-  fallback.
+  fallback. Recommendation titles, actions and verification text are localised through an `i18n`
+  block on the recommendation, with the provider/source label translated per locale; older queued
+  tasks without that block fall back to the stored English text.
 
 ## 9. Contracts
 
@@ -240,10 +292,21 @@ The release sidecar is a **PyInstaller onedir** tree, not onefile:
 
 Auto-update is enabled for Windows NSIS, macOS `.app` and Linux AppImage. The updater reads a signed
 `latest.json` from GitHub Releases, verifies the package with an embedded minisign key, refuses
-downgrades and never installs without user confirmation. Immediately before the installer starts,
-`prepare_update` stops only the engine sidecar PIDs this app instance registered — the sidecar lives
-inside the installed resource directory and a live process would keep it locked — and a cleanup
-failure blocks the install with `UPDATE_ENGINE_BUSY`. deb, rpm, MSI and the portable ZIP are
-manual-only. The updater private key is scoped to the release build step and is never shipped.
+downgrades and never installs without user confirmation.
+
+The install path is owned by Rust. The webview holds only `updater:allow-check`, so it can read the
+manifest but cannot call `downloadAndInstall`. Pressing **Download and install** calls
+`update_install(expectedVersion)`; the shell re-checks the endpoint, rejects a version that differs
+from the one the user saw (`UPDATE_VERSION_MISMATCH`), allows one install at a time
+(`UPDATE_IN_PROGRESS`), stops tracked sidecars (also inside the command, not only in
+`prepare_update`), emits `update://progress` and installs. A cleanup failure blocks the install with
+`UPDATE_ENGINE_BUSY`. `update_cancel` stops a download before the installer starts and returns
+`UPDATE_CANCELLED`; after installation begins it returns `false` and the UI does not claim a
+cancellation. deb, rpm, MSI and the portable ZIP are manual-only. The updater private key is scoped to
+the release build step and is never shipped.
+
+The release side also ships a portable `.zip` **and** its `.zip.sha256` sidecar, validated against the
+archive in the release gate; `latest.json` is validated against `contracts/latest.schema.json` before
+the draft is created.
 
 See [`docs/release.md`](release.md) and [`docs/security.md`](security.md).

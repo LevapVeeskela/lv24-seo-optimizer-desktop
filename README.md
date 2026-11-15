@@ -14,7 +14,9 @@ scraping.
 > ZIP are manual-only. `0.1.0` has no updater and must be upgraded manually once. The pinned engine
 > is `lv24-seo 0.5.2`, which ships the `stats` command described by
 > [`contracts/stats-v1.md`](contracts/stats-v1.md). Read [Public status](#public-status) before
-> relying on anything here.
+> relying on anything here. `0.2.3` is in preparation: its draft notes are
+> [`docs/releases/0.2.3.md`](docs/releases/0.2.3.md), and the behaviour described below matches the
+> current branch, not a published build.
 
 ## Screenshot
 
@@ -190,6 +192,14 @@ updates** in Settings.
 - **User confirms.** The app never downloads or installs an update on its own. The panel shows the
   version and notes; **Download and install** starts the update. An unsaved configuration draft
   disables the button.
+- **Install runs in Rust.** The webview only has permission to read the manifest
+  (`updater:allow-check`); it cannot call the updater plugin's `downloadAndInstall`. The shell
+  re-checks the endpoint and refuses a version that differs from the one you saw
+  (`UPDATE_VERSION_MISMATCH`), runs one install at a time (`UPDATE_IN_PROGRESS`) and reports download
+  progress. A second window or a stale panel cannot install something else.
+- **Cancel is real.** **Cancel** during the download stops it before the installer starts
+  (`UPDATE_CANCELLED`). Once installation has begun the app says the update cannot be undone instead
+  of pretending the click cancelled it.
 - **Signature verified.** Packages are signed with a minisign/Ed25519 key whose public key is
   embedded in the app. `requireSignedVersion` binds the announced version to the signed package. A
   signature failure blocks that artifact and points to the release page; it is not retried.
@@ -200,7 +210,8 @@ updates** in Settings.
 - **Sidecar cleanup before install.** The engine sidecar lives inside the installed resource
   directory, so a running `lv24-seo` process would keep it locked and break the NSIS update. Before
   the installer starts, the shell stops only the engine PIDs this app instance spawned — never a
-  process matched by name. If a sidecar cannot be stopped, the install is blocked with
+  process matched by name. The install command repeats that stop itself, so a skipped preparation
+  step cannot leave a locked file. If a sidecar cannot be stopped, the install is blocked with
   `UPDATE_ENGINE_BUSY` and can be retried once that run exits.
 - **Manual-only bundles.** deb, rpm, MSI and the portable ZIP cannot replace the running
   installation. The Settings panel disables the in-app installer and links to the release page.
@@ -215,7 +226,7 @@ given to the release job. See [`docs/security.md`](docs/security.md#8-updates) a
 | Tool | Version | Why |
 |---|---|---|
 | Node.js | 24.x | Vite, TypeScript and the Tauri CLI |
-| Rust | 1.90+ | Tauri shell; `rustfmt` and `clippy` |
+| Rust | 1.90+ (CI and releases pin 1.95.0) | Tauri shell; `rustfmt` and `clippy` |
 | Python | 3.12 (3.11+ works) | contract generation and the PyInstaller sidecar |
 | [`uv`](https://docs.astral.sh/uv/) | current | reproducible Python environment for the sidecar |
 | Tauri prerequisites | current | WebView2 on Windows, WebKitGTK on Linux, Xcode CLT on macOS |
@@ -288,10 +299,15 @@ updater artifacts, while CI enables them only when the key secret exists.
 ```bash
 npm run typecheck
 npm test
+npm run test:release       # release scripts: latest.json schema, allowlist, checksums
 npm run build
 npm run contract:check     # regenerate contracts and fail on drift
 cd src-tauri && cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test
 ```
+
+CI adds `npm audit --audit-level=high` and `cargo audit`, and builds the Rust matrix on linux-x64,
+windows-x64, macos-arm64 and macos-x64 with Rust `1.95.0`. See
+[`docs/release.md`](docs/release.md#pull-request-ci-gates).
 
 ## Supported providers
 
@@ -352,8 +368,11 @@ Every field has a label, help text, a visible default and validation. Reserved e
 `report.telegram.severity`, `providers.yandex_metrika.goals`) are labelled **no effect**, never
 presented as working controls.
 
-The **Settings** screen is the editable form. The **Configuration** screen is the read-only output
-and diagnostics view with seven tabs:
+The **Settings** screen is the editable form. The workspace file is chosen with the native dialog
+owned by the shell (`pick_config`), which also records the selection as approved; the webview cannot
+persist an arbitrary path (`PATH_NOT_APPROVED`). If the saved workspace was moved or deleted, the
+dashboard says so and offers **Choose config** instead of failing every stats call. The
+**Configuration** screen is the read-only output and diagnostics view with seven tabs:
 
 1. **Overview** — config path, resolved path, data directory, engine version, last load/validation,
    backups and a copyable diagnostics summary.
@@ -370,7 +389,10 @@ before a patch is written.
 
 Saving applies field-level `config_patch` operations, so comments and key order survive. The shell
 revalidates with the engine, creates a timestamped backup (last five kept) and atomically replaces
-the file. Token values are never persisted by the webview, logged or shown back; the password field
+the file. Edits typed while the engine was writing are kept: the returned snapshot never overwrites a
+newer draft, and validation is cleared so the diff shows what is still unsaved. Provider blocks have
+an explicit enable/disable toggle, so disabling one removes it on save instead of it silently
+returning. Token values are never persisted by the webview, logged or shown back; the password field
 is sent once over IPC. See [`docs/configuration.md`](docs/configuration.md).
 
 ## Recommendations to an agent
@@ -396,7 +418,9 @@ action. The desktop does not apply site edits itself.
 - **No secrets in the webview.** Token input is a password field sent once over IPC; the Rust layer
   pipes it to `lv24-seo auth set --stdin`. Values are not stored in MobX, logs or diagnostics. On
   Linux the CLI runner inherits the session-bus/XDG variables Secret Service needs; the value itself
-  still travels only over stdin.
+  still travels only over stdin. Every engine `stderr` and every bounded output preview is redacted
+  (`token = "…"`, `--token …`, `Bearer …` → `***`) before truncation and before IPC, and a TOML syntax
+  error is redacted too, because the parser quotes the offending line.
 - **One shared secret store with the CLI.** The desktop runs the same engine under the same OS user,
   so a token stored by `lv24-seo auth set` in a terminal is visible in the desktop's `auth status`
   and vice versa. The OS keychain entry uses service `lv24-seo` and the same secret name on every
@@ -410,13 +434,22 @@ action. The desktop does not apply site edits itself.
   `latest.json`; diagnostics copies are user-triggered and redacted.
 - **Strict CSP.** Production builds allow only local assets and Tauri IPC; the development CSP is
   limited to the Vite origin.
-- **Command and path allow-lists.** No shell strings, no arbitrary executables. Config paths are
-  absolute and chosen through the native dialog; open/export paths are restricted to approved roots.
-  Windows reserved device names are rejected in every path component.
+- **Command and path allow-lists.** No shell strings, no arbitrary executables. A new config path can
+  only come from the native `pick_config` dialog; `settings_set` rejects anything else with
+  `PATH_NOT_APPROVED`, so a workspace file cannot redirect a config write. `storage.data_dir` rejects
+  UNC, verbatim and device paths (`INVALID_PATH`) before they are resolved, which avoids an outbound
+  SMB authentication. Open/export paths are restricted to approved roots and `open_path` opens the
+  canonical path that passed the check, not the raw request. Windows reserved device names are
+  rejected in every path component.
 - **Durable, private writes.** Config and settings writes are atomic and fsynced (file and parent
-  directory); temp drafts and backups are mode `0600`; config reads are bounded at 8 MiB.
+  directory); temp drafts and backups are `0600` on POSIX and get an owner-only DACL on Windows
+  before any bytes are written; config reads are bounded at 8 MiB. Backup retention only deletes
+  files this app created. Blocking file work runs off the UI thread with a deadline
+  (`PATH_TIMEOUT`), so a dead network share cannot freeze the window.
 - **Signed updates.** The updater verifies a minisign/Ed25519 signature, binds the version to the
-  signed package and refuses downgrades. A signature failure blocks the artifact.
+  signed package and refuses downgrades. A signature failure blocks the artifact. The install itself
+  runs in Rust with a version re-check and a cancellable download; the webview cannot start an
+  install.
 - **Sidecar integrity.** Release builds use a PyInstaller onedir tree with a reviewed local pin
   where available and rebuild-aware CI checksum reports. See [`docs/security.md`](docs/security.md).
 

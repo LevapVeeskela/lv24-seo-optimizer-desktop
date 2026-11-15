@@ -1,10 +1,11 @@
 # Security model
 
-Status: **security contract for `0.2.2`.** The Rust bridge and screens are implemented in this
+Status: **security contract for `0.2.3` (draft).** The Rust bridge and screens are implemented in this
 repository. This page states the controls the implementation must enforce and the residual risks
-accepted for the preview; where a control is future work, the text says so. `0.2.2` hardens the
-updater's sidecar cleanup, secret-source reporting and the durability of configuration writes on top
-of the `0.2.1` signed auto-update for Windows NSIS, macOS `.app` and Linux AppImage. See
+accepted for the preview; where a control is future work, the text says so. `0.2.3` moves the update
+install into Rust, gates every config path behind the native dialog, redacts all engine output before
+it reaches the webview and gives Windows drafts and backups an owner-only DACL. `0.2.2` hardened the
+updater's sidecar cleanup, secret-source reporting and the durability of configuration writes. See
 [`SECURITY.md`](../SECURITY.md) for reporting a vulnerability.
 
 ## 1. Assets and adversaries
@@ -90,26 +91,54 @@ opt-in file. The desktop must show which source is active.
 - `--config` must be absolute, canonicalized, and selected through the native dialog (or persisted in
   desktop settings). Canonicalization rejects symlink escapes and control characters; the selected
   project is the consent boundary, not a global directory allow-list.
+- The consent is enforced, not implied: `settings_set` accepts a new `configPath` only when the path
+  is already active or was returned by `pick_config`, which opens the native dialog and records the
+  canonical path for this process. Any other value fails with `PATH_NOT_APPROVED` and the rejected
+  path in `details.path`. A malicious `seo.toml` therefore cannot point `config_write` or
+  `config_patch` at an arbitrary file. The webview no longer opens the config dialog itself, so it
+  cannot name a config path the dialog did not produce; the dialog plugin remains available for
+  folder and file pickers whose result is validated separately.
 - `--out` and export paths come from a native folder picker or an approved root; they are
   canonicalized before use.
 - Write flags (`--send`, `--allow-write`, confirmation tokens) are never accepted from a read
   command and require an explicit confirmation dialog naming the target.
 - A timeout or dropped child handle kills the exact child process handle/PID. It never uses a
-  wildcard process name; several LV24 applications can run concurrently. There is no user-facing
-  cancel button in `0.2.2`.
+  wildcard process name; several LV24 applications can run concurrently. On Unix the engine is
+  started in its own process group so a PyInstaller bootloader's interpreter child is killed with it
+  instead of surviving and locking the engine executable. There is no user-facing cancel button for
+  engine commands; the update download is the only cancellable operation (section 8).
+- Blocking filesystem work (config/settings writes, export writes, `open_path` resolution) runs on a
+  blocking task with a deadline: 10 s for settings and path resolution, 30 s for exports. A call that
+  exceeds it returns `PATH_TIMEOUT` instead of freezing the window. The timed-out task cannot be
+  aborted, so its thread lives until the kernel call returns; the UI is free either way.
 
 ## 5. Configuration files
 
 - Reads and writes are limited to the approved workspace. The desktop opens the file the engine
   would actually use, not a guessed path. A stale saved config path is tolerated: a moved or deleted
-  workspace is reported as missing and can be re-selected instead of blocking startup.
+  workspace is reported as missing (`configExists: false`) with a **Choose config** action instead of
+  blocking startup or showing a generic stats error.
 - Reads are bounded (`8 MiB`); an oversized or non-regular file is rejected instead of read.
 - Writes are atomic: temp file in the same directory, validation, backup, rename. A failed
   validation leaves the original mtime and contents unchanged.
 - Writes are durable: the temp file is fsynced before the rename and the parent directory is
   fsynced after it, so a crash or power loss cannot leave a truncated `seo.toml`.
-- Temp drafts are created with mode `0600`. Backups are timestamped, capped at five, written `0600`
-  and fsynced; a backup never has looser permissions than the file it copies.
+- Temp drafts and backups are private on every platform. On Unix that is mode `0600`. On Windows a
+  new file inherits its directory's DACL, which under a share or `C:\Users\Public` can grant other
+  users read access to a draft that holds the same tokens as the config, so the shell removes
+  inheritance and grants full control to `OWNER RIGHTS` (`S-1-3-4`) **before** any bytes are
+  written. `icacls` is invoked through `Command::arg`, never a shell string, and a rejected ACL is
+  logged and tolerated so it cannot block saving the user's configuration.
+- Backups are timestamped and capped at five. Retention deletes only names this app writes
+  (`<config>.bak-YYYYMMDDTHHMMSSZ` or `…-<n>`); a user file such as
+  `seo.toml.bak-before-experiment` shares the prefix but is never pruned.
+- `storage.data_dir` is rejected before it is resolved when it names a network share or a device
+  namespace: `\\server\share`, `\\?\C:\…`, `\\.\device`, `\??\…` and `//host/share` return
+  `INVALID_PATH` with `reason: network_or_device_path`. The check is string-based because joining the
+  value to the config directory would hide the prefix. Otherwise resolving it would perform an
+  outbound SMB authentication (NetNTLM leakage) and could block the UI for the SMB timeout. The same
+  check runs when the engine reports a data directory, so a share written by another tool is never
+  surfaced.
 - Windows reserved device names (`CON`, `PRN`, `AUX`, `NUL`, `COM1`–`COM9`, `LPT1`–`LPT9`) and
   trailing dots or spaces are rejected in every path component, not only the last one.
 - Settings load per field: one malformed value does not discard the rest of the settings file.
@@ -142,8 +171,12 @@ connect-src ipc: http://ipc.localhost
   selected project's config/data dirs, and enforces an extension allow-list (`html`, `htm`, `json`,
   `md`, `txt`, `csv`, `toml`, `log`, `sqlite`, `sqlite3`, `db`, `pdf`, images) before handing the
   file to the OS default handler, normally the browser. `secrets.json` and macOS application bundles
-  are rejected. The opened file runs outside the app's CSP and is not sandboxed by the desktop; it is
-  local content the user chose to open.
+  are rejected. Resolution runs off the UI thread with a 10 s deadline (`PATH_TIMEOUT`), and the
+  opener receives the **canonical** path that passed the check, not the raw request: a symlink or an
+  executable handler swapped in after validation cannot redirect the launch. On Windows the verbatim
+  `\\?\C:\…` prefix is stripped before the path is handed to the opener, because shell-execution APIs
+  reject it; the path is not re-resolved. The opened file runs outside the app's CSP and is not
+  sandboxed by the desktop; it is local content the user chose to open.
 - The desktop does not render provider HTML or arbitrary remote content in the main webview.
 
 ## 7. Sidecar integrity
@@ -174,6 +207,18 @@ connect-src ipc: http://ipc.localhost
 - Auto-update is **enabled** in the committed config. The updater endpoint is
   `https://github.com/LevapVeeskela/lv24-seo-optimizer-desktop/releases/latest/download/latest.json`;
   the public minisign key is embedded in `src-tauri/tauri.conf.json`.
+- The webview holds only `updater:allow-check`. It can read the manifest but cannot call the plugin's
+  `downloadAndInstall`, so it cannot bypass the pre-install cleanup or the version re-check. Install
+  runs in Rust through `update_install(expectedVersion)`; the capability list no longer contains
+  `updater:default`.
+- `update_install` re-checks the endpoint, and if the announced version differs from the one the user
+  saw it fails with `UPDATE_VERSION_MISMATCH` (details carry `announced` and `expected`) instead of
+  silently installing a different release. A second install while one is downloading or installing
+  fails with `UPDATE_IN_PROGRESS`. Download progress is emitted as `update://progress`.
+- Cancellation is real: `update_cancel` sets a flag that a running download polls every 100 ms, drops
+  the download future (closing the HTTP stream) and returns `UPDATE_CANCELLED`; the installer never
+  starts. Once the installer has started, `update_cancel` returns `false` and the UI says the update
+  cannot be undone rather than pretending the click cancelled it.
 - `requireSignedVersion` is enabled. The updater verifies the package signature and binds the
   announced version to the signed package. A signature failure blocks that artifact and points to
   the release page; it is never downgraded to an offline warning or retried automatically.
@@ -184,8 +229,9 @@ connect-src ipc: http://ipc.localhost
   instance registered**. The sidecar lives inside the installed resource directory, so a live
   process keeps it locked and breaks the NSIS update. Only exact tracked PIDs are stopped; nothing
   is matched by image name, so another installed copy, a portable build or a terminal run is
-  untouched. A cleanup failure blocks the install with `UPDATE_ENGINE_BUSY` instead of launching an
-  installer that will fail halfway.
+  untouched. `update_install` repeats the stop itself (defense in depth) because the webview could
+  skip `prepare_update`. A cleanup failure blocks the install with `UPDATE_ENGINE_BUSY` instead of
+  launching an installer that will fail halfway.
 - The private key (`TAURI_SIGNING_PRIVATE_KEY`, optionally with
   `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`) is passed only to the release build step. It is never
   committed, logged, shipped or given to the staging, `latest.json`, checksum or upload steps.
@@ -208,11 +254,17 @@ connect-src ipc: http://ipc.localhost
   uploaded automatically.
 - Logs redact secret-looking keys and bounded stderr. Users are told to review a bundle before
   sharing it.
-- Configuration validation `stderr` is passed through `redact_secrets` before it reaches the
-  webview or a log: TOML/JSON credential assignments (`token = "…"`, `"apiKey": "…"`),
-  `--token`/`--password` argv and `Bearer` values are rewritten to `***`. Paths, URLs and engine
-  messages are preserved so diagnostics stay useful. The engine can quote a config line or an argv
-  in a traceback while validating a staged draft, so this path must not carry a credential.
+- **Every** engine `stderr` and every bounded output preview passes through `redact_secrets` before
+  it reaches the webview, a log or a diagnostics bundle — not only the configuration-validation path.
+  TOML/JSON credential assignments (`token = "…"`, `"apiKey": "…"`), `--token`/`--password` argv and
+  `Bearer` values are rewritten to `***`. Paths, URLs and engine messages are preserved so
+  diagnostics stay useful.
+- A TOML syntax error is redacted before it is returned as `syntaxError`: the parser quotes the
+  offending line, which can be a token the user pasted before the error was fixed.
+- Redaction happens **before** truncation. A preview cut at 300 characters could split `token = "…"`
+  so the pattern no longer matches; redacting first is what keeps the fragment out of the webview.
+  The engine can quote a config line or an argv in a traceback, so this path must not carry a
+  credential.
 
 ## 10. Write and destructive actions
 
@@ -252,12 +304,22 @@ paid certificate, notarization or paid runner without explicit owner approval.
 - CI uses standard GitHub-hosted runners and public-repository free minutes only.
 - Dependencies are pinned by `package-lock.json`, `Cargo.lock` and the engine/PyInstaller versions
   in `scripts/cli-checksums.json`.
+- A blocking `audit` job runs `npm audit --audit-level=high` and `cargo audit` (RustSec) on every pull
+  request. Both workflows install Rust `1.95.0` instead of `stable`, so the shipped binary is built by
+  the reviewed compiler and a new compiler cannot change it between runs; the pin is bumped
+  deliberately in the release that reviews the toolchain.
 - Dependabot proposes updates; a human reviews and CI runs on the pull request.
 - Contract fixtures are generated from a pinned engine and contain no credentials or customer data.
 - `gitleaks` or an equivalent secret scan should run locally and in review; a detected secret is
   rotated, not just deleted from the latest commit.
 - Release artifacts are checksummed before publication. The release job is owner-gated and manual;
   there are no push/tag triggers. The updater private key is scoped to the build step.
+- The published-asset allowlist, `SHA256SUMS.txt` and the upload list come from one module
+  (`scripts/release-assets.mjs`) with tests, so an asset cannot be checksummed but silently dropped
+  from the release. The Windows portable `.zip.sha256` is a published asset and the release gate
+  recomputes it against the archive.
+- The merged `latest.json` is validated against `contracts/latest.schema.json` before the draft is
+  created; a manifest the updater plugin would reject fails the job.
 - `SHA256SUMS.txt` covers every other published asset, including updater signatures and `latest.json`.
   Sidecar checksum reports stay in CI as rebuild-aware evidence and are not published.
 
@@ -279,12 +341,26 @@ paid certificate, notarization or paid runner without explicit owner approval.
   without the updater's no-downgrade check.
 - A compromised OS keychain or a malicious local process with the same user privileges is outside
   the desktop's control.
+- Config-path approval is per process: a path the user picked stays approved until the app exits. It
+  is consent, not a durable allow-list, so a later process still needs the dialog.
+- ACL hardening is best effort. If `icacls` fails (an unusual filesystem or a policy that blocks it),
+  the save proceeds and the failure is logged; the draft then has the directory's inherited DACL.
+- A blocking filesystem call that exceeds its deadline keeps its worker thread until the kernel call
+  returns. The UI is released, but the thread is not reclaimable.
+- The updater's cancellation is observed before the installer starts. Once installation begins there
+  is no rollback, and the UI says so instead of offering a cancel that cannot work.
 
 ## 14. Reviewer checklist
 
 - [ ] No secret value can reach the webview, a log, a fixture or a support bundle.
 - [ ] Every engine call uses an argv array and an absolute, user-selected config path.
 - [ ] No `eval`, shell string, arbitrary executable or unrestricted path.
+- [ ] A new `configPath` can only come from `pick_config` (or the active path); `PATH_NOT_APPROVED`
+      is what a hand-crafted `settings_set` receives.
+- [ ] Every engine `stderr` and output preview is redacted before truncation and before IPC.
+- [ ] `storage.data_dir` rejects UNC, verbatim and device references with `INVALID_PATH`.
+- [ ] Windows temp drafts and backups carry an explicit owner-only DACL, not the directory's.
+- [ ] Backup retention matches only app-written `…bak-<stamp>` names.
 - [ ] CSP is production-safe, and report HTML opens externally through `open_path` (approved root
       plus extension allow-list) instead of being embedded in the webview.
 - [ ] Write actions require confirmation and preserve engine `WRITE_DISABLED` semantics.
@@ -293,6 +369,8 @@ paid certificate, notarization or paid runner without explicit owner approval.
       every shipped target.
 - [ ] Updater signatures verify, `requireSignedVersion` is on, downgrades are refused and the
       private key reaches only the build step.
+- [ ] The webview holds `updater:allow-check` only; install goes through `update_install` with a
+      version re-check, and cancellation cannot be claimed after installation started.
 - [ ] Manual-only bundle types disable the in-app installer and link to the release page.
 - [ ] Unsigned-build warnings are present in the README and release notes.
 - [ ] New dependencies are free-tier compatible and reviewed.
