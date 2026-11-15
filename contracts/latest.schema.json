@@ -1,0 +1,56 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/LevapVeeskela/lv24-seo-optimizer-desktop/contracts/latest.schema.json",
+  "title": "Tauri v2 static updater manifest (latest.json)",
+  "$comment": "Written by scripts/merge-latest-json.mjs, validated by scripts/validate-latest-json.mjs in the owner-gated release job. Keep in sync with the tauri-plugin-updater static JSON contract (version, notes, pub_date, platforms[].signature, platforms[].url).",
+  "type": "object",
+  "required": ["version", "notes", "pub_date", "platforms"],
+  "additionalProperties": false,
+  "properties": {
+    "version": {
+      "type": "string",
+      "pattern": "^\\d+\\.\\d+\\.\\d+([.-][0-9A-Za-z.-]+)?$"
+    },
+    "notes": {
+      "type": "string",
+      "minLength": 1
+    },
+    "pub_date": {
+      "type": "string",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d+)?Z$"
+    },
+    "platforms": {
+      "type": "object",
+      "required": [
+        "windows-x86_64",
+        "linux-x86_64",
+        "darwin-aarch64",
+        "darwin-x86_64"
+      ],
+      "propertyNames": {
+        "pattern": "^[a-z0-9]+-[a-z0-9_]+(-[a-z0-9]+)*$"
+      },
+      "additionalProperties": {
+        "$ref": "#/$defs/platformEntry"
+      }
+    }
+  },
+  "$defs": {
+    "platformEntry": {
+      "type": "object",
+      "required": ["signature", "url"],
+      "additionalProperties": false,
+      "properties": {
+        "signature": {
+          "type": "string",
+          "minLength": 64,
+          "pattern": "^[A-Za-z0-9+/=]+$"
+        },
+        "url": {
+          "type": "string",
+          "pattern": "^https://[^\\s]+$"
+        }
+      }
+    }
+  }
+}

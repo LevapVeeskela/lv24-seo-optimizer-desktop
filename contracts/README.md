@@ -12,6 +12,7 @@ engine. The desktop must not guess at engine fields; a contract change is review
 | `cli-v1/manifest.json` | generated | commands, exit codes, engine pin and fixture list |
 | `stats-v1.md` | hand-written contract note | `lv24-seo stats --json` shape, shipped by 0.5.1 |
 | `cli-v1/stats.json` | generated | normalized `stats` envelope from the pinned CLI |
+| `latest.schema.json` | hand-written contract | Tauri v2 static updater manifest (`latest.json`) |
 
 `stats-v1.md` explains the stats fields; the machine-readable fixture is generated like every other
 CLI contract. When the pin changes, review the regenerated `stats.json` together with the note.
@@ -88,6 +89,22 @@ reproducible on Windows, macOS and Linux from the same pinned engine.
 naming the engine version; the rest is the engine's schema. The desktop validates drafts against the
 engine itself (`config show --config <temp> --json`) because the CLI also enforces semantic rules
 that a JSON schema cannot express.
+
+## Updater manifest (`latest.json`)
+
+`latest.schema.json` is the contract with `tauri-plugin-updater`, not with the engine. The release
+job writes `latest.json` with `scripts/merge-latest-json.mjs`, then validates it with
+`scripts/validate-latest-json.mjs` (no dependency; it implements the schema subset this file uses)
+before the draft release is created. It requires:
+
+- `version` (semver), `notes`, `pub_date` (RFC3339 UTC ending in `Z`) and `platforms`;
+- `windows-x86_64`, `linux-x86_64`, `darwin-aarch64` and `darwin-x86_64` in `platforms`;
+- a base64 `signature` of at least 64 characters and an `https://` `url` per platform;
+- no unknown fields — the plugin ignores them, so a typo would ship silently.
+
+`scripts/latest-schema.test.mjs` checks the schema, the validator and the merge script together, and
+`scripts/merge-latest-json.test.mjs` proves the emitted manifest is schema-valid. Change the schema
+and the release scripts in the same commit.
 
 ## Drift policy
 

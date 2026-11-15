@@ -201,8 +201,11 @@ jobs:
         run: uv python install 3.12
 
       - name: Set up Rust
+        # Pinned so a release rebuild uses the reviewed compiler, not whatever
+        # `stable` is on the runner that day.
         uses: dtolnay/rust-toolchain@stable
         with:
+          toolchain: "1.95.0"
           targets: ${{ matrix.target }}
 
       - name: Install Linux Tauri dependencies
@@ -567,6 +570,12 @@ jobs:
             --repo "$GITHUB_REPOSITORY" \
             --notes-file "docs/releases/${VERSION}-update.md"
 
+      - name: Validate latest.json against the contract schema
+        # The updater plugin is the real consumer; a manifest it rejects must
+        # never reach a published release (QA-02).
+        shell: bash
+        run: node scripts/validate-latest-json.mjs --file dist/latest.json
+
       - name: Verify expected release assets
         # Explicit gate independent of the merge script: the release must contain
         # every installer and updater signature for all four platforms, and
@@ -578,6 +587,7 @@ jobs:
           node - <<'NODE'
           const fs = require("fs");
           const path = require("path");
+          const crypto = require("crypto");
           const dist = "dist";
           const files = fs.readdirSync(dist).filter((name) => fs.statSync(path.join(dist, name)).isFile());
           const problems = [];
@@ -624,6 +634,23 @@ jobs:
           if (!dmgs.some((name) => name.includes("_aarch64.dmg"))) problems.push("macOS DMGs: no arm64 DMG");
           if (!dmgs.some((name) => name.includes("_x64.dmg"))) problems.push("macOS DMGs: no x64 DMG");
 
+          // Windows also ships a portable ZIP with its own .sha256 sidecar.
+          // Both are published (QA-08) and the sidecar must match the archive
+          // bytes the user downloads.
+          const portable = exactly(/-portable\.zip$/, 1, "Windows portable ZIP");
+          const portableSums = exactly(/-portable\.zip\.sha256$/, 1, "Windows portable checksum");
+          if (portable.length === 1 && portableSums.length === 1) {
+            const digest = crypto
+              .createHash("sha256")
+              .update(fs.readFileSync(path.join(dist, portable[0])))
+              .digest("hex");
+            const expected = `${digest}  ${portable[0]}`;
+            const actual = fs.readFileSync(path.join(dist, portableSums[0]), "utf8").trim();
+            if (actual !== expected) {
+              problems.push(`portable checksum ${portableSums[0]} does not match ${portable[0]}`);
+            }
+          }
+
           let latest;
           try {
             latest = JSON.parse(fs.readFileSync(path.join(dist, "latest.json"), "utf8"));
@@ -669,67 +696,12 @@ jobs:
           NODE
 
       - name: Generate checksums
-        # Hash exactly the assets that will be uploaded, by basename. Internal
-        # build-info/sidecar-report JSON stays in dist/ but is not published.
+        # The published allowlist lives in scripts/release-assets.mjs so the
+        # checksum list, the upload list and their tests cannot drift (QA-08).
+        # Internal build-info/sidecar-report JSON stays in dist/ but is not
+        # published, and latest.json must reference only allowlisted assets.
         shell: bash
-        run: |
-          set -euo pipefail
-          node - <<'NODE'
-          const fs = require("fs");
-          const path = require("path");
-          const crypto = require("crypto");
-          const dist = "dist";
-
-          function isPublished(name) {
-            if (name === "latest.json") return true;
-            if (name === "SHA256SUMS.txt") return false;
-            return (
-              /-setup\.exe(\.sig)?$/.test(name) ||
-              /\.nsis\.zip(\.sig)?$/.test(name) ||
-              /\.dmg$/.test(name) ||
-              /\.app\.tar\.gz(\.sig)?$/.test(name) ||
-              /\.AppImage(\.tar\.gz)?(\.sig)?$/.test(name) ||
-              /\.deb(\.sig)?$/.test(name) ||
-              /\.rpm(\.sig)?$/.test(name) ||
-              /-portable\.zip$/.test(name)
-            );
-          }
-
-          const files = fs
-            .readdirSync(dist)
-            .filter((name) => fs.statSync(path.join(dist, name)).isFile())
-            .filter(isPublished)
-            .sort();
-          if (files.length === 0) {
-            console.error("::error::no publishable release assets found");
-            process.exit(1);
-          }
-          if (new Set(files).size !== files.length) {
-            console.error("::error::duplicate asset basenames in dist/");
-            process.exit(1);
-          }
-
-          const latest = JSON.parse(fs.readFileSync(path.join(dist, "latest.json"), "utf8"));
-          for (const [platform, entry] of Object.entries(latest.platforms)) {
-            const asset = entry.url.split("/").pop();
-            if (!files.includes(asset)) {
-              console.error(`::error::latest.json ${platform} references ${asset}, which is not in SHA256SUMS.txt`);
-              process.exit(1);
-            }
-          }
-
-          const lines = [];
-          for (const name of files) {
-            if (/\s/.test(name)) {
-              console.error(`::error::asset name contains whitespace: ${name}`);
-              process.exit(1);
-            }
-            const hash = crypto.createHash("sha256").update(fs.readFileSync(path.join(dist, name))).digest("hex");
-            lines.push(`${hash}  ${name}`);
-          }
-          fs.writeFileSync(path.join(dist, "SHA256SUMS.txt"), `${lines.join("\n")}\n`, "utf8");
-          console.log(lines.join("\n"));
-          NODE
+        run: node scripts/release-assets.mjs --dist dist --write
 
       - name: Write release notes
         shell: bash
@@ -788,17 +760,14 @@ jobs:
             fi
           done < <(gh release view "$TAG" --json assets --jq '.assets[].name')
           files=()
+          # The upload list comes from the same tested allowlist as
+          # SHA256SUMS.txt (scripts/release-assets.mjs); the workflow no longer
+          # keeps its own bash `case` that could drift (QA-08).
+          list_file="$RUNNER_TEMP/upload-assets"
+          node scripts/release-assets.mjs --dist dist --list0 > "$list_file"
           while IFS= read -r -d '' file; do
-            base="$(basename "$file")"
-            case "$base" in
-              latest.json|SHA256SUMS.txt|*-setup.exe|*-setup.exe.sig|*.nsis.zip|*.nsis.zip.sig|*.dmg|*.app.tar.gz|*.app.tar.gz.sig|*.AppImage|*.AppImage.sig|*.AppImage.tar.gz|*.AppImage.tar.gz.sig|*.deb|*.deb.sig|*.rpm|*.rpm.sig|*-portable.zip)
-                files+=("$file")
-                ;;
-              *)
-                echo "skip internal asset: $base"
-                ;;
-            esac
-          done < <(find dist -maxdepth 1 -type f -print0 | sort -z)
+            files+=("$file")
+          done < "$list_file"
           if [ "${#files[@]}" -eq 0 ]; then
             echo "::error::no publishable assets found in dist/"
             exit 1

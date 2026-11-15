@@ -35,7 +35,9 @@ const targetLabel = target.startsWith("x86_64")
     ? "arm64"
     : target || "x64";
 const productDir = "LV24 SEO Optimizer";
-const stageRoot = join(root, "release", "portable");
+// --stage-root keeps the staging tree out of the repository during tests; the
+// release workflow uses the default so upload-artifact stays flat.
+const stageRoot = resolve(root, valueAfter("--stage-root", join("release", "portable")));
 const stageDir = join(stageRoot, productDir);
 const zipPath = resolve(
   root,
@@ -59,9 +61,10 @@ const exe = firstExisting([
 if (!exe) fail("lv24-seo-desktop.exe not found; run `npm run tauri build -- --bundles nsis` first");
 
 const engineDir = firstExisting([
+  valueAfter("--engine-dir", ""),
   join(root, "src-tauri", "engine", "lv24-seo"),
   join(root, "src-tauri", "engine", "lv24-seo", "lv24-seo"),
-]);
+].filter(Boolean));
 if (!engineDir) fail("sidecar not found; run `python scripts/build-sidecar.py` first");
 
 const engineExe = join(engineDir, "lv24-seo.exe");
@@ -73,7 +76,7 @@ cpSync(exe, join(stageDir, "lv24-seo-desktop.exe"));
 cpSync(engineDir, join(stageDir, "lv24-seo"), { recursive: true });
 cpSync(join(root, "LICENSE"), join(stageDir, "LICENSE"));
 
-const buildInfo = join(root, "src-tauri", "engine", "build-info.json");
+const buildInfo = resolve(root, valueAfter("--build-info", join("src-tauri", "engine", "build-info.json")));
 if (existsSync(buildInfo)) cpSync(buildInfo, join(stageDir, "engine-build-info.json"));
 
 writeFileSync(
@@ -104,19 +107,25 @@ function readEngineVersion() {
   }
 }
 
-const probe = spawnSync(engineExe, ["version", "--json"], {
-  cwd: stageDir,
-  encoding: "utf8",
-  timeout: 60000,
-  windowsHide: true,
-});
-if (probe.error || probe.status !== 0) {
-  fail(`sidecar version check failed: ${probe.error?.message ?? probe.stderr}`);
+// The version probe runs the real sidecar. Tests stage a fixture tree without a
+// runnable executable, so they pass --skip-probe; the release workflow never does.
+if (has("--skip-probe")) {
+  console.warn("package-portable: warning: --skip-probe skips the sidecar version check (test only)");
+} else {
+  const probe = spawnSync(engineExe, ["version", "--json"], {
+    cwd: stageDir,
+    encoding: "utf8",
+    timeout: 60000,
+    windowsHide: true,
+  });
+  if (probe.error || probe.status !== 0) {
+    fail(`sidecar version check failed: ${probe.error?.message ?? probe.stderr}`);
+  }
+  const line = (probe.stdout || "").trim().split(/\r?\n/).filter(Boolean).pop();
+  const payload = line ? JSON.parse(line) : null;
+  if (payload?.ok !== true) fail("sidecar version check did not return ok=true");
+  console.log(`sidecar: lv24-seo ${payload.data.version}`);
 }
-const line = (probe.stdout || "").trim().split(/\r?\n/).filter(Boolean).pop();
-const payload = line ? JSON.parse(line) : null;
-if (payload?.ok !== true) fail("sidecar version check did not return ok=true");
-console.log(`sidecar: lv24-seo ${payload.data.version}`);
 
 if (has("--skip-zip")) {
   console.log(`staged: ${stageDir}`);
