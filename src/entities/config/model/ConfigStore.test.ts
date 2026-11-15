@@ -167,7 +167,7 @@ describe("ConfigStore", () => {
     });
     const store = new ConfigStore();
     await store.load("C:\\w\\seo.toml");
-    expect(await store.validate()).toBe(true);
+    expect(await store.validate()).toBe("valid");
     expect(validateMock).toHaveBeenCalledTimes(1);
     const [path, content] = validateMock.mock.calls[0];
     expect(path).toBe("C:\\w\\seo.toml");
@@ -180,7 +180,7 @@ describe("ConfigStore", () => {
     const store = new ConfigStore();
     await store.load("C:\\w\\seo.toml");
     store.set("report.timezone", "");
-    expect(await store.validate()).toBe(false);
+    expect(await store.validate()).toBe("invalid");
     expect(validateMock).not.toHaveBeenCalled();
     expect(store.fieldError("report.timezone")).toBeTruthy();
   });
@@ -223,8 +223,8 @@ describe("ConfigStore", () => {
     });
     const store = new ConfigStore();
     await store.load("C:\\w\\seo.toml");
-    // Re-setting the default value still marks the block as present.
-    store.set("providers.gsc.property", "");
+    // Enabling a provider is an explicit toggle, never implied by a field edit.
+    store.set("providers.gsc.present", true);
     expect(store.diff.map((item) => item.path)).toEqual([
       "providers.gsc.present",
     ]);
@@ -353,7 +353,7 @@ describe("ConfigStore", () => {
       exitCode: 0,
       stderr: "",
     });
-    expect(await oldValidation).toBe(false);
+    expect(await oldValidation).toBe("skipped");
     expect(store.validating).toBe(true);
 
     resolveNew({
@@ -364,7 +364,7 @@ describe("ConfigStore", () => {
       exitCode: 0,
       stderr: "",
     });
-    expect(await newValidation).toBe(true);
+    expect(await newValidation).toBe("valid");
     expect(store.validating).toBe(false);
   });
 
@@ -410,6 +410,127 @@ describe("ConfigStore", () => {
     resolveNew(outcome("second"));
     expect(await newSave).toBe(true);
     expect(store.saving).toBe(false);
+  });
+
+  it("keeps edits typed during the engine round-trip instead of replacing the draft", async () => {
+    readMock.mockResolvedValue(readResult("C:\\w\\seo.toml", RAW));
+    let resolvePatch!: (value: ConfigPatchOutcome) => void;
+    patchMock.mockReturnValueOnce(
+      new Promise((resolve) => {
+        resolvePatch = resolve;
+      }),
+    );
+    const store = new ConfigStore();
+    await store.load("C:\\w\\seo.toml");
+    store.set("project.name", "first");
+
+    const saving = store.save();
+    expect(store.saving).toBe(true);
+    // The engine is still writing the first patch when the user types again.
+    store.set("project.base_url", "https://typed.example");
+
+    resolvePatch({
+      path: "C:\\w\\seo.toml",
+      raw: RAW.replace('name = "example"', 'name = "first"'),
+      backup: null,
+      bytes: 1,
+      config: { project: { name: "first" } },
+      warnings: [],
+      engineError: null,
+    });
+
+    expect(await saving).toBe(true);
+    expect(store.saved?.project.name).toBe("first");
+    expect(store.draft?.project.name).toBe("first");
+    // The edit made while the write was in flight survives and stays dirty.
+    expect(store.draft?.project.base_url).toBe("https://typed.example");
+    expect(store.dirty).toBe(true);
+    expect(store.diff.map((entry) => entry.path)).toEqual([
+      "project.base_url",
+    ]);
+    // The save validation described the snapshot, not the newer draft.
+    expect(store.validation).toBeNull();
+  });
+
+  it("removes a provider block when the provider is disabled", async () => {
+    readMock.mockResolvedValue(
+      readResult(
+        "C:\\w\\seo.toml",
+        `${RAW}\n[providers.gsc]\nproperty = "sc-domain:example.com"\nauth = "keychain"\n`,
+      ),
+    );
+    patchMock.mockResolvedValue({
+      path: "C:\\w\\seo.toml",
+      raw: RAW,
+      backup: null,
+      bytes: 1,
+      config: { project: { name: "example" } },
+      warnings: [],
+      engineError: null,
+    });
+    const store = new ConfigStore();
+    await store.load("C:\\w\\seo.toml");
+    expect(store.draft?.providers.gsc.present).toBe(true);
+
+    store.set("providers.gsc.present", false);
+    expect(await store.save()).toBe(true);
+
+    const [, patches] = patchMock.mock.calls[0];
+    expect(patches).toEqual([{ path: "providers.gsc", value: null }]);
+    expect(store.saved?.providers.gsc.present).toBe(false);
+    expect(store.draft?.providers.gsc.present).toBe(false);
+  });
+
+  it("returns skipped while another validation runs", async () => {
+    readMock.mockResolvedValue(readResult("C:\\w\\seo.toml", RAW));
+    let resolveValidation!: (value: ConfigValidateResult) => void;
+    validateMock.mockReturnValueOnce(
+      new Promise((resolve) => {
+        resolveValidation = resolve;
+      }),
+    );
+    const store = new ConfigStore();
+    await store.load("C:\\w\\seo.toml");
+
+    const first = store.validate();
+    expect(await store.validate()).toBe("skipped");
+    resolveValidation({
+      path: "C:\\w\\seo.toml",
+      valid: true,
+      syntaxError: null,
+      envelope: { ok: true, data: {}, meta: {}, warnings: [] },
+      exitCode: 0,
+      stderr: "",
+    });
+    expect(await first).toBe("valid");
+  });
+
+  it("does not report a validation for a draft that changed while the engine ran", async () => {
+    readMock.mockResolvedValue(readResult("C:\\w\\seo.toml", RAW));
+    let resolveValidation!: (value: ConfigValidateResult) => void;
+    validateMock.mockReturnValueOnce(
+      new Promise((resolve) => {
+        resolveValidation = resolve;
+      }),
+    );
+    const store = new ConfigStore();
+    await store.load("C:\\w\\seo.toml");
+    store.set("project.name", "first");
+
+    const validating = store.validate();
+    store.set("project.name", "second");
+    resolveValidation({
+      path: "C:\\w\\seo.toml",
+      valid: true,
+      syntaxError: null,
+      envelope: { ok: true, data: {}, meta: {}, warnings: [] },
+      exitCode: 0,
+      stderr: "",
+    });
+
+    expect(await validating).toBe("skipped");
+    expect(store.validation).toBeNull();
+    expect(store.draft?.project.name).toBe("second");
   });
 
   it("keeps the draft when the patch fails", async () => {

@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 import type { ReportSection, WeeklyReport } from "@/entities/report/model/types";
 import type { StatsData } from "@/entities/stats/model/types";
+import { translate } from "@/shared/i18n";
+import { en } from "@/shared/i18n/messages/en";
+import { ru } from "@/shared/i18n/messages/ru";
+import { zh } from "@/shared/i18n/messages/zh";
 import {
   buildRecommendations,
   normalizeSeverity,
@@ -576,6 +580,70 @@ describe("buildRecommendations", () => {
     expect(opportunitySeverity("striking_distance", 4)).toBe("low");
     expect(opportunitySeverity("striking_distance", 5)).toBe("medium");
     expect(opportunitySeverity("striking_distance", 25)).toBe("high");
+  });
+
+  it("carries locale keys for every title, action and verification", () => {
+    const report = weeklyReport(
+      [
+        opportunitySection([
+          {
+            kind: "striking_distance",
+            query: "seo audit",
+            page: "https://example.com/seo-audit",
+            position: 12.4,
+            expected_clicks: 36,
+            evidence: { position: 12.4, impressions: 1200 },
+          },
+        ]),
+        issueSection([
+          { severity: "high", count: 2, rule_ids: ["missing_title"] },
+        ]),
+        sourceSection([
+          { source: "metrika", status: "missing", rows: 0, limitations: [] },
+        ]),
+      ],
+      ["GSC data lag 2-3 days"],
+    );
+    const stats: StatsData = {
+      services: [
+        {
+          provider: "gsc",
+          configured: true,
+          ready: false,
+          status: "missing_token",
+          rows: 0,
+        },
+        {
+          provider: "crux",
+          configured: true,
+          ready: true,
+          status: "ok",
+          rows: 10,
+          truncated: true,
+        },
+      ],
+    };
+
+    const recommendations = buildRecommendations(report, stats);
+    expect(recommendations.length).toBeGreaterThan(0);
+    for (const item of recommendations) {
+      const text = item.i18n;
+      expect(text, item.id).toBeDefined();
+      if (!text) {
+        continue;
+      }
+      for (const key of [text.title, text.action, text.verification]) {
+        expect(en[key].trim(), key).not.toBe("");
+        expect(ru[key].trim(), key).not.toBe("");
+        expect(zh[key].trim(), key).not.toBe("");
+      }
+      // The English fields are derived from the same catalogue entry.
+      expect(item.title).toBe(translate("en", text.title, text.params));
+      expect(item.action).toBe(translate("en", text.action, text.params));
+      expect(item.verification).toBe(
+        translate("en", text.verification, text.params),
+      );
+    }
   });
 
   it("returns nothing when both inputs are absent", () => {

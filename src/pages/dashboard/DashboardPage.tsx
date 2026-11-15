@@ -3,7 +3,7 @@ import { observer } from "mobx-react-lite";
 import { Link, useNavigate } from "react-router-dom";
 import { useRootStore } from "@/app/providers/StoreProvider";
 import { useI18n } from "@/shared/i18n";
-import { appErrorText } from "@/shared/lib/errors";
+import { appErrorText, toAppError } from "@/shared/lib/errors";
 import { formatDateTime } from "@/shared/lib/format";
 import { Button } from "@/shared/ui/Button";
 import { Card } from "@/shared/ui/Card";
@@ -12,6 +12,8 @@ import { EmptyState } from "@/shared/ui/EmptyState";
 import { Loading } from "@/shared/ui/Loading";
 import { Notice } from "@/shared/ui/Notice";
 import { useFeedback } from "@/shared/ui/Feedback";
+import { pickConfig } from "@/entities/engine/api/shell";
+import { configMissing } from "@/entities/engine/model/types";
 import { CoverageStrip } from "@/entities/stats/ui/CoverageStrip";
 import { ServiceCard } from "@/entities/stats/ui/ServiceCard";
 import { STATS_PROVIDERS } from "@/entities/stats/model/types";
@@ -23,20 +25,51 @@ export const DashboardPage = observer(function DashboardPage() {
   const { notify } = useFeedback();
   const [confirmOpen, setConfirmOpen] = useState(false);
   const configPath = engine.status?.configPath ?? null;
-  const blocked = engine.offline || engine.loading || !configPath;
+  // A moved/deleted workspace must not look healthy: every stats/report call
+  // would fail with a generic error instead of asking for the new path.
+  const workspaceMissing = configMissing(engine.status);
+  const blocked =
+    engine.offline || engine.loading || !configPath || workspaceMissing;
 
   useEffect(() => {
     // Without a workspace configuration `stats` is a guaranteed failure.
-    if (!engine.loading && !engine.offline && configPath && stats.state === "idle") {
+    if (
+      !engine.loading &&
+      !engine.offline &&
+      configPath &&
+      !workspaceMissing &&
+      stats.state === "idle"
+    ) {
       void stats.refresh();
     }
-  }, [engine.loading, engine.offline, configPath, stats]);
+  }, [engine.loading, engine.offline, configPath, workspaceMissing, stats]);
 
   const reconnect = async () => {
     await engine.load();
     // Read the fresh status: the shell may have reported a config path.
     if (!engine.offline && engine.status?.configPath) {
       await stats.refresh();
+    }
+  };
+
+  const chooseConfig = async () => {
+    try {
+      const selected = await pickConfig();
+      if (!selected) {
+        return;
+      }
+      await engine.load();
+      // The picker persists the path, but the shell can still fail to load it.
+      if (engine.status?.configPath !== selected) {
+        notify(t("settings.chooseConfigFailed"), "error");
+        return;
+      }
+      notify(t("settings.configSelected"), "success");
+      if (!configMissing(engine.status)) {
+        await stats.refresh();
+      }
+    } catch (error) {
+      notify(toAppError(error, "PICK_CONFIG").message, "error");
     }
   };
 
@@ -119,7 +152,26 @@ export const DashboardPage = observer(function DashboardPage() {
         </Notice>
       ) : null}
 
-      {stats.error ? (
+      {workspaceMissing ? (
+        <Notice
+          variant="error"
+          action={
+            <Button variant="secondary" onClick={() => void chooseConfig()}>
+              {t("settings.chooseConfig")}
+            </Button>
+          }
+        >
+          <strong>{t("dashboard.workspaceMissingTitle")}</strong>
+          <span>{t("dashboard.workspaceMissingHint")}</span>
+          {configPath ? (
+            <code className="callback">
+              {t("dashboard.workspaceMissingPath", { path: configPath })}
+            </code>
+          ) : null}
+        </Notice>
+      ) : null}
+
+      {stats.error && !workspaceMissing ? (
         <Notice
           variant="error"
           action={

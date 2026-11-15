@@ -7,7 +7,13 @@ export function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-/** Immutable field update for the known schema. Unknown paths fail loudly. */
+/**
+ * Immutable field update for the known schema. Unknown paths fail loudly.
+ *
+ * Provider presence is never implied by a field edit: enabling and disabling a
+ * provider block is an explicit `providers.<id>.present` write from the toggle,
+ * otherwise a disabled block would silently come back on the next save.
+ */
 export function setConfigValue(
   model: ConfigModel,
   path: string,
@@ -27,15 +33,18 @@ export function setConfigValue(
     cursor = next;
   }
   cursor[parts[parts.length - 1]] = value;
-  if (parts[0] === "providers" && parts.length >= 3 && parts[2] !== "present") {
-    const provider = (clone.providers as unknown as Record<string, unknown>)[
-      parts[1]
-    ];
-    if (isRecord(provider)) {
-      provider.present = true;
-    }
-  }
   return clone;
+}
+
+/** Structural equality used for dirty state and draft-vs-snapshot checks. */
+export function configsEqual(
+  left: ConfigModel | null,
+  right: ConfigModel | null,
+): boolean {
+  if (!left || !right) {
+    return left === right;
+  }
+  return JSON.stringify(left) === JSON.stringify(right);
 }
 
 export function getConfigValue(model: ConfigModel, path: string): unknown {

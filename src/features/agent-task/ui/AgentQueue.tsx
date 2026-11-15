@@ -1,5 +1,4 @@
 import { observer } from "mobx-react-lite";
-import { recommendationSourceLabel } from "@/entities/recommendation/model/copy";
 import { useRecommendationCopy } from "@/entities/recommendation/model/useRecommendationCopy";
 import type { AgentTask } from "../model/types";
 import type { AgentTaskStore } from "../model/AgentTaskStore";
@@ -105,9 +104,9 @@ export const AgentQueue = observer(function AgentQueue({
           {store.tasks.map((task) => (
             <li className="connection-row" key={task.id}>
               <div className="connection-main">
-                <strong>{task.recommendation.title}</strong>
+                <strong>{copy.taskText(task.recommendation, "title")}</strong>
                 <span className="connection-meta">
-                  {recommendationSourceLabel(
+                  {copy.sourceLabel(
                     task.recommendation.source,
                     task.recommendation.provider,
                   )}{" "}

@@ -72,3 +72,11 @@ export function engineReady(status: ShellStatus | null): boolean {
   }
   return status.engine.compatible !== false;
 }
+
+/**
+ * The shell reported a workspace path but the file is gone (moved or deleted).
+ * An absent `configExists` is "unknown", not "missing": older shells omit it.
+ */
+export function configMissing(status: ShellStatus | null): boolean {
+  return Boolean(status?.configPath) && status?.configExists === false;
+}

@@ -12,6 +12,7 @@ import {
   type StatsService,
 } from "@/entities/stats/model/types";
 import { isRecord, numberValue, stringValue } from "@/shared/lib/format";
+import { translate, type MessageKey, type MessageParams } from "@/shared/i18n";
 import type {
   Recommendation,
   RecommendationCategory,
@@ -20,6 +21,57 @@ import type {
 } from "../model/types";
 
 type AddRecommendation = (recommendation: Recommendation) => void;
+
+type TaskTextKeys = {
+  title: MessageKey;
+  action: MessageKey;
+  verification: MessageKey;
+  params?: MessageParams;
+};
+
+/**
+ * One task text definition: the English fields stay the canonical fallback for
+ * the agent brief, while the keys let the UI render the active locale.
+ */
+function taskText(
+  keys: TaskTextKeys,
+): Pick<Recommendation, "title" | "action" | "verification" | "i18n"> {
+  return {
+    title: translate("en", keys.title, keys.params),
+    action: translate("en", keys.action, keys.params),
+    verification: translate("en", keys.verification, keys.params),
+    i18n: {
+      title: keys.title,
+      action: keys.action,
+      verification: keys.verification,
+      ...(keys.params ? { params: keys.params } : {}),
+    },
+  };
+}
+
+const SERVICE_TITLE_KEYS: Record<ServiceStatus, MessageKey> = {
+  ok: "recommendations.task.service.status.title",
+  no_data: "recommendations.task.service.noData.title",
+  missing_token: "recommendations.task.service.missingToken.title",
+  not_configured: "recommendations.task.service.notConfigured.title",
+  error: "recommendations.task.service.error.title",
+};
+
+const SERVICE_ACTION_KEYS: Record<ServiceStatus, MessageKey> = {
+  ok: "recommendations.task.service.status.action",
+  no_data: "recommendations.task.service.noData.action",
+  missing_token: "recommendations.task.service.missingToken.action",
+  not_configured: "recommendations.task.service.notConfigured.action",
+  error: "recommendations.task.service.error.action",
+};
+
+const SERVICE_VERIFICATION_KEYS: Record<ServiceStatus, MessageKey> = {
+  ok: "recommendations.task.service.status.verification",
+  no_data: "recommendations.task.service.noData.verification",
+  missing_token: "recommendations.task.service.missingToken.verification",
+  not_configured: "recommendations.task.service.notConfigured.verification",
+  error: "recommendations.task.service.error.verification",
+};
 
 const OPPORTUNITY_KINDS = new Set(["striking_distance", "ctr_gap", "decay"]);
 
@@ -184,10 +236,11 @@ function addOpportunityRecommendations(
     const expected = positiveNumber(row.expected_clicks);
     const rawEvidence = isRecord(row.evidence) ? row.evidence : {};
     const position = positiveNumber(row.position ?? rawEvidence.position);
-    const title = opportunityTitle(kind, query, position);
-    const action = opportunityAction(kind, page !== null);
-    const verification = opportunityVerification(kind);
     const evidence = opportunityEvidence(kind, row, rawEvidence);
+    const params: MessageParams = {
+      query,
+      ...(position !== null ? { position: decimalText(position) } : {}),
+    };
 
     add({
       id: stableRecommendationId(
@@ -199,9 +252,12 @@ function addOpportunityRecommendations(
       severity: opportunitySeverity(kind, expected),
       source: "gsc",
       provider: "gsc",
-      title,
-      action,
-      verification,
+      ...taskText({
+        title: opportunityTitleKey(kind, position),
+        action: opportunityActionKey(kind, page !== null),
+        verification: opportunityVerificationKey(kind),
+        params,
+      }),
       evidence,
       query,
       ...(page ? { page } : {}),
@@ -242,9 +298,6 @@ function addIssueRecommendations(
     }
     pushNumber(evidence, "count", count);
     pushString(evidence, "rule_ids", ruleIds.join(", "));
-    const ruleText = ruleIds.length
-      ? ` for rules ${ruleIds.join(", ")}`
-      : "";
 
     add({
       id: stableRecommendationId(
@@ -256,10 +309,17 @@ function addIssueRecommendations(
       severity,
       source: "crawl",
       provider: "crawl",
-      title: `Fix ${numberText(count)} ${severity} crawl issue${count === 1 ? "" : "s"}`,
-      action: `Review the stored crawl findings${ruleText} and fix the affected templates or URLs. Read affected URLs from the crawl output; never invent URLs.`,
-      verification:
-        "Re-run lv24-seo crawl with the same URL budget and confirm this rule count drops; recrawl and indexing delays can hide the fix.",
+      ...taskText({
+        title:
+          count === 1
+            ? "recommendations.task.crawl.titleOne"
+            : "recommendations.task.crawl.titleMany",
+        action: ruleIds.length
+          ? "recommendations.task.crawl.actionWithRules"
+          : "recommendations.task.crawl.action",
+        verification: "recommendations.task.crawl.verification",
+        params: { count, severity, rules: ruleIds.join(", ") },
+      }),
       evidence,
       count,
       ...(ruleIds.length ? { rule_ids: ruleIds } : {}),
@@ -304,9 +364,12 @@ function addSourceRecommendations(
         severity: "medium",
         source: "report",
         provider,
-        title: `No ${label} rows in the weekly report`,
-        action: `Confirm the ${label} target and token, then rebuild the weekly report for the same period. Missing rows are not zero traffic.`,
-        verification: `lv24-seo doctor --json and lv24-seo report weekly --json should show rows for this provider; otherwise keep the limitation in the report.`,
+        ...taskText({
+          title: "recommendations.task.sourceMissing.title",
+          action: "recommendations.task.sourceMissing.action",
+          verification: "recommendations.task.sourceMissing.verification",
+          params: { label },
+        }),
         evidence,
         status: "missing",
       });
@@ -366,9 +429,12 @@ function addServiceRecommendations(
     severity,
     source: "stats",
     provider,
-    title: serviceTitle(status, label),
-    action: serviceAction(status, label),
-    verification: serviceVerification(status),
+    ...taskText({
+      title: SERVICE_TITLE_KEYS[status],
+      action: SERVICE_ACTION_KEYS[status],
+      verification: SERVICE_VERIFICATION_KEYS[status],
+      params: { label },
+    }),
     evidence,
     status,
   });
@@ -391,10 +457,12 @@ function truncatedServiceRecommendation(
     severity: "low",
     source: "stats",
     provider,
-    title: `${label} data is truncated`,
-    action: `Treat ${label} totals as partial. Narrow the date range or raise the row cap only if the provider quota allows it; keep the truncation visible in the report.`,
-    verification:
-      "Refresh stats and rebuild the weekly report; confirm truncated=false or keep the limitation documented.",
+    ...taskText({
+      title: "recommendations.task.truncated.title",
+      action: "recommendations.task.truncated.action",
+      verification: "recommendations.task.truncated.verification",
+      params: { label },
+    }),
     evidence,
     status: "ok",
   };
@@ -411,11 +479,11 @@ function missingOpportunitiesRecommendation(note: string): Recommendation {
     severity: "medium",
     source: "report",
     provider: "gsc",
-    title: "No query rows for opportunities",
-    action:
-      "Confirm GSC query data for the period, then rebuild the weekly report. Do not infer opportunities from missing rows.",
-    verification:
-      'lv24-seo report weekly --json should include opportunity rows or keep the "no GSC query rows" note visible.',
+    ...taskText({
+      title: "recommendations.task.missingOpportunities.title",
+      action: "recommendations.task.missingOpportunities.action",
+      verification: "recommendations.task.missingOpportunities.verification",
+    }),
     evidence: [{ key: "note", value: note.trim() }],
     status: "missing",
   };
@@ -428,11 +496,11 @@ function missingIssuesRecommendation(note: string): Recommendation {
     severity: "medium",
     source: "report",
     provider: "crawl",
-    title: "No crawl issue rows in the weekly report",
-    action:
-      "Run lv24-seo crawl for the property before treating the report as a clean bill of health. Missing issue rows are not proof that the site is clean.",
-    verification:
-      'Rebuild the weekly report; it should include issue rows or keep the "no issue rows" note visible.',
+    ...taskText({
+      title: "recommendations.task.missingIssues.title",
+      action: "recommendations.task.missingIssues.action",
+      verification: "recommendations.task.missingIssues.verification",
+    }),
     evidence: [{ key: "note", value: note.trim() }],
     status: "missing",
   };
@@ -453,8 +521,8 @@ function addLimitation(
   const label = normalizedProvider
     ? providerLabel(normalizedProvider)
     : source === "stats"
-      ? "Provider statistics"
-      : "Weekly report";
+      ? providerLabel("stats")
+      : providerLabel("report");
   const normalizedText = text.toLowerCase().replace(/\s+/g, " ");
   const evidence: RecommendationEvidence[] = [];
   if (normalizedProvider) {
@@ -472,61 +540,66 @@ function addLimitation(
     severity: "low",
     source,
     ...(normalizedProvider ? { provider: normalizedProvider } : {}),
-    title:
-      kind === "caveat"
-        ? `Data caveat from ${label}`
-        : `Data limitation from ${label}`,
-    action:
-      kind === "caveat"
-        ? "Keep this caveat visible when comparing engines; do not merge values across engines or windows with different sampling."
-        : "Keep this limitation visible in the report and adjust conclusions; re-run the provider when the limitation is resolved. Do not present capped or partial data as complete.",
-    verification: `Re-run lv24-seo stats --json and lv24-seo report weekly --json; confirm the ${kind} is gone or still listed in limitations[].`,
+    ...taskText({
+      title:
+        kind === "caveat"
+          ? "recommendations.task.caveat.title"
+          : "recommendations.task.limitation.title",
+      action:
+        kind === "caveat"
+          ? "recommendations.task.caveat.action"
+          : "recommendations.task.limitation.action",
+      verification:
+        kind === "caveat"
+          ? "recommendations.task.caveat.verification"
+          : "recommendations.task.limitation.verification",
+      params: { label },
+    }),
     evidence,
   });
 }
 
-function opportunityTitle(
+function opportunityTitleKey(
   kind: string,
-  query: string,
   position: number | null,
-): string {
+): MessageKey {
   if (kind === "decay") {
-    return `Recover lost clicks for "${query}"`;
+    return "recommendations.task.opportunity.decay.title";
   }
   if (kind === "ctr_gap") {
     return position !== null
-      ? `Close the CTR gap for "${query}" at position ${decimalText(position)}`
-      : `Close the CTR gap for "${query}"`;
+      ? "recommendations.task.opportunity.ctrGapPosition.title"
+      : "recommendations.task.opportunity.ctrGap.title";
   }
   return position !== null
-    ? `Move "${query}" from position ${decimalText(position)} into the top results`
-    : `Win more clicks for "${query}"`;
+    ? "recommendations.task.opportunity.strikingPosition.title"
+    : "recommendations.task.opportunity.striking.title";
 }
 
-function opportunityAction(kind: string, hasPage: boolean): string {
+function opportunityActionKey(kind: string, hasPage: boolean): MessageKey {
   if (kind === "decay") {
     return hasPage
-      ? "Find what changed for this page and query, restore the lost content or internal links, and rule out seasonality before editing."
-      : "Find which page lost visibility for this query, restore the lost content or internal links, and rule out seasonality; do not invent a URL.";
+      ? "recommendations.task.opportunity.decay.actionPage"
+      : "recommendations.task.opportunity.decay.actionNoPage";
   }
   if (kind === "ctr_gap") {
     return hasPage
-      ? "Rewrite the title and meta description of the ranking page to close the CTR gap at its current position; change one element at a time."
-      : "Identify the ranking page for this query, then rewrite its title and meta description to close the CTR gap; do not invent a URL.";
+      ? "recommendations.task.opportunity.ctrGap.actionPage"
+      : "recommendations.task.opportunity.ctrGap.actionNoPage";
   }
   return hasPage
-    ? "Strengthen the title, H1 and snippet of the ranking page for this query; align the content with search intent before requesting a recrawl."
-    : "Choose the page that should own this query, then strengthen its title, H1 and snippet; do not invent a URL.";
+    ? "recommendations.task.opportunity.striking.actionPage"
+    : "recommendations.task.opportunity.striking.actionNoPage";
 }
 
-function opportunityVerification(kind: string): string {
+function opportunityVerificationKey(kind: string): MessageKey {
   if (kind === "decay") {
-    return "Rebuild the weekly report for the same period and compare clicks with the previous window; confirm the query recovers before closing the task.";
+    return "recommendations.task.opportunity.decay.verification";
   }
   if (kind === "ctr_gap") {
-    return "Rebuild the weekly report for the same period after the snippet change is live and compare CTR at the same position; a position shift can explain CTR changes, so check both.";
+    return "recommendations.task.opportunity.ctrGap.verification";
   }
-  return "Rebuild the weekly report for the same period after the page is recrawled and compare position and clicks for this query. Expect movement only after indexing.";
+  return "recommendations.task.opportunity.striking.verification";
 }
 
 function opportunityEvidence(
@@ -557,51 +630,6 @@ function opportunityEvidence(
     pushString(evidence, "match", raw.match);
   }
   return evidence;
-}
-
-function serviceTitle(status: ServiceStatus, label: string): string {
-  switch (status) {
-    case "missing_token":
-      return `Connect ${label}: token missing`;
-    case "not_configured":
-      return `Configure ${label}`;
-    case "no_data":
-      return `No ${label} data for this period`;
-    case "error":
-      return `${label} returned an error`;
-    default:
-      return `${label} status`;
-  }
-}
-
-function serviceAction(status: ServiceStatus, label: string): string {
-  switch (status) {
-    case "missing_token":
-      return `Store the ${label} token outside the repository (OS keychain or LV24_SEO_* environment variable), then run lv24-seo auth status and lv24-seo doctor. Never paste the token into a task, log or commit.`;
-    case "not_configured":
-      return `Add the ${label} target to seo.toml, then run lv24-seo doctor and refresh stats.`;
-    case "no_data":
-      return "Check the property id, date range and provider lag, then refresh stats. Missing rows are not zero traffic.";
-    case "error":
-      return "Read the provider error, fix the credential, quota or property issue, then refresh stats. Do not retry in a loop.";
-    default:
-      return "Review the provider status and refresh stats.";
-  }
-}
-
-function serviceVerification(status: ServiceStatus): string {
-  switch (status) {
-    case "missing_token":
-      return "lv24-seo auth status --json and lv24-seo stats --json should report this provider as present and not missing_token.";
-    case "not_configured":
-      return "lv24-seo properties --json should list the target and lv24-seo stats --json should stop reporting not_configured.";
-    case "no_data":
-      return "Refresh stats for the same period; if rows are still absent, keep the limitation in the report instead of treating the value as zero.";
-    case "error":
-      return "Refresh stats once the provider is reachable; confirm status is ok or no_data, not error.";
-    default:
-      return "Refresh stats and confirm the provider status.";
-  }
 }
 
 function limitationNote(

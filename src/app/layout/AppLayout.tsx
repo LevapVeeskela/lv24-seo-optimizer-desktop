@@ -4,6 +4,7 @@ import { Link, useLocation } from "react-router-dom";
 import { AppHeader } from "@/app/layout/AppHeader";
 import { AppNav } from "@/app/layout/AppNav";
 import { BrandMark } from "@/app/layout/BrandMark";
+import { activateSkipLink } from "@/app/layout/skipLink";
 import { useRootStore } from "@/app/providers/StoreProvider";
 import { useI18n } from "@/shared/i18n";
 
@@ -26,7 +27,11 @@ export const AppLayout = observer(function AppLayout({
 
   return (
     <div className="app-shell">
-      <a className="skip-link" href="#main-content">
+      <a
+        className="skip-link"
+        href="#main-content"
+        onClick={(event) => activateSkipLink(event, mainRef.current)}
+      >
         {t("app.skipToContent")}
       </a>
       <aside className="app-sidebar">

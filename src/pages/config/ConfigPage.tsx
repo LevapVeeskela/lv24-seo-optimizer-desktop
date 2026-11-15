@@ -21,7 +21,7 @@ import {
   type ConfigDiffEntry,
   type EnvironmentStatus,
 } from "@/entities/config";
-import { pickConfigFile } from "@/shared/desktop/settings";
+import { pickConfig } from "@/entities/engine/api/shell";
 
 const INIT_COMMAND = "lv24-seo init --property https://example.com --data-dir ./data";
 
@@ -91,7 +91,8 @@ export const ConfigPage = observer(function ConfigPage() {
 
   const chooseConfig = async () => {
     try {
-      const selected = await pickConfigFile();
+      // SEC-05: the shell owns the dialog and persists the path.
+      const selected = await pickConfig();
       if (!selected) {
         return;
       }
@@ -107,13 +108,15 @@ export const ConfigPage = observer(function ConfigPage() {
   };
 
   const validate = async () => {
-    const ok = await config.validate();
-    if (config.path !== configPath) {
+    const outcome = await config.validate();
+    if (outcome === "skipped" || config.path !== configPath) {
       return;
     }
     notify(
-      ok ? t("settings.validation.valid") : t("settings.validation.invalid"),
-      ok ? "success" : "error",
+      outcome === "valid"
+        ? t("settings.validation.valid")
+        : t("settings.validation.invalid"),
+      outcome === "valid" ? "success" : "error",
     );
   };
 

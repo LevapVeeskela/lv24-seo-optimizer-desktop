@@ -6,6 +6,7 @@ import {
   normalizeLocale,
   persistLocale,
   translate,
+  type MessageKey,
 } from "./index";
 import { en } from "./messages/en";
 import { ru } from "./messages/ru";
@@ -90,5 +91,44 @@ describe("i18n", () => {
     expect(detectLocale(adapter, "ru-RU")).toBe("zh");
     expect(detectLocale(null, "ru-RU")).toBe("ru");
     expect(detectLocale(null, "fr-FR")).toBe("en");
+  });
+
+  it("keeps recommendation task copy present and translated in every locale", () => {
+    const keys = Object.keys(en).filter((key) =>
+      key.startsWith("recommendations.task."),
+    ) as Array<keyof typeof en>;
+    expect(keys.length).toBeGreaterThan(30);
+    for (const key of keys) {
+      for (const messages of [en, ru, zh]) {
+        expect(messages[key].trim(), key).not.toBe("");
+      }
+    }
+    // Representative task copy must be translated, not copied from English.
+    expect(ru["recommendations.task.opportunity.decay.title"]).toContain("клики");
+    expect(zh["recommendations.task.opportunity.decay.title"]).toContain("点击");
+    expect(ru["recommendations.task.limitation.title"]).toContain("Ограничение");
+    expect(zh["recommendations.task.crawl.action"]).not.toBe(
+      en["recommendations.task.crawl.action"],
+    );
+  });
+
+  it("has a localized label for every provider origin", () => {
+    const origins = [
+      "gsc",
+      "yandex_webmaster",
+      "yandex_metrika",
+      "bing",
+      "crux",
+      "psi",
+      "crawl",
+      "report",
+      "stats",
+    ];
+    for (const origin of origins) {
+      const key = `recommendations.provider.${origin}` as MessageKey;
+      for (const locale of LOCALES) {
+        expect(translate(locale, key).trim(), `${locale} ${key}`).not.toBe("");
+      }
+    }
   });
 });

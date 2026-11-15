@@ -1,5 +1,6 @@
 import type { WeeklyReport } from "@/entities/report/model/types";
 import type { StatsData } from "@/entities/stats/model/types";
+import type { MessageKey, MessageParams } from "@/shared/i18n";
 import { isRecord } from "@/shared/lib/format";
 
 export const RECOMMENDATION_CATEGORIES = [
@@ -20,6 +21,8 @@ export const RECOMMENDATION_SEVERITIES = [
 
 export type RecommendationSeverity = (typeof RECOMMENDATION_SEVERITIES)[number];
 
+export type RecommendationTextField = "title" | "action" | "verification";
+
 /**
  * One human-readable evidence row. `key` stays machine-stable so the UI can
  * localise the label; `value` is already a safe display string.
@@ -27,6 +30,19 @@ export type RecommendationSeverity = (typeof RECOMMENDATION_SEVERITIES)[number];
 export interface RecommendationEvidence {
   key: string;
   value: string;
+}
+
+/**
+ * Localised task copy. `title`/`action`/`verification` on the recommendation
+ * stay English (the agent brief is English); the card renders these keys with
+ * `params` and the provider label resolved for the active locale.
+ */
+export interface RecommendationText {
+  title: MessageKey;
+  action: MessageKey;
+  verification: MessageKey;
+  /** `label` is replaced with the localised provider/source label at render. */
+  params?: MessageParams;
 }
 
 /**
@@ -45,6 +61,7 @@ export interface Recommendation {
   title: string;
   action: string;
   verification: string;
+  i18n?: RecommendationText;
   evidence: RecommendationEvidence[];
   query?: string;
   page?: string;
@@ -94,6 +111,27 @@ function isOptionalString(value: unknown): boolean {
   return value === undefined || typeof value === "string";
 }
 
+function isMessageParams(value: unknown): boolean {
+  return (
+    value === undefined ||
+    (isRecord(value) &&
+      Object.values(value).every(
+        (item) => typeof item === "string" || typeof item === "number",
+      ))
+  );
+}
+
+function isRecommendationText(value: unknown): boolean {
+  return (
+    value === undefined ||
+    (isRecord(value) &&
+      typeof value.title === "string" &&
+      typeof value.action === "string" &&
+      typeof value.verification === "string" &&
+      isMessageParams(value.params))
+  );
+}
+
 function isOptionalPositiveNumber(value: unknown): boolean {
   return (
     value === undefined ||
@@ -116,6 +154,7 @@ export function isRecommendation(value: unknown): value is Recommendation {
     typeof value.title !== "string" ||
     typeof value.action !== "string" ||
     typeof value.verification !== "string" ||
+    !isRecommendationText(value.i18n) ||
     !Array.isArray(value.evidence) ||
     !value.evidence.every(isEvidence)
   ) {

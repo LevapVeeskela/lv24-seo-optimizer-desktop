@@ -1,5 +1,4 @@
 import { Fragment } from "react";
-import { recommendationSourceLabel } from "@/entities/recommendation/model/copy";
 import { useRecommendationCopy } from "@/entities/recommendation/model/useRecommendationCopy";
 import type { Recommendation } from "@/entities/recommendation/model/types";
 import { useI18n } from "@/shared/i18n";
@@ -52,16 +51,19 @@ export function RecommendationCard({
   const copy = useRecommendationCopy();
   const evidenceLabel = (key: string): string =>
     (copy.evidenceLabel as Record<string, string>)[key] ?? key;
-  const source = recommendationSourceLabel(
+  const source = copy.sourceLabel(
     recommendation.source,
     recommendation.provider,
   );
+  const title = copy.taskText(recommendation, "title");
+  const action = copy.taskText(recommendation, "action");
+  const verification = copy.taskText(recommendation, "verification");
 
   return (
     <Card className="service-card">
       <div className="service-card-header">
         <div className="service-card-title">
-          <h3>{recommendation.title}</h3>
+          <h3>{title}</h3>
           <span className="muted small">{source}</span>
         </div>
         <div className="badge-row">
@@ -116,12 +118,12 @@ export function RecommendationCard({
 
       <div>
         <h4>{copy.action}</h4>
-        <p>{recommendation.action}</p>
+        <p>{action}</p>
       </div>
 
       <div>
         <h4>{copy.verification}</h4>
-        <p className="muted small">{recommendation.verification}</p>
+        <p className="muted small">{verification}</p>
       </div>
 
       <div className="row-actions">
