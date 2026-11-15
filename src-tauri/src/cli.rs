@@ -23,6 +23,9 @@ const DEFAULT_LAG_DAYS: u32 = 2;
 /// before the update is refused.
 pub const ENGINE_STOP_WAIT: Duration = Duration::from_millis(2_000);
 const ENGINE_STOP_POLL: Duration = Duration::from_millis(25);
+/// How long a delivered SIGKILL may take to actually remove the process.
+#[cfg(unix)]
+const ENGINE_KILL_WAIT: Duration = Duration::from_millis(2_000);
 
 /// Every command the webview may run. There is no generic executable input.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -757,25 +760,10 @@ async fn terminate_tree(pid: u32) -> std::io::Result<()> {
 
 #[cfg(unix)]
 async fn terminate_tree(pid: u32) -> std::io::Result<()> {
-    // A negative PID names the process group whose leader is `pid`.
-    let group = Command::new("kill")
-        .args(["-9", &format!("-{pid}")])
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .await?;
-    if !group.success() {
-        // Not a group leader (a child started outside `build_command`, or a
-        // spawn that raced the group setup): signal the exact PID instead.
-        Command::new("kill")
-            .args(["-9", &pid.to_string()])
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status()
-            .await?;
-    }
+    // Exact PID first (the only signal whose delivery is guaranteed), then the
+    // process group so the interpreter the bootloader started dies too.
+    signal_pid(pid).await?;
+    let _ = signal_group(pid).await;
     Ok(())
 }
 
@@ -857,14 +845,20 @@ async fn is_engine_sidecar(pid: u32) -> bool {
         .unwrap_or(false)
 }
 
-/// `Ok(true)` when the process was signalled, `Ok(false)` when it was already
-/// gone.
+/// `Ok(true)` when the process is confirmed gone, `Ok(false)` when it was
+/// already gone (or survived every signal).
 ///
-/// Windows kills the exact PID's tree because the PyInstaller bootloader can
-/// start a helper; Unix signals the exact PID only. Both use the numeric PID,
-/// never an image name.
+/// The exact PID is signalled first: `kill -9 -<pid>` is not a reliable probe.
+/// procps on Ubuntu 24.04 exits 0 for a process group that does not exist, so a
+/// group-only kill can silently do nothing and still look successful. The group
+/// signal follows (best effort) because the engine is spawned as a
+/// process-group leader and the PyInstaller bootloader starts the interpreter in
+/// that group.
 #[cfg(windows)]
 async fn terminate(pid: u32) -> std::io::Result<bool> {
+    if !process_alive(pid).await {
+        return Ok(false);
+    }
     let status = Command::new("taskkill")
         .args(["/PID", &pid.to_string(), "/T", "/F"])
         .stdin(Stdio::null())
@@ -877,26 +871,53 @@ async fn terminate(pid: u32) -> std::io::Result<bool> {
 
 #[cfg(unix)]
 async fn terminate(pid: u32) -> std::io::Result<bool> {
-    // The engine is a process-group leader; a negative PID reaches the
-    // PyInstaller bootloader and the interpreter it started.
-    let group = Command::new("kill")
-        .args(["-9", &format!("-{pid}")])
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .await?;
-    if group.success() {
-        return Ok(true);
+    if !process_alive(pid).await {
+        return Ok(false);
     }
-    let status = Command::new("kill")
-        .args(["-9", &pid.to_string()])
+    signal_pid(pid).await?;
+    // A non-leader (or an already empty group) is not an error: the exact PID
+    // signal above is the one that must land.
+    let _ = signal_group(pid).await;
+    // Confirm the death. A signal that was accepted but not delivered must not
+    // be reported as a kill.
+    let deadline = Instant::now() + ENGINE_KILL_WAIT;
+    loop {
+        if !process_alive(pid).await {
+            return Ok(true);
+        }
+        if Instant::now() >= deadline {
+            return Ok(false);
+        }
+        tokio::time::sleep(ENGINE_STOP_POLL).await;
+    }
+}
+
+#[cfg(unix)]
+async fn signal_pid(pid: u32) -> std::io::Result<()> {
+    Command::new("kill")
+        .args(["-9", "--", &pid.to_string()])
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .status()
         .await?;
-    Ok(status.success())
+    Ok(())
+}
+
+/// Negative PID = the process group whose leader is `pid`. The `--` separator is
+/// mandatory: without it `kill` parses `-<pid>` as an option list and, on
+/// procps 4.0.x, signals the caller's own process group (verified on Ubuntu
+/// 24.04 and Debian bookworm) or silently does nothing.
+#[cfg(unix)]
+async fn signal_group(pid: u32) -> std::io::Result<()> {
+    Command::new("kill")
+        .args(["-9", "--", &format!("-{pid}")])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .await?;
+    Ok(())
 }
 
 #[cfg(windows)]
@@ -1764,11 +1785,21 @@ mod tests {
             }
             #[cfg(unix)]
             {
-                std::fs::copy("/bin/sleep", &exe).unwrap();
-                use std::os::unix::fs::PermissionsExt;
-                std::fs::set_permissions(&exe, std::fs::Permissions::from_mode(0o755)).unwrap();
+                // Hard-link the system binary instead of copying it: a fresh
+                // copy has an open write handle, and a concurrent fork in
+                // another test inherits it, so `exec` fails with ETXTBSY
+                // ("text file busy"). A link never writes the inode.
+                if std::fs::hard_link("/bin/sleep", &exe).is_err() {
+                    std::fs::copy("/bin/sleep", &exe).unwrap();
+                    use std::os::unix::fs::PermissionsExt;
+                    std::fs::set_permissions(&exe, std::fs::Permissions::from_mode(0o755)).unwrap();
+                }
                 let mut command = Command::new(&exe);
                 command.arg("30");
+                // Production spawns the engine as a process-group leader
+                // (`build_command`), so the test child must be one too: a
+                // group kill on a non-leader is a silent no-op on Linux.
+                command.process_group(0);
                 command
             }
         };
