@@ -15,6 +15,7 @@ import {
   copyRecommendationPrompt,
   exportRecommendationPrompt,
 } from "@/features/agent-task/lib/actions";
+import { writeTextFile } from "@/shared/desktop/files";
 import { useI18n } from "@/shared/i18n";
 import { appErrorText } from "@/shared/lib/errors";
 import { formatDateTime } from "@/shared/lib/format";
@@ -23,10 +24,18 @@ import { Card } from "@/shared/ui/Card";
 import { ConfirmDialog } from "@/shared/ui/ConfirmDialog";
 import { EmptyState } from "@/shared/ui/EmptyState";
 import { Field } from "@/shared/ui/Field";
+import { Input } from "@/shared/ui/Input";
 import { Loading } from "@/shared/ui/Loading";
 import { Notice } from "@/shared/ui/Notice";
 import { Select } from "@/shared/ui/Select";
 import { useFeedback } from "@/shared/ui/Feedback";
+import { planBulkExport, pendingQueueIds } from "./lib/bulk";
+import {
+  matchesSearch,
+  recommendationSearchText,
+  sortRecommendations,
+  type RecommendationSort,
+} from "./lib/filter";
 
 export interface RecommendationsPageProps {
   /** Optional shared queue; the page owns a local store otherwise. */
@@ -36,7 +45,7 @@ export interface RecommendationsPageProps {
 export const RecommendationsPage = observer(function RecommendationsPage({
   queueStore,
 }: RecommendationsPageProps = {}) {
-  const { locale } = useI18n();
+  const { locale, t } = useI18n();
   const copy = useRecommendationCopy();
   const { engine, reports, stats } = useRootStore();
   const { notify } = useFeedback();
@@ -44,6 +53,9 @@ export const RecommendationsPage = observer(function RecommendationsPage({
   const queue = queueStore ?? localQueue;
   const [sourceFilter, setSourceFilter] = useState("all");
   const [severityFilter, setSeverityFilter] = useState("all");
+  const [search, setSearch] = useState("");
+  const [sort, setSort] = useState<RecommendationSort>("report");
+  const [bulkExporting, setBulkExporting] = useState(false);
   const [confirmOpen, setConfirmOpen] = useState(false);
   const configPath = engine.status?.configPath ?? null;
   const blocked = engine.offline || engine.loading || !configPath;
@@ -80,10 +92,20 @@ export const RecommendationsPage = observer(function RecommendationsPage({
     (RECOMMENDATION_SEVERITIES as readonly string[]).includes(severityFilter)
       ? severityFilter
       : "all";
-  const filtered = recommendations.filter(
-    (item) =>
-      (effectiveSource === "all" || item.source === effectiveSource) &&
-      (effectiveSeverity === "all" || item.severity === effectiveSeverity),
+  const filtered = sortRecommendations(
+    recommendations.filter(
+      (item) =>
+        (effectiveSource === "all" || item.source === effectiveSource) &&
+        (effectiveSeverity === "all" || item.severity === effectiveSeverity) &&
+        matchesSearch(
+          recommendationSearchText(item, copy.taskText, copy.sourceLabel, {
+            severity: copy.severity[item.severity],
+            category: copy.category[item.category],
+          }),
+          search,
+        ),
+    ),
+    sort,
   );
 
   const buildWeekly = async () => {
@@ -164,9 +186,81 @@ export const RecommendationsPage = observer(function RecommendationsPage({
     }
   };
 
+  /**
+   * Bulk queue uses the same store call as one card: existing ids are skipped
+   * by the store, and the count tells the user what actually changed.
+   */
+  const queueVisible = () => {
+    const ids = pendingQueueIds(filtered, (id) => queue.has(id));
+    if (ids.length === 0) {
+      notify(t("recommendations.bulk.queueEmpty"));
+      return;
+    }
+    for (const id of ids) {
+      const recommendation = filtered.find((item) => item.id === id);
+      if (recommendation) {
+        queue.add(recommendation, context.property, context.period);
+      }
+    }
+    notify(t("recommendations.bulk.queued", { count: ids.length }));
+  };
+
+  /**
+   * Bulk export writes one brief per visible task into the shell export root.
+   * A partial write is reported honestly instead of claiming full success.
+   */
+  const exportVisible = async () => {
+    const exportDir = engine.status?.paths?.exportDir?.trim() ?? "";
+    if (!exportDir) {
+      notify(t("recommendations.bulk.noExportDir"), "error");
+      return;
+    }
+    if (filtered.length === 0) {
+      notify(t("recommendations.bulk.exportEmpty"));
+      return;
+    }
+    const files = planBulkExport(
+      filtered,
+      context.property,
+      context.period,
+      exportDir,
+    );
+    setBulkExporting(true);
+    let exported = 0;
+    let failed = 0;
+    try {
+      for (const file of files) {
+        try {
+          await writeTextFile(file.path, file.content);
+          queue.markExported(file.id);
+          exported += 1;
+        } catch {
+          failed += 1;
+        }
+      }
+    } finally {
+      setBulkExporting(false);
+    }
+    if (failed === 0) {
+      notify(
+        t("recommendations.bulk.exported", {
+          count: exported,
+          path: exportDir,
+        }),
+        "success",
+      );
+    } else {
+      notify(
+        t("recommendations.bulk.exportPartial", { exported, failed }),
+        "error",
+      );
+    }
+  };
+
   const resetFilters = () => {
     setSourceFilter("all");
     setSeverityFilter("all");
+    setSearch("");
   };
 
   return (
@@ -319,6 +413,18 @@ export const RecommendationsPage = observer(function RecommendationsPage({
       {recommendations.length > 0 ? (
         <Card>
           <div className="toolbar">
+            <Field
+              id="recommendation-search"
+              label={t("recommendations.search.label")}
+            >
+              <Input
+                id="recommendation-search"
+                type="search"
+                value={search}
+                placeholder={t("recommendations.search.placeholder")}
+                onChange={(event) => setSearch(event.target.value)}
+              />
+            </Field>
             <Field id="recommendation-source" label={copy.filters.source}>
               <Select
                 id="recommendation-source"
@@ -347,7 +453,48 @@ export const RecommendationsPage = observer(function RecommendationsPage({
                 ))}
               </Select>
             </Field>
+            <Field
+              id="recommendation-sort"
+              label={t("recommendations.sort.label")}
+            >
+              <Select
+                id="recommendation-sort"
+                value={sort}
+                onChange={(event) =>
+                  setSort(event.target.value as RecommendationSort)
+                }
+              >
+                <option value="report">{t("recommendations.sort.report")}</option>
+                <option value="severity-desc">
+                  {t("recommendations.sort.severityDesc")}
+                </option>
+                <option value="severity-asc">
+                  {t("recommendations.sort.severityAsc")}
+                </option>
+              </Select>
+            </Field>
           </div>
+          {filtered.length > 0 ? (
+            <div
+              className="form-actions"
+              role="group"
+              aria-label={t("recommendations.bulk.label")}
+            >
+              <span className="muted small" aria-live="polite">
+                {t("recommendations.bulk.visible", { count: filtered.length })}
+              </span>
+              <Button variant="secondary" onClick={queueVisible}>
+                {t("recommendations.bulk.queue")}
+              </Button>
+              <Button
+                variant="secondary"
+                loading={bulkExporting}
+                onClick={() => void exportVisible()}
+              >
+                {t("recommendations.bulk.export")}
+              </Button>
+            </div>
+          ) : null}
         </Card>
       ) : null}
 
