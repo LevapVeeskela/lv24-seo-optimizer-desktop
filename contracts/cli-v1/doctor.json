@@ -30,6 +30,11 @@
         "detail": "<TOKENS>",
         "id": "tokens",
         "ok": false
+      },
+      {
+        "detail": "not configured (optional)",
+        "id": "gsc_auth",
+        "ok": true
       }
     ],
     "healthy": true
@@ -39,7 +44,7 @@
     "data_dir": "<DATA_DIR>",
     "data_dir_declared": false,
     "data_dir_source": "working directory",
-    "version": "0.7.0"
+    "version": "0.8.0"
   },
   "ok": true,
   "warnings": [

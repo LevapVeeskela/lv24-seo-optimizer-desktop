@@ -18,10 +18,11 @@ use crate::error::{AppError, AppResult, ErrorInfo};
 use crate::paths;
 use crate::settings::{Settings, SettingsPatch, SettingsStore};
 
-/// 0.5.0 uses `backup restore`, `portfolio list` and `schedule install`, and renders the
-/// `cwv` report section; none of them exist before engine 0.7.0, so an older sidecar must be
-/// reported as incompatible.
-pub const MIN_ENGINE_VERSION: &str = "0.7.0";
+/// 0.6.0 runs `schedule install --allow-write` after the user confirms the plan; engine 0.8.0
+/// made `schedule install` plan-only by default and the write opt-in mandatory, so an older
+/// sidecar would reject the flag. It also uses `backup restore`, `portfolio list` and renders
+/// the `cwv` report section (engine 0.7.0). Report anything older as incompatible.
+pub const MIN_ENGINE_VERSION: &str = "0.8.0";
 
 /// Progress event emitted by the Rust updater while it downloads a release.
 pub const UPDATE_PROGRESS_EVENT: &str = "update://progress";
@@ -2371,10 +2372,10 @@ mod tests {
 
     #[test]
     fn engine_version_comparison_is_numeric() {
-        assert_eq!(MIN_ENGINE_VERSION, "0.7.0");
+        assert_eq!(MIN_ENGINE_VERSION, "0.8.0");
         assert!(version_at_least(MIN_ENGINE_VERSION, MIN_ENGINE_VERSION));
-        assert!(version_at_least("0.7.1", MIN_ENGINE_VERSION));
-        assert!(!version_at_least("0.6.0", MIN_ENGINE_VERSION));
+        assert!(version_at_least("0.8.1", MIN_ENGINE_VERSION));
+        assert!(!version_at_least("0.7.0", MIN_ENGINE_VERSION));
         assert!(version_at_least("0.4.0", "0.4.0"));
         assert!(version_at_least("0.4.1", "0.4.0"));
         assert!(version_at_least("0.10.0", "0.4.0"));

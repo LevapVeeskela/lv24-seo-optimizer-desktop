@@ -1,5 +1,5 @@
 {
-  "$comment": "Generated from lv24-seo 0.7.0 SeoConfig.model_json_schema(). Do not edit by hand.",
+  "$comment": "Generated from lv24-seo 0.8.0 SeoConfig.model_json_schema(). Do not edit by hand.",
   "$defs": {
     "BingConfig": {
       "additionalProperties": false,
@@ -106,7 +106,7 @@
     },
     "GscConfig": {
       "additionalProperties": false,
-      "description": "Google Search Console property and credential source.",
+      "description": "Google Search Console property and credential source.\n\n``service_account_file`` is an absolute path to a service-account JSON key and is\nconfiguration, not a secret; the key itself stays outside the repository. A relative\npath is rejected at use time because it would depend on the working directory.",
       "properties": {
         "auth": {
           "default": "keychain",
@@ -116,6 +116,11 @@
         "property": {
           "default": "",
           "title": "Property",
+          "type": "string"
+        },
+        "service_account_file": {
+          "default": "",
+          "title": "Service Account File",
           "type": "string"
         }
       },

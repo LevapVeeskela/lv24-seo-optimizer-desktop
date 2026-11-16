@@ -13,7 +13,8 @@
         "requires_token": true,
         "target": "",
         "token": "missing",
-        "token_present": false
+        "token_present": false,
+        "token_source": "missing"
       },
       {
         "configured": false,
@@ -22,7 +23,8 @@
         "requires_token": true,
         "target": "",
         "token": "missing",
-        "token_present": false
+        "token_present": false,
+        "token_source": "missing"
       },
       {
         "configured": false,
@@ -31,7 +33,8 @@
         "requires_token": true,
         "target": "",
         "token": "missing",
-        "token_present": false
+        "token_present": false,
+        "token_source": "missing"
       },
       {
         "configured": false,
@@ -40,7 +43,8 @@
         "requires_token": true,
         "target": "",
         "token": "missing",
-        "token_present": false
+        "token_present": false,
+        "token_source": "missing"
       },
       {
         "configured": false,
@@ -49,7 +53,8 @@
         "requires_token": true,
         "target": "",
         "token": "missing",
-        "token_present": false
+        "token_present": false,
+        "token_source": "missing"
       },
       {
         "configured": false,
@@ -58,7 +63,8 @@
         "requires_token": false,
         "target": "",
         "token": "missing",
-        "token_present": false
+        "token_present": false,
+        "token_source": "missing"
       }
     ]
   },
@@ -66,7 +72,7 @@
     "configured": [],
     "ready": [],
     "tokens_present": [],
-    "version": "0.7.0"
+    "version": "0.8.0"
   },
   "ok": true,
   "warnings": []

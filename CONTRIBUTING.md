@@ -18,7 +18,7 @@ Desktop shell and sidecar work additionally needs Rust stable, Python 3.12 and
 
 ```bash
 npm run tauri dev
-python scripts/build-sidecar.py --engine-version 0.7.0
+python scripts/build-sidecar.py --engine-version 0.8.0
 node scripts/check-contracts.mjs
 cd src-tauri && cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test
 ```

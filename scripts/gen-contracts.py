@@ -109,6 +109,11 @@ def _clean_env(home: Path) -> dict[str, str]:
             "NO_COLOR": "1",
             "TERM": "dumb",
             "LV24_SEO_ALLOW_FILE_SECRETS": "0",
+            # HOME/USERPROFILE do not isolate the Windows Credential Manager, so a
+            # developer machine with real tokens would otherwise leak provider
+            # presence into the fixtures. The null backend is what a credential-free
+            # CI runner behaves like.
+            "PYTHON_KEYRING_BACKEND": "keyring.backends.null.Keyring",
         }
     )
     return env

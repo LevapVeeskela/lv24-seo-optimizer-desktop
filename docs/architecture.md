@@ -1,10 +1,10 @@
 # Architecture
 
-Status: **implementation contract for `0.5.0` (released 2026-11-16).** The Rust command bridge and
+Status: **implementation contract for `0.6.0` (release candidate).** The Rust command bridge and
 product screens are implemented in this repository. Where this document describes a control, it is
-the requirement that implementation must satisfy. The pinned engine is `lv24-seo 0.7.0`. The
-post-`0.5.0` working tree adds cancellable background runs (`run_cancel`); the published `0.5.0`
-binaries do not include that control yet.
+the requirement that implementation must satisfy. The pinned engine is `lv24-seo 0.8.0`. `0.6.0`
+adds cancellable background runs (`run_cancel`), a window-wide run banner and the schedule-install
+`--allow-write` opt-in that engine `0.8.0` requires.
 
 ## 1. Shape
 
@@ -183,7 +183,7 @@ The AppImage step is the fallback that keeps an AppImage build from silently dro
 `resource_dir()` points somewhere other than the mounted engine tree.
 
 Nothing is downloaded automatically. The shell runs `lv24-seo version --json`, records the path,
-source and version, and compares the version with `MIN_ENGINE_VERSION` (`0.5.2`). An older engine is
+source and version, and compares the version with `MIN_ENGINE_VERSION` (`0.8.0`). An older engine is
 marked `compatible: false`; the UI treats the engine as offline and shows the standard offline
 notice. It does not silently downgrade or run the command. A newer engine passes the gate but is not
 the release-tested pin.
