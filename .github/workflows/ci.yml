@@ -135,6 +135,13 @@ jobs:
         working-directory: src-tauri
         run: cargo test --all-targets
 
+      - name: Release build
+        # `cargo test` links dev-dependencies, which can enable features the
+        # shipped binary does not get (tokio `macros` broke 0.2.3 release builds
+        # on every platform while tests stayed green). Build what we ship.
+        working-directory: src-tauri
+        run: cargo build --release --locked
+
   audit:
     name: Dependency audit (npm, cargo)
     runs-on: ubuntu-latest
