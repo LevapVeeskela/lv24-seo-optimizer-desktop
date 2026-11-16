@@ -10,16 +10,16 @@ its checksums, its updater signatures or its engine version does not ship.
 
 ## 1. Release state
 
-`0.2.0` was the first multi-platform release; `0.2.2` is the latest published patch release and
-`0.2.3` is the release candidate:
+`0.2.0` was the first multi-platform release; `0.2.3` is the latest published release (2026-11-16)
+and `0.2.2` is the previous patch, kept for rollback:
 
 - **Windows x64:** unsigned NSIS installer, signed updater `.exe`, portable ZIP.
 - **Linux x64:** AppImage (signed updater), deb and rpm (manual-only).
 - **macOS arm64/x64:** DMG plus signed `.app.tar.gz` updater archives.
 - **Common:** `latest.json` and `SHA256SUMS.txt`.
 
-Release notes: [`docs/releases/0.2.3.md`](releases/0.2.3.md) for the candidate,
-[`docs/releases/0.2.2.md`](releases/0.2.2.md) for the published line.
+Release notes: [`docs/releases/0.2.3.md`](releases/0.2.3.md) for the published line,
+[`docs/releases/0.2.2.md`](releases/0.2.2.md) for the previous one.
 
 Auto-update is enabled for Windows NSIS, macOS `.app` and Linux AppImage. deb, rpm, MSI and the
 portable ZIP are manual-only; the UI disables in-app installation for those bundle types and links
@@ -333,15 +333,21 @@ The engine sidecar is installed inside the app resources, so a running `lv24-seo
 `engine/lv24-seo/lv24-seo[.exe]` locked and the NSIS installer cannot replace it. This is what broke
 the `0.2.1` in-app update.
 
-The updater therefore invokes the `prepare_update` Tauri command immediately before
-`downloadAndInstall`. It stops only the engine PIDs the current app instance registered when it
-spawned them, waits up to `2 s` for them to exit and returns the count. Nothing is matched by image
-name: another installed copy, a portable build, a terminal `lv24-seo` run or an unrelated process is
-never killed.
+The webview holds only `updater:allow-check`, so it can read the manifest but cannot call the
+plugin's `downloadAndInstall`. The install action calls `prepare_update` and then the Rust
+`update_install(expectedVersion)` command. `update_install` re-checks the endpoint, refuses a version
+that differs from the one the user saw (`UPDATE_VERSION_MISMATCH`), allows one install at a time
+(`UPDATE_IN_PROGRESS`), stops the tracked sidecars itself and only then downloads and installs.
+`update_cancel` stops a download before the installer starts and returns `UPDATE_CANCELLED`; once
+installation has begun it returns `false`.
 
-If cleanup fails, the UI reports `UPDATE_ENGINE_BUSY` and does not start the installer. The error is
-retryable and says what to close. The release checklist for `0.2.2` includes confirming both paths on
-a machine with `0.2.1` installed.
+The stop targets only the engine PIDs the current app instance registered when it spawned them and
+waits up to `2 s` for them to exit; `prepare_update` reports how many it stopped. Nothing is matched
+by image name: another installed copy, a portable build, a terminal `lv24-seo` run or an unrelated
+process is never killed.
+
+If cleanup fails, the command returns `UPDATE_ENGINE_BUSY` and does not start the installer. The
+error is retryable and says what to close.
 
 ### Staging
 
@@ -527,11 +533,11 @@ The release job:
    `SHA256SUMS.txt`, then undrafts it.
 5. Verify the release page: asset names, checksums (including `*-portable.zip.sha256`), all four
    platforms, `latest.json` and notes.
-6. Verify the in-app update on a machine with the previous release installed. `0.2.0 → 0.2.1` and
-   `0.2.1 → 0.2.2` are verified end-to-end; `0.2.2 → 0.2.3` must be verified in this run, including
-   the Rust-side version re-check, cancellation during download, a running sidecar stopped before the
-   installer and `UPDATE_ENGINE_BUSY` when cleanup is blocked. Do not advertise auto-update for
-   deb/rpm/MSI/portable.
+6. Verify the in-app update on a machine with the previous release installed. `0.2.0 → 0.2.1`,
+   `0.2.1 → 0.2.2` and `0.2.2 → 0.2.3` are verified end-to-end on Windows NSIS, including the
+   Rust-side version re-check and a running sidecar stopped before the installer. Cancellation during
+   download and `UPDATE_ENGINE_BUSY` when cleanup is blocked are covered by unit tests. Do not
+   advertise auto-update for deb/rpm/MSI/portable.
 7. Announce with the unsigned-build instructions, the manual-only cases and the checksum file.
 
 ### Post-release

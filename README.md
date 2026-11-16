@@ -9,12 +9,12 @@ scraping.
 [![Status: pre-release](https://img.shields.io/badge/status-pre--release-orange.svg)](#public-status)
 [![Engine: lv24-seo 0.5.3](https://img.shields.io/badge/engine-lv24--seo%200.5.3-informational.svg)](docs/releases/0.2.3.md)
 
-> **0.2.3 release candidate.** The latest published line is `0.2.2` until `v0.2.3` is tagged. Windows
-> NSIS, macOS `.app` and Linux AppImage can auto-update from `0.2.0` onward; deb, rpm, MSI and the
-> portable ZIP are manual-only. `0.1.0` has no updater and must be upgraded manually once. The
-> candidate pins `lv24-seo 0.5.3`, which ships the `stats` command described by
+> **0.2.3 released (2026-11-16).** The latest published line is `0.2.3`. Windows NSIS, macOS `.app`
+> and Linux AppImage can auto-update from `0.2.0` onward; deb, rpm, MSI and the portable ZIP are
+> manual-only. `0.1.0` has no updater and must be upgraded manually once. `0.2.3` bundles
+> `lv24-seo 0.5.3`, which ships the `stats` command described by
 > [`contracts/stats-v1.md`](contracts/stats-v1.md); `MIN_ENGINE_VERSION` stays `0.5.2`. Read
-> [Public status](#public-status) before relying on anything here. Candidate notes:
+> [Public status](#public-status) before relying on anything here. Release notes:
 > [`docs/releases/0.2.3.md`](docs/releases/0.2.3.md).
 
 ## Screenshot
@@ -93,10 +93,9 @@ adapters land. The full inputs, outputs and limits are in the engine's
 ## Install
 
 Download from [Releases](https://github.com/LevapVeeskela/lv24-seo-optimizer-desktop/releases).
-The latest published line is `0.2.2`; the `0.2.3` candidate uses the same asset names with `0.2.3`
-in the version segment. Full notes, install steps and limitations:
-[`docs/releases/0.2.3.md`](docs/releases/0.2.3.md) for the candidate and
-[`docs/releases/0.2.2.md`](docs/releases/0.2.2.md) for the published line.
+The latest published line is `0.2.3`; full notes, install steps and limitations:
+[`docs/releases/0.2.3.md`](docs/releases/0.2.3.md). `0.2.2` remains available for rollback and as
+the previous in-app update source: [`docs/releases/0.2.2.md`](docs/releases/0.2.2.md).
 
 | Platform | Assets | Auto-update |
 |---|---|---|
@@ -485,11 +484,11 @@ build from source and sign it with your own certificate. See [`docs/release.md`]
 | Manual desktop build workflow (NSIS, DMG, AppImage, deb, rpm) | available; owner-triggered; publish requires the updater key |
 | Tauri command bridge (config read/validate/write/patch, CLI runner, secrets, diagnostics) | implemented |
 | React screens (dashboard, settings, configuration, reports, recommendations) | implemented |
-| Bundled onedir sidecar | all four targets built in CI; the Windows x64 pin records the reviewed `0.5.3` build, Linux/macOS pins are pending, CI records rebuild-aware hashes |
-| Published installers | `0.2.2`: Windows x64, Linux x64, macOS arm64/x64 |
-| Install checks | macOS 27.2 arm64 DMG installed and launched with engine `0.5.2`; deb and AppImage (FUSE mount and extract-and-run fallback) on Ubuntu 24.04 and rpm on Fedora 45 installed and launched with engine `0.5.2`; Linux updater signatures verified against the embedded key |
-| Auto-update | Windows NSIS, macOS `.app`, Linux AppImage; `0.2.0 → 0.2.1` and `0.2.1 → 0.2.2` verified end-to-end on Windows NSIS; deb/rpm/MSI/portable ZIP are manual |
-| `lv24-seo stats --json` engine command | shipped in `lv24-seo 0.5.2`; fixture committed |
+| Bundled onedir sidecar | all four targets built in CI and by the release workflow; the Windows x64 pin records the reviewed `0.5.3` build, Linux/macOS reviewed pins remain `null` and are covered by rebuild-aware CI checksum reports |
+| Published installers | `0.2.3`: Windows x64, Linux x64, macOS arm64/x64; `0.2.2` remains available for rollback |
+| Install checks | `0.2.2`: macOS 27.2 arm64 DMG installed and launched with engine `0.5.2`; deb and AppImage (FUSE mount and extract-and-run fallback) on Ubuntu 24.04 and rpm on Fedora 45 installed and launched with engine `0.5.2`; Linux updater signatures verified against the embedded key |
+| Auto-update | Windows NSIS, macOS `.app`, Linux AppImage; `0.2.0 → 0.2.1`, `0.2.1 → 0.2.2` and `0.2.2 → 0.2.3` verified end-to-end on Windows NSIS; deb/rpm/MSI/portable ZIP are manual |
+| `lv24-seo stats --json` engine command | shipped since `lv24-seo 0.5.2`; bundled `0.5.3`; fixture committed |
 
 `0.1.0` remains available as a Windows-only preview. It has no updater; install `0.2.3` manually
 once. Follow the [issues](https://github.com/LevapVeeskela/lv24-seo-optimizer-desktop/issues) for

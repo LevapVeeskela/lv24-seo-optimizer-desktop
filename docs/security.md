@@ -1,6 +1,6 @@
 # Security model
 
-Status: **security contract for `0.2.3` (release candidate).** The Rust bridge and screens are
+Status: **security contract for `0.2.3` (released 2026-11-16).** The Rust bridge and screens are
 implemented in this repository. This page states the controls the implementation must enforce and
 the residual risks accepted for the preview; where a control is future work, the text says so.
 `0.2.3` moves the update install into Rust, gates every config path behind the native dialog,
