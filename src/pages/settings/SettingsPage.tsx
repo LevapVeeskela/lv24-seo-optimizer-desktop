@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { observer } from "mobx-react-lite";
 import { useRootStore } from "@/app/providers/StoreProvider";
 import { useI18n, type MessageKey } from "@/shared/i18n";
@@ -11,6 +11,7 @@ import {
 import { Badge } from "@/shared/ui/Badge";
 import { Button } from "@/shared/ui/Button";
 import { Card } from "@/shared/ui/Card";
+import { ConfirmDialog } from "@/shared/ui/ConfirmDialog";
 import { EmptyState } from "@/shared/ui/EmptyState";
 import { Field } from "@/shared/ui/Field";
 import { Input } from "@/shared/ui/Input";
@@ -27,7 +28,11 @@ import {
   type ReportLocale,
 } from "@/entities/config";
 import { pickConfig } from "@/entities/engine/api/shell";
-import { SaveConfigBar } from "@/features/save-config";
+import {
+  SaveConfigBar,
+  confirmDiscardBeforeAction,
+  useSaveShortcut,
+} from "@/features/save-config";
 import { UpdatePanel } from "@/features/update";
 import {
   SecretModal,
@@ -35,8 +40,22 @@ import {
   secretPresence,
   secretSourceKey,
 } from "@/features/secret-set";
+import {
+  SETTINGS_SECTIONS,
+  changedPaths,
+  jumpToSection,
+  sectionChangedPaths,
+  sectionHasChanges,
+} from "./lib/sections";
+import { SettingsSectionNav } from "./ui/SettingsSectionNav";
 
 const INIT_COMMAND = "lv24-seo init --property https://example.com --data-dir ./data";
+
+/** Why the discard prompt was raised; only the body copy differs. */
+type DiscardReason = "close" | "reload" | "switch";
+
+/** Keep a jumped-to section clear of the sticky app header. */
+const sectionStyle: CSSProperties = { scrollMarginTop: "6rem" };
 
 function numberText(value: number): string {
   return Number.isFinite(value) ? String(value) : "";
@@ -67,6 +86,9 @@ export const SettingsPage = observer(function SettingsPage() {
   const { notify } = useFeedback();
   const [secrets] = useState(() => new SecretStore());
   const [secretProvider, setSecretProvider] = useState<AuthProvider | null>(null);
+  const [changedOnly, setChangedOnly] = useState(false);
+  const [discardReason, setDiscardReason] = useState<DiscardReason | null>(null);
+  const discardResolver = useRef<((ok: boolean) => void) | null>(null);
   const secretsPath = useRef<string | null>(null);
   const configPath = engine.status?.configPath ?? null;
 
@@ -89,6 +111,53 @@ export const SettingsPage = observer(function SettingsPage() {
   }, [configPath, config, secrets]);
 
   const draft = config.draft;
+  // One diff read drives the section navigation, the changed-only filter and
+  // the save bar count, so all three agree on what "changed" means.
+  const changed = changedPaths(config.diff);
+  const changedFieldCount = changed.size;
+  // Invalid fields stay visible in changed-only mode: hiding the field the
+  // save bar is complaining about would be a trap.
+  const problemPaths = new Set(
+    [...config.errors, ...config.validationWarnings]
+      .map((issue) => issue.path)
+      .filter(Boolean),
+  );
+  const sectionVisible = (id: string): boolean => {
+    if (!changedOnly) {
+      return true;
+    }
+    const section = SETTINGS_SECTIONS.find((item) => item.id === id);
+    return section
+      ? sectionHasChanges(section, changed) ||
+          sectionChangedPaths(section, problemPaths).length > 0
+      : true;
+  };
+  const show = (path: string): boolean =>
+    !changedOnly || changed.has(path) || problemPaths.has(path);
+  const showProviderBlock = (provider: keyof ProvidersConfig): boolean => {
+    if (!changedOnly) {
+      return true;
+    }
+    const prefix = `providers.${provider}.`;
+    return [...changed, ...problemPaths].some((path) => path.startsWith(prefix));
+  };
+  const providerPresenceChanged = (provider: keyof ProvidersConfig): boolean =>
+    changed.has(`providers.${provider}.present`);
+  const showProviderField = (
+    provider: keyof ProvidersConfig,
+    path: string,
+  ): boolean =>
+    !changedOnly ||
+    providerPresenceChanged(provider) ||
+    changed.has(path) ||
+    problemPaths.has(path);
+  const navItems = SETTINGS_SECTIONS.filter((section) =>
+    sectionVisible(section.id),
+  ).map((section) => ({
+    id: section.id,
+    label: t(section.labelKey),
+    changedCount: sectionChangedPaths(section, changed).length,
+  }));
   // The effect below updates this ref after paint. Gate the badges on the ref
   // so a workspace switch cannot show the previous workspace's token presence
   // for one frame before the new auth status starts loading.
@@ -132,6 +201,15 @@ export const SettingsPage = observer(function SettingsPage() {
 
   const reload = async () => {
     if (!configPath) {
+      return;
+    }
+    // Reloading re-reads the file and replaces the draft; ask first so a
+    // click cannot silently throw away edits.
+    if (
+      !(await confirmDiscardBeforeAction(config.dirty, () =>
+        askDiscard("reload"),
+      ))
+    ) {
       return;
     }
     const ok = await config.reload();
@@ -188,6 +266,51 @@ export const SettingsPage = observer(function SettingsPage() {
     config.discard();
     notify(t("settings.discarded"));
   };
+
+  /**
+   * One dialog serves the window-close guard, workspace switch and reload.
+   * The promise resolves only when the user answers; closing the dialog is a
+   * "keep editing" answer, never an implicit discard.
+   */
+  const askDiscard = (reason: DiscardReason): Promise<boolean> =>
+    new Promise((resolve) => {
+      discardResolver.current?.(false);
+      discardResolver.current = resolve;
+      setDiscardReason(reason);
+    });
+
+  const answerDiscard = (ok: boolean) => {
+    const resolve = discardResolver.current;
+    discardResolver.current = null;
+    setDiscardReason(null);
+    resolve?.(ok);
+  };
+
+  // Rendered by every branch: an offline engine can clear the config path
+  // while a dirty draft still exists, and the close guard must stay answerable.
+  const discardDialog = (
+    <ConfirmDialog
+      open={discardReason !== null}
+      title={t("settings.unsaved.title")}
+      confirmLabel={t("settings.unsaved.confirm")}
+      cancelLabel={t("settings.unsaved.cancel")}
+      danger
+      onCancel={() => answerDiscard(false)}
+      onConfirm={() => answerDiscard(true)}
+    >
+      <p>
+        {t(
+          discardReason === "close"
+            ? "settings.unsaved.closeBody"
+            : discardReason === "reload"
+              ? "settings.unsaved.reloadBody"
+              : "settings.unsaved.switchBody",
+        )}
+      </p>
+    </ConfirmDialog>
+  );
+
+  useSaveShortcut(config.canSave, () => void save());
 
   const reveal = async (path: string | null) => {
     if (!path) {
@@ -258,6 +381,9 @@ export const SettingsPage = observer(function SettingsPage() {
     labelKey: MessageKey,
     fields: ReactNode,
   ) => {
+    if (!showProviderBlock(provider)) {
+      return null;
+    }
     const present = draft?.providers[provider].present ?? false;
     const label = t(labelKey);
     return (
@@ -290,6 +416,19 @@ export const SettingsPage = observer(function SettingsPage() {
   };
 
   const chooseConfig = async () => {
+    // The shell persists the picked path before the page can react, so the
+    // discard decision has to happen before the dialog opens. A canceled
+    // picker after a confirmed discard is explicit, not silent.
+    if (
+      !(await confirmDiscardBeforeAction(config.dirty, () =>
+        askDiscard("switch"),
+      ))
+    ) {
+      return;
+    }
+    if (config.dirty) {
+      config.discard();
+    }
     try {
       // SEC-05: the shell owns the native dialog and persists the path, so the
       // webview cannot point config_write/config_patch at an arbitrary file.
@@ -352,6 +491,7 @@ export const SettingsPage = observer(function SettingsPage() {
       <section className="page">
         {header}
         <Loading label={t("settings.loading")} />
+        {discardDialog}
       </section>
     );
   }
@@ -375,6 +515,7 @@ export const SettingsPage = observer(function SettingsPage() {
           />
         </Card>
         <UpdatePanel />
+        {discardDialog}
       </section>
     );
   }
@@ -480,7 +621,60 @@ export const SettingsPage = observer(function SettingsPage() {
 
       {draft ? (
         <>
-          <Card>
+          <Card className="settings-nav-card">
+            <div className="card-header">
+              <div>
+                <h2>{t("settings.nav.title")}</h2>
+                <p className="muted small">{t("settings.nav.hint")}</p>
+              </div>
+              <label className="checkbox">
+                <input
+                  type="checkbox"
+                  checked={changedOnly}
+                  onChange={(event) => setChangedOnly(event.target.checked)}
+                />
+                <span>{t("settings.filter.onlyChanged")}</span>
+              </label>
+            </div>
+            {changedFieldCount > 0 ? (
+              <p className="muted small" aria-live="polite">
+                {t("settings.nav.changedFields", { count: changedFieldCount })}
+              </p>
+            ) : null}
+            {navItems.length > 0 ? (
+              <SettingsSectionNav
+                label={t("settings.nav.label")}
+                items={navItems}
+                jumpLabel={(section) => t("settings.nav.jump", { section })}
+                onJump={(id) =>
+                  jumpToSection(
+                    id,
+                    typeof document === "undefined" ? null : document,
+                  )
+                }
+              />
+            ) : null}
+          </Card>
+
+          {changedOnly && changedFieldCount === 0 ? (
+            <Card>
+              <EmptyState
+                title={t("settings.filter.emptyTitle")}
+                hint={t("settings.filter.emptyHint")}
+                action={
+                  <Button
+                    variant="secondary"
+                    onClick={() => setChangedOnly(false)}
+                  >
+                    {t("settings.filter.showAll")}
+                  </Button>
+                }
+              />
+            </Card>
+          ) : null}
+
+          {sectionVisible("settings-section-project") ? (
+          <Card id="settings-section-project" tabIndex={-1} style={sectionStyle}>
             <div className="card-header">
               <div>
                 <h2>{t("settings.sections.project")}</h2>
@@ -494,63 +688,75 @@ export const SettingsPage = observer(function SettingsPage() {
               </Button>
             </div>
             <div className="form-grid">
-              <Field id="project-name" label={t("settings.project.name")}>
-                <Input
-                  id="project-name"
-                  value={draft.project.name}
-                  onChange={(event) => set("project.name", event.target.value)}
-                />
-              </Field>
-              <Field
-                id="project-base-url"
-                label={t("settings.project.baseUrl")}
-                hint={t("settings.project.baseUrlHint")}
-                error={errorFor("project.base_url")}
-              >
-                <Input
+              {show("project.name") ? (
+                <Field id="project-name" label={t("settings.project.name")}>
+                  <Input
+                    id="project-name"
+                    value={draft.project.name}
+                    onChange={(event) => set("project.name", event.target.value)}
+                  />
+                </Field>
+              ) : null}
+              {show("project.base_url") ? (
+                <Field
                   id="project-base-url"
-                  type="url"
-                  value={draft.project.base_url}
-                  aria-invalid={Boolean(errorFor("project.base_url"))}
-                  aria-describedby={describedBy("project-base-url", "project.base_url")}
-                  onChange={(event) => set("project.base_url", event.target.value)}
-                />
-              </Field>
-              <Field
-                id="project-property"
-                label={t("settings.project.defaultProperty")}
-                hint={t("settings.project.defaultPropertyHint")}
-              >
-                <Input
+                  label={t("settings.project.baseUrl")}
+                  hint={t("settings.project.baseUrlHint")}
+                  error={errorFor("project.base_url")}
+                >
+                  <Input
+                    id="project-base-url"
+                    type="url"
+                    value={draft.project.base_url}
+                    aria-invalid={Boolean(errorFor("project.base_url"))}
+                    aria-describedby={describedBy("project-base-url", "project.base_url")}
+                    onChange={(event) => set("project.base_url", event.target.value)}
+                  />
+                </Field>
+              ) : null}
+              {show("project.default_property") ? (
+                <Field
                   id="project-property"
-                  value={draft.project.default_property}
-                  onChange={(event) =>
-                    set("project.default_property", event.target.value)
-                  }
-                />
-              </Field>
-              <Field
-                id="storage-data-dir"
-                label={t("settings.project.dataDir")}
-                hint={t("settings.project.dataDirHint")}
-                error={errorFor("storage.data_dir")}
-              >
-                <Input
+                  label={t("settings.project.defaultProperty")}
+                  hint={t("settings.project.defaultPropertyHint")}
+                >
+                  <Input
+                    id="project-property"
+                    value={draft.project.default_property}
+                    onChange={(event) =>
+                      set("project.default_property", event.target.value)
+                    }
+                  />
+                </Field>
+              ) : null}
+              {show("storage.data_dir") ? (
+                <Field
                   id="storage-data-dir"
-                  value={draft.storage.data_dir}
-                  aria-invalid={Boolean(errorFor("storage.data_dir"))}
-                  aria-describedby={describedBy("storage-data-dir", "storage.data_dir")}
-                  onChange={(event) => set("storage.data_dir", event.target.value)}
-                />
-              </Field>
-              {reserved(
-                "settings.reserved.rawRetention",
-                String(draft.storage.raw_retention_days),
-              )}
+                  label={t("settings.project.dataDir")}
+                  hint={t("settings.project.dataDirHint")}
+                  error={errorFor("storage.data_dir")}
+                >
+                  <Input
+                    id="storage-data-dir"
+                    value={draft.storage.data_dir}
+                    aria-invalid={Boolean(errorFor("storage.data_dir"))}
+                    aria-describedby={describedBy("storage-data-dir", "storage.data_dir")}
+                    onChange={(event) => set("storage.data_dir", event.target.value)}
+                  />
+                </Field>
+              ) : null}
+              {!changedOnly
+                ? reserved(
+                    "settings.reserved.rawRetention",
+                    String(draft.storage.raw_retention_days),
+                  )
+                : null}
             </div>
           </Card>
+          ) : null}
 
-          <Card>
+          {sectionVisible("settings-section-providers") ? (
+          <Card id="settings-section-providers" tabIndex={-1} style={sectionStyle}>
             <div className="card-header">
               <div>
                 <h2>{t("settings.sections.providers")}</h2>
@@ -569,443 +775,516 @@ export const SettingsPage = observer(function SettingsPage() {
                 "gsc",
                 "secrets.provider.gsc",
                 <>
-                  <Field
-                    id="provider-gsc-property"
-                    label={t("settings.providers.property")}
-                    hint={t("settings.providers.propertyHint")}
-                  >
-                    <Input
+                  {showProviderField("gsc", "providers.gsc.property") ? (
+                    <Field
                       id="provider-gsc-property"
-                      value={draft.providers.gsc.property}
-                      onChange={(event) =>
-                        set("providers.gsc.property", event.target.value)
-                      }
-                    />
-                    {tokenBadge("gsc")}
-                  </Field>
-                  {reserved("settings.reserved.gscAuth", draft.providers.gsc.auth)}
+                      label={t("settings.providers.property")}
+                      hint={t("settings.providers.propertyHint")}
+                    >
+                      <Input
+                        id="provider-gsc-property"
+                        value={draft.providers.gsc.property}
+                        onChange={(event) =>
+                          set("providers.gsc.property", event.target.value)
+                        }
+                      />
+                      {tokenBadge("gsc")}
+                    </Field>
+                  ) : null}
+                  {!changedOnly
+                    ? reserved("settings.reserved.gscAuth", draft.providers.gsc.auth)
+                    : null}
                 </>,
               )}
               {providerBlock(
                 "yandex_webmaster",
                 "secrets.provider.yandex",
-                <Field
-                  id="provider-yandex-host"
-                  label={t("settings.providers.hostId")}
-                  hint={t("settings.providers.hostIdHint")}
-                >
-                  <Input
+                showProviderField(
+                  "yandex_webmaster",
+                  "providers.yandex_webmaster.host_id",
+                ) ? (
+                  <Field
                     id="provider-yandex-host"
-                    value={draft.providers.yandex_webmaster.host_id}
-                    onChange={(event) =>
-                      set("providers.yandex_webmaster.host_id", event.target.value)
-                    }
-                  />
-                  {tokenBadge("yandex")}
-                </Field>,
+                    label={t("settings.providers.hostId")}
+                    hint={t("settings.providers.hostIdHint")}
+                  >
+                    <Input
+                      id="provider-yandex-host"
+                      value={draft.providers.yandex_webmaster.host_id}
+                      onChange={(event) =>
+                        set("providers.yandex_webmaster.host_id", event.target.value)
+                      }
+                    />
+                    {tokenBadge("yandex")}
+                  </Field>
+                ) : null,
               )}
               {providerBlock(
                 "yandex_metrika",
                 "secrets.provider.metrika",
                 <>
-                  <Field
-                    id="provider-metrika-counter"
-                    label={t("settings.providers.counter")}
-                    hint={t("settings.providers.counterHint")}
-                  >
-                    <Input
+                  {showProviderField(
+                    "yandex_metrika",
+                    "providers.yandex_metrika.counter",
+                  ) ? (
+                    <Field
                       id="provider-metrika-counter"
-                      value={draft.providers.yandex_metrika.counter}
-                      onChange={(event) =>
-                        set("providers.yandex_metrika.counter", event.target.value)
-                      }
-                    />
-                    {tokenBadge("metrika")}
-                  </Field>
-                  {reserved(
-                    "settings.reserved.metrikaGoals",
-                    draft.providers.yandex_metrika.goals.join(", ") || "—",
-                  )}
+                      label={t("settings.providers.counter")}
+                      hint={t("settings.providers.counterHint")}
+                    >
+                      <Input
+                        id="provider-metrika-counter"
+                        value={draft.providers.yandex_metrika.counter}
+                        onChange={(event) =>
+                          set("providers.yandex_metrika.counter", event.target.value)
+                        }
+                      />
+                      {tokenBadge("metrika")}
+                    </Field>
+                  ) : null}
+                  {!changedOnly
+                    ? reserved(
+                        "settings.reserved.metrikaGoals",
+                        draft.providers.yandex_metrika.goals.join(", ") || "—",
+                      )
+                    : null}
                 </>,
               )}
               {providerBlock(
                 "bing",
                 "secrets.provider.bing",
-                <Field
-                  id="provider-bing-site"
-                  label={t("settings.providers.site")}
-                  hint={t("settings.providers.siteHint")}
-                >
-                  <Input
+                showProviderField("bing", "providers.bing.site") ? (
+                  <Field
                     id="provider-bing-site"
-                    value={draft.providers.bing.site}
-                    onChange={(event) =>
-                      set("providers.bing.site", event.target.value)
-                    }
-                  />
-                  {tokenBadge("bing")}
-                </Field>,
+                    label={t("settings.providers.site")}
+                    hint={t("settings.providers.siteHint")}
+                  >
+                    <Input
+                      id="provider-bing-site"
+                      value={draft.providers.bing.site}
+                      onChange={(event) =>
+                        set("providers.bing.site", event.target.value)
+                      }
+                    />
+                    {tokenBadge("bing")}
+                  </Field>
+                ) : null,
               )}
               {providerBlock(
                 "crux",
                 "secrets.provider.crux",
-                <Field
-                  id="provider-crux-origin"
-                  label={t("settings.providers.origin")}
-                  hint={t("settings.providers.originHint")}
-                >
-                  <Input
+                showProviderField("crux", "providers.crux.origin") ? (
+                  <Field
                     id="provider-crux-origin"
-                    value={draft.providers.crux.origin}
-                    onChange={(event) =>
-                      set("providers.crux.origin", event.target.value)
-                    }
-                  />
-                  {tokenBadge("crux")}
-                </Field>,
+                    label={t("settings.providers.origin")}
+                    hint={t("settings.providers.originHint")}
+                  >
+                    <Input
+                      id="provider-crux-origin"
+                      value={draft.providers.crux.origin}
+                      onChange={(event) =>
+                        set("providers.crux.origin", event.target.value)
+                      }
+                    />
+                    {tokenBadge("crux")}
+                  </Field>
+                ) : null,
               )}
               {providerBlock(
                 "psi",
                 "secrets.provider.psi",
                 <>
-                  <Field
-                    id="provider-psi-strategy"
-                    label={t("settings.providers.strategy")}
-                    error={errorFor("providers.psi.strategy")}
-                  >
-                    <Select
+                  {showProviderField("psi", "providers.psi.strategy") ? (
+                    <Field
                       id="provider-psi-strategy"
-                      value={draft.providers.psi.strategy}
-                      onChange={(event) =>
-                        set(
-                          "providers.psi.strategy",
-                          event.target.value as PsiStrategy,
-                        )
-                      }
+                      label={t("settings.providers.strategy")}
+                      error={errorFor("providers.psi.strategy")}
                     >
-                      <option value="mobile">
-                        {t("settings.providers.strategyMobile")}
-                      </option>
-                      <option value="desktop">
-                        {t("settings.providers.strategyDesktop")}
-                      </option>
-                    </Select>
-                    {tokenBadge("psi")}
-                  </Field>
-                  <Field
-                    id="provider-psi-urls"
-                    label={t("settings.providers.urls")}
-                    hint={t("settings.providers.urlsHint")}
-                  >
-                    <textarea
+                      <Select
+                        id="provider-psi-strategy"
+                        value={draft.providers.psi.strategy}
+                        onChange={(event) =>
+                          set(
+                            "providers.psi.strategy",
+                            event.target.value as PsiStrategy,
+                          )
+                        }
+                      >
+                        <option value="mobile">
+                          {t("settings.providers.strategyMobile")}
+                        </option>
+                        <option value="desktop">
+                          {t("settings.providers.strategyDesktop")}
+                        </option>
+                      </Select>
+                      {tokenBadge("psi")}
+                    </Field>
+                  ) : null}
+                  {showProviderField("psi", "providers.psi.urls") ? (
+                    <Field
                       id="provider-psi-urls"
-                      className="input"
-                      rows={4}
-                      value={listText(draft.providers.psi.urls)}
-                      aria-describedby={describedBy("provider-psi-urls", "providers.psi.urls")}
-                      onChange={(event) =>
-                        set("providers.psi.urls", parseList(event.target.value))
-                      }
-                    />
-                    {warningFor("providers.psi.urls") ? (
-                      <small className="muted">
-                        {warningFor("providers.psi.urls")}
-                      </small>
-                    ) : null}
-                  </Field>
+                      label={t("settings.providers.urls")}
+                      hint={t("settings.providers.urlsHint")}
+                    >
+                      <textarea
+                        id="provider-psi-urls"
+                        className="input"
+                        rows={4}
+                        value={listText(draft.providers.psi.urls)}
+                        aria-describedby={describedBy("provider-psi-urls", "providers.psi.urls")}
+                        onChange={(event) =>
+                          set("providers.psi.urls", parseList(event.target.value))
+                        }
+                      />
+                      {warningFor("providers.psi.urls") ? (
+                        <small className="muted">
+                          {warningFor("providers.psi.urls")}
+                        </small>
+                      ) : null}
+                    </Field>
+                  ) : null}
                 </>,
               )}
             </div>
           </Card>
+          ) : null}
 
-          <Card>
+          {sectionVisible("settings-section-report") ? (
+          <Card id="settings-section-report" tabIndex={-1} style={sectionStyle}>
             <h2>{t("settings.sections.report")}</h2>
             <div className="form-grid">
-              <Field
-                id="report-locale"
-                label={t("settings.report.locale")}
-                hint={t("settings.report.localeHint")}
-                error={errorFor("report.locale")}
-              >
-                <Select
+              {show("report.locale") ? (
+                <Field
                   id="report-locale"
-                  value={draft.report.locale}
-                  aria-invalid={Boolean(errorFor("report.locale"))}
-                  onChange={(event) =>
-                    set("report.locale", event.target.value as ReportLocale)
-                  }
+                  label={t("settings.report.locale")}
+                  hint={t("settings.report.localeHint")}
+                  error={errorFor("report.locale")}
                 >
-                  <option value="ru">{t("settings.report.localeRu")}</option>
-                  <option value="en">{t("settings.report.localeEn")}</option>
-                  <option value="zh">{t("settings.report.localeZh")}</option>
-                </Select>
-              </Field>
-              <Field
-                id="report-timezone"
-                label={t("settings.report.timezone")}
-                hint={t("settings.report.timezoneHint")}
-                error={errorFor("report.timezone")}
-              >
-                <Input
-                  id="report-timezone"
-                  value={draft.report.timezone}
-                  aria-invalid={Boolean(errorFor("report.timezone"))}
-                  aria-describedby={describedBy("report-timezone", "report.timezone")}
-                  onChange={(event) => set("report.timezone", event.target.value)}
-                />
-              </Field>
-              <Field
-                id="threshold-clicks"
-                label={t("settings.report.clicksPct")}
-                error={errorFor("report.thresholds.clicks_pct")}
-              >
-                <Input
-                  id="threshold-clicks"
-                  type="number"
-                  min={0}
-                  step="0.1"
-                  value={numberText(draft.report.thresholds.clicks_pct)}
-                  aria-invalid={Boolean(errorFor("report.thresholds.clicks_pct"))}
-                  onChange={(event) =>
-                    set("report.thresholds.clicks_pct", Number(event.target.value))
-                  }
-                />
-              </Field>
-              <Field
-                id="threshold-impressions"
-                label={t("settings.report.impressionsPct")}
-                error={errorFor("report.thresholds.impressions_pct")}
-              >
-                <Input
-                  id="threshold-impressions"
-                  type="number"
-                  min={0}
-                  step="0.1"
-                  value={numberText(draft.report.thresholds.impressions_pct)}
-                  aria-invalid={Boolean(
-                    errorFor("report.thresholds.impressions_pct"),
-                  )}
-                  onChange={(event) =>
-                    set(
-                      "report.thresholds.impressions_pct",
-                      Number(event.target.value),
-                    )
-                  }
-                />
-              </Field>
-              <Field
-                id="threshold-position"
-                label={t("settings.report.positionAbs")}
-                error={errorFor("report.thresholds.position_abs")}
-              >
-                <Input
-                  id="threshold-position"
-                  type="number"
-                  min={0}
-                  step="0.1"
-                  value={numberText(draft.report.thresholds.position_abs)}
-                  aria-invalid={Boolean(errorFor("report.thresholds.position_abs"))}
-                  onChange={(event) =>
-                    set("report.thresholds.position_abs", Number(event.target.value))
-                  }
-                />
-              </Field>
-              {reserved("settings.reserved.weekStart", draft.report.week_start)}
-            </div>
-          </Card>
-
-          <Card>
-            <h2>{t("settings.sections.email")}</h2>
-            <label className="checkbox">
-              <input
-                type="checkbox"
-                checked={draft.report.email.enabled}
-                onChange={(event) =>
-                  set("report.email.enabled", event.target.checked)
-                }
-              />
-              <span>{t("settings.email.enabled")}</span>
-            </label>
-            <div className="form-grid">
-              <Field
-                id="email-to"
-                label={t("settings.email.to")}
-                hint={t("settings.email.toHint")}
-              >
-                <textarea
-                  id="email-to"
-                  className="input"
-                  rows={3}
-                  value={listText(draft.report.email.to)}
-                  onChange={(event) =>
-                    set("report.email.to", parseList(event.target.value))
-                  }
-                />
-                {warningFor("report.email.to") ? (
-                  <small className="muted">{warningFor("report.email.to")}</small>
-                ) : null}
-              </Field>
-              <Field id="email-from" label={t("settings.email.from")}>
-                <Input
-                  id="email-from"
-                  type="email"
-                  value={draft.report.email.from}
-                  onChange={(event) =>
-                    set("report.email.from", event.target.value)
-                  }
-                />
-                {warningFor("report.email.from") ? (
-                  <small className="muted">
-                    {warningFor("report.email.from")}
-                  </small>
-                ) : null}
-              </Field>
-              <Field id="email-host" label={t("settings.email.host")}>
-                <Input
-                  id="email-host"
-                  value={draft.report.email.smtp_host}
-                  onChange={(event) =>
-                    set("report.email.smtp_host", event.target.value)
-                  }
-                />
-                {tokenBadge("smtp")}
-                {warningFor("report.email.smtp_host") ? (
-                  <small className="muted">
-                    {warningFor("report.email.smtp_host")}
-                  </small>
-                ) : null}
-              </Field>
-              <Field
-                id="email-port"
-                label={t("settings.email.port")}
-                error={errorFor("report.email.smtp_port")}
-              >
-                <Input
-                  id="email-port"
-                  type="number"
-                  min={1}
-                  max={65535}
-                  value={numberText(draft.report.email.smtp_port)}
-                  aria-invalid={Boolean(errorFor("report.email.smtp_port"))}
-                  onChange={(event) =>
-                    set("report.email.smtp_port", Number(event.target.value))
-                  }
-                />
-              </Field>
-              <Field id="email-user" label={t("settings.email.user")}>
-                <Input
-                  id="email-user"
-                  value={draft.report.email.smtp_user}
-                  onChange={(event) =>
-                    set("report.email.smtp_user", event.target.value)
-                  }
-                />
-              </Field>
-              <div className="field">
-                <span>{t("settings.email.onlyOnChange")}</span>
-                <label className="checkbox">
-                  <input
-                    type="checkbox"
-                    checked={draft.report.email.only_on_change}
+                  <Select
+                    id="report-locale"
+                    value={draft.report.locale}
+                    aria-invalid={Boolean(errorFor("report.locale"))}
                     onChange={(event) =>
-                      set("report.email.only_on_change", event.target.checked)
+                      set("report.locale", event.target.value as ReportLocale)
+                    }
+                  >
+                    <option value="ru">{t("settings.report.localeRu")}</option>
+                    <option value="en">{t("settings.report.localeEn")}</option>
+                    <option value="zh">{t("settings.report.localeZh")}</option>
+                  </Select>
+                </Field>
+              ) : null}
+              {show("report.timezone") ? (
+                <Field
+                  id="report-timezone"
+                  label={t("settings.report.timezone")}
+                  hint={t("settings.report.timezoneHint")}
+                  error={errorFor("report.timezone")}
+                >
+                  <Input
+                    id="report-timezone"
+                    value={draft.report.timezone}
+                    aria-invalid={Boolean(errorFor("report.timezone"))}
+                    aria-describedby={describedBy("report-timezone", "report.timezone")}
+                    onChange={(event) => set("report.timezone", event.target.value)}
+                  />
+                </Field>
+              ) : null}
+              {show("report.thresholds.clicks_pct") ? (
+                <Field
+                  id="threshold-clicks"
+                  label={t("settings.report.clicksPct")}
+                  error={errorFor("report.thresholds.clicks_pct")}
+                >
+                  <Input
+                    id="threshold-clicks"
+                    type="number"
+                    min={0}
+                    step="0.1"
+                    value={numberText(draft.report.thresholds.clicks_pct)}
+                    aria-invalid={Boolean(errorFor("report.thresholds.clicks_pct"))}
+                    onChange={(event) =>
+                      set("report.thresholds.clicks_pct", Number(event.target.value))
                     }
                   />
-                  <span>{t("settings.email.onlyOnChangeHint")}</span>
-                </label>
-              </div>
+                </Field>
+              ) : null}
+              {show("report.thresholds.impressions_pct") ? (
+                <Field
+                  id="threshold-impressions"
+                  label={t("settings.report.impressionsPct")}
+                  error={errorFor("report.thresholds.impressions_pct")}
+                >
+                  <Input
+                    id="threshold-impressions"
+                    type="number"
+                    min={0}
+                    step="0.1"
+                    value={numberText(draft.report.thresholds.impressions_pct)}
+                    aria-invalid={Boolean(
+                      errorFor("report.thresholds.impressions_pct"),
+                    )}
+                    onChange={(event) =>
+                      set(
+                        "report.thresholds.impressions_pct",
+                        Number(event.target.value),
+                      )
+                    }
+                  />
+                </Field>
+              ) : null}
+              {show("report.thresholds.position_abs") ? (
+                <Field
+                  id="threshold-position"
+                  label={t("settings.report.positionAbs")}
+                  error={errorFor("report.thresholds.position_abs")}
+                >
+                  <Input
+                    id="threshold-position"
+                    type="number"
+                    min={0}
+                    step="0.1"
+                    value={numberText(draft.report.thresholds.position_abs)}
+                    aria-invalid={Boolean(errorFor("report.thresholds.position_abs"))}
+                    onChange={(event) =>
+                      set("report.thresholds.position_abs", Number(event.target.value))
+                    }
+                  />
+                </Field>
+              ) : null}
+              {!changedOnly
+                ? reserved("settings.reserved.weekStart", draft.report.week_start)
+                : null}
             </div>
           </Card>
+          ) : null}
 
-          <Card>
-            <h2>{t("settings.sections.telegram")}</h2>
-            <label className="checkbox">
-              <input
-                type="checkbox"
-                checked={draft.report.telegram.enabled}
-                onChange={(event) =>
-                  set("report.telegram.enabled", event.target.checked)
-                }
-              />
-              <span>{t("settings.telegram.enabled")}</span>
-            </label>
-            <div className="form-grid">
-              <Field id="telegram-chat" label={t("settings.telegram.chatId")}>
-                <Input
-                  id="telegram-chat"
-                  value={draft.report.telegram.chat_id}
+          {sectionVisible("settings-section-email") ? (
+          <Card id="settings-section-email" tabIndex={-1} style={sectionStyle}>
+            <h2>{t("settings.sections.email")}</h2>
+            {show("report.email.enabled") ? (
+              <label className="checkbox">
+                <input
+                  type="checkbox"
+                  checked={draft.report.email.enabled}
                   onChange={(event) =>
-                    set("report.telegram.chat_id", event.target.value)
+                    set("report.email.enabled", event.target.checked)
                   }
                 />
-                {tokenBadge("telegram")}
-                {warningFor("report.telegram.chat_id") ? (
-                  <small className="muted">
-                    {warningFor("report.telegram.chat_id")}
-                  </small>
-                ) : null}
-              </Field>
-              {reserved(
-                "settings.reserved.telegramSeverity",
-                draft.report.telegram.severity,
-              )}
+                <span>{t("settings.email.enabled")}</span>
+              </label>
+            ) : null}
+            <div className="form-grid">
+              {show("report.email.to") ? (
+                <Field
+                  id="email-to"
+                  label={t("settings.email.to")}
+                  hint={t("settings.email.toHint")}
+                >
+                  <textarea
+                    id="email-to"
+                    className="input"
+                    rows={3}
+                    value={listText(draft.report.email.to)}
+                    onChange={(event) =>
+                      set("report.email.to", parseList(event.target.value))
+                    }
+                  />
+                  {warningFor("report.email.to") ? (
+                    <small className="muted">{warningFor("report.email.to")}</small>
+                  ) : null}
+                </Field>
+              ) : null}
+              {show("report.email.from") ? (
+                <Field id="email-from" label={t("settings.email.from")}>
+                  <Input
+                    id="email-from"
+                    type="email"
+                    value={draft.report.email.from}
+                    onChange={(event) =>
+                      set("report.email.from", event.target.value)
+                    }
+                  />
+                  {warningFor("report.email.from") ? (
+                    <small className="muted">
+                      {warningFor("report.email.from")}
+                    </small>
+                  ) : null}
+                </Field>
+              ) : null}
+              {show("report.email.smtp_host") ? (
+                <Field id="email-host" label={t("settings.email.host")}>
+                  <Input
+                    id="email-host"
+                    value={draft.report.email.smtp_host}
+                    onChange={(event) =>
+                      set("report.email.smtp_host", event.target.value)
+                    }
+                  />
+                  {tokenBadge("smtp")}
+                  {warningFor("report.email.smtp_host") ? (
+                    <small className="muted">
+                      {warningFor("report.email.smtp_host")}
+                    </small>
+                  ) : null}
+                </Field>
+              ) : null}
+              {show("report.email.smtp_port") ? (
+                <Field
+                  id="email-port"
+                  label={t("settings.email.port")}
+                  error={errorFor("report.email.smtp_port")}
+                >
+                  <Input
+                    id="email-port"
+                    type="number"
+                    min={1}
+                    max={65535}
+                    value={numberText(draft.report.email.smtp_port)}
+                    aria-invalid={Boolean(errorFor("report.email.smtp_port"))}
+                    onChange={(event) =>
+                      set("report.email.smtp_port", Number(event.target.value))
+                    }
+                  />
+                </Field>
+              ) : null}
+              {show("report.email.smtp_user") ? (
+                <Field id="email-user" label={t("settings.email.user")}>
+                  <Input
+                    id="email-user"
+                    value={draft.report.email.smtp_user}
+                    onChange={(event) =>
+                      set("report.email.smtp_user", event.target.value)
+                    }
+                  />
+                </Field>
+              ) : null}
+              {show("report.email.only_on_change") ? (
+                <div className="field">
+                  <span>{t("settings.email.onlyOnChange")}</span>
+                  <label className="checkbox">
+                    <input
+                      type="checkbox"
+                      checked={draft.report.email.only_on_change}
+                      onChange={(event) =>
+                        set("report.email.only_on_change", event.target.checked)
+                      }
+                    />
+                    <span>{t("settings.email.onlyOnChangeHint")}</span>
+                  </label>
+                </div>
+              ) : null}
             </div>
           </Card>
+          ) : null}
 
-          <Card>
+          {sectionVisible("settings-section-telegram") ? (
+          <Card id="settings-section-telegram" tabIndex={-1} style={sectionStyle}>
+            <h2>{t("settings.sections.telegram")}</h2>
+            {show("report.telegram.enabled") ? (
+              <label className="checkbox">
+                <input
+                  type="checkbox"
+                  checked={draft.report.telegram.enabled}
+                  onChange={(event) =>
+                    set("report.telegram.enabled", event.target.checked)
+                  }
+                />
+                <span>{t("settings.telegram.enabled")}</span>
+              </label>
+            ) : null}
+            <div className="form-grid">
+              {show("report.telegram.chat_id") ? (
+                <Field id="telegram-chat" label={t("settings.telegram.chatId")}>
+                  <Input
+                    id="telegram-chat"
+                    value={draft.report.telegram.chat_id}
+                    onChange={(event) =>
+                      set("report.telegram.chat_id", event.target.value)
+                    }
+                  />
+                  {tokenBadge("telegram")}
+                  {warningFor("report.telegram.chat_id") ? (
+                    <small className="muted">
+                      {warningFor("report.telegram.chat_id")}
+                    </small>
+                  ) : null}
+                </Field>
+              ) : null}
+              {!changedOnly
+                ? reserved(
+                    "settings.reserved.telegramSeverity",
+                    draft.report.telegram.severity,
+                  )
+                : null}
+            </div>
+          </Card>
+          ) : null}
+
+          {sectionVisible("settings-section-crawl") ? (
+          <Card id="settings-section-crawl" tabIndex={-1} style={sectionStyle}>
             <h2>{t("settings.sections.crawl")}</h2>
             <div className="form-grid">
-              <Field
-                id="crawl-max-urls"
-                label={t("settings.crawl.maxUrls")}
-                hint={t("settings.crawl.maxUrlsHint")}
-                error={errorFor("crawl.max_urls")}
-              >
-                <Input
+              {show("crawl.max_urls") ? (
+                <Field
                   id="crawl-max-urls"
-                  type="number"
-                  min={1}
-                  value={numberText(draft.crawl.max_urls)}
-                  aria-invalid={Boolean(errorFor("crawl.max_urls"))}
-                  onChange={(event) =>
-                    set("crawl.max_urls", Number(event.target.value))
-                  }
-                />
-              </Field>
-              <Field
-                id="crawl-user-agent"
-                label={t("settings.crawl.userAgent")}
-                hint={t("settings.crawl.userAgentHint")}
-              >
-                <Input
-                  id="crawl-user-agent"
-                  value={draft.crawl.user_agent}
-                  onChange={(event) =>
-                    set("crawl.user_agent", event.target.value)
-                  }
-                />
-              </Field>
-              <div className="field">
-                <span>{t("settings.crawl.respectRobots")}</span>
-                <label className="checkbox">
-                  <input
-                    type="checkbox"
-                    checked={draft.crawl.respect_robots}
+                  label={t("settings.crawl.maxUrls")}
+                  hint={t("settings.crawl.maxUrlsHint")}
+                  error={errorFor("crawl.max_urls")}
+                >
+                  <Input
+                    id="crawl-max-urls"
+                    type="number"
+                    min={1}
+                    value={numberText(draft.crawl.max_urls)}
+                    aria-invalid={Boolean(errorFor("crawl.max_urls"))}
                     onChange={(event) =>
-                      set("crawl.respect_robots", event.target.checked)
+                      set("crawl.max_urls", Number(event.target.value))
                     }
                   />
-                  <span>{t("settings.crawl.respectRobotsHint")}</span>
-                </label>
-              </div>
-              {reserved(
-                "settings.reserved.concurrency",
-                String(draft.crawl.concurrency),
-              )}
+                </Field>
+              ) : null}
+              {show("crawl.user_agent") ? (
+                <Field
+                  id="crawl-user-agent"
+                  label={t("settings.crawl.userAgent")}
+                  hint={t("settings.crawl.userAgentHint")}
+                >
+                  <Input
+                    id="crawl-user-agent"
+                    value={draft.crawl.user_agent}
+                    onChange={(event) =>
+                      set("crawl.user_agent", event.target.value)
+                    }
+                  />
+                </Field>
+              ) : null}
+              {show("crawl.respect_robots") ? (
+                <div className="field">
+                  <span>{t("settings.crawl.respectRobots")}</span>
+                  <label className="checkbox">
+                    <input
+                      type="checkbox"
+                      checked={draft.crawl.respect_robots}
+                      onChange={(event) =>
+                        set("crawl.respect_robots", event.target.checked)
+                      }
+                    />
+                    <span>{t("settings.crawl.respectRobotsHint")}</span>
+                  </label>
+                </div>
+              ) : null}
+              {!changedOnly
+                ? reserved(
+                    "settings.reserved.concurrency",
+                    String(draft.crawl.concurrency),
+                  )
+                : null}
             </div>
           </Card>
+          ) : null}
 
-          <UpdatePanel />
+          {!changedOnly ? <UpdatePanel /> : null}
 
           {warnings.length ? (
             <Card>
@@ -1023,6 +1302,7 @@ export const SettingsPage = observer(function SettingsPage() {
             saving={config.saving}
             validating={config.validating}
             canSave={config.canSave}
+            changedCount={changedFieldCount}
             errorCount={config.errors.length}
             warningCount={config.validationWarnings.length}
             lastBackup={config.lastBackup}
@@ -1032,6 +1312,8 @@ export const SettingsPage = observer(function SettingsPage() {
           />
         </>
       ) : null}
+
+      {discardDialog}
 
       <SecretModal
         open={secretProvider !== null}

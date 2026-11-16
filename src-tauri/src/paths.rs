@@ -526,6 +526,56 @@ pub fn validate_config_path(raw: &str) -> AppResult<PathBuf> {
     Ok(path)
 }
 
+/// Validate the destination of `init`: a new `.toml` whose parent exists.
+/// `init` only writes local state, so a network share or a device namespace is
+/// rejected before the engine could touch it.
+pub fn validate_init_config_path(raw: &str) -> AppResult<PathBuf> {
+    ensure_local_path(raw, "config")?;
+    validate_config_path(raw)
+}
+
+/// Validate the `init --data-dir` destination. The directory itself may not
+/// exist yet (the engine creates it), but its parent must.
+pub fn validate_init_data_dir(raw: &str) -> AppResult<PathBuf> {
+    ensure_local_path(raw, "data directory")?;
+    let path = validate_absolute_path(raw, "data directory")?;
+    let parent = path.parent().ok_or_else(|| {
+        AppError::new(
+            "INVALID_PATH",
+            format!("data directory has no parent: {}", path.display()),
+        )
+    })?;
+    if !parent.is_dir() {
+        return Err(AppError::new(
+            "INVALID_PATH",
+            format!(
+                "data directory parent is not a directory: {}",
+                parent.display()
+            ),
+        ));
+    }
+    if path.exists() && !path.is_dir() {
+        return Err(AppError::new(
+            "INVALID_PATH",
+            format!("data directory is a file: {}", path.display()),
+        ));
+    }
+    Ok(path)
+}
+
+/// Validate an existing local directory (the native folder dialog result).
+pub fn validate_directory_path(raw: &str, label: &str) -> AppResult<PathBuf> {
+    ensure_local_path(raw, label)?;
+    let path = validate_absolute_path(raw, label)?;
+    if !path.is_dir() {
+        return Err(AppError::new(
+            "INVALID_PATH",
+            format!("{label} is not a directory: {}", path.display()),
+        ));
+    }
+    Ok(path)
+}
+
 /// Resolve `path` and require it to live under one of `roots`.
 pub fn ensure_within_roots(path: &Path, roots: &[PathBuf]) -> AppResult<PathBuf> {
     let canonical = fs::canonicalize(path).map_err(|err| {

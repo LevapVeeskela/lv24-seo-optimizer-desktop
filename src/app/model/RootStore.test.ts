@@ -144,6 +144,23 @@ describe("RootStore", () => {
     expect(cliRun).toHaveBeenCalledWith("stats");
   });
 
+  it("records the active workspace as a recent entry", async () => {
+    vi.mocked(shellStatus).mockResolvedValue({
+      engine,
+      bundleKind: "nsis",
+      configPath: "C:\\work\\alpha\\seo.toml",
+    });
+
+    const root = makeRoot();
+    await root.bootstrap();
+
+    expect(root.workspace.recents[0]).toMatchObject({
+      path: "C:\\work\\alpha\\seo.toml",
+      label: "alpha",
+    });
+    expect(root.workspace.activePath).toBe("C:\\work\\alpha\\seo.toml");
+  });
+
   it("clears stats, reports and the report HTML path on a workspace switch", async () => {
     vi.mocked(shellStatus).mockResolvedValue({
       engine,

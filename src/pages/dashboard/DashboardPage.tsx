@@ -2,6 +2,8 @@ import { useEffect, useState } from "react";
 import { observer } from "mobx-react-lite";
 import { Link, useNavigate } from "react-router-dom";
 import { useRootStore } from "@/app/providers/StoreProvider";
+import { useConfirmWorkspaceChange } from "@/app/providers/DiscardGuard";
+import { ROUTES } from "@/app/routes";
 import { useI18n } from "@/shared/i18n";
 import { appErrorText, toAppError } from "@/shared/lib/errors";
 import { formatDateTime } from "@/shared/lib/format";
@@ -17,10 +19,12 @@ import { configMissing } from "@/entities/engine/model/types";
 import { CoverageStrip } from "@/entities/stats/ui/CoverageStrip";
 import { ServiceCard } from "@/entities/stats/ui/ServiceCard";
 import { STATS_PROVIDERS } from "@/entities/stats/model/types";
+import { PropertiesPanel } from "./PropertiesPanel";
 
 export const DashboardPage = observer(function DashboardPage() {
   const { t, locale } = useI18n();
   const { engine, stats, reports } = useRootStore();
+  const confirmWorkspaceChange = useConfirmWorkspaceChange();
   const navigate = useNavigate();
   const { notify } = useFeedback();
   const [confirmOpen, setConfirmOpen] = useState(false);
@@ -53,6 +57,11 @@ export const DashboardPage = observer(function DashboardPage() {
   };
 
   const chooseConfig = async () => {
+    // The picker persists the new path before the page can react, so the
+    // discard decision must happen before the dialog opens.
+    if (!(await confirmWorkspaceChange())) {
+      return;
+    }
     try {
       const selected = await pickConfig();
       if (!selected) {
@@ -197,9 +206,17 @@ export const DashboardPage = observer(function DashboardPage() {
             title={t("dashboard.noConfigTitle")}
             hint={t("dashboard.noConfigHint")}
             action={
-              <Link className="btn btn-primary" to="/settings">
-                {t("dashboard.openSettings")}
-              </Link>
+              <div className="form-actions">
+                <Link className="btn btn-primary" to={ROUTES.onboarding}>
+                  {t("dashboard.createProject")}
+                </Link>
+                <Button variant="secondary" onClick={() => void chooseConfig()}>
+                  {t("dashboard.chooseExisting")}
+                </Button>
+                <Link className="btn btn-secondary" to={ROUTES.settings}>
+                  {t("dashboard.openSettings")}
+                </Link>
+              </div>
             }
           />
         </Card>
@@ -294,6 +311,8 @@ export const DashboardPage = observer(function DashboardPage() {
           ) : null}
         </>
       ) : null}
+
+      {configPath ? <PropertiesPanel /> : null}
 
       <ConfirmDialog
         open={confirmOpen}

@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { HashRouter } from "react-router-dom";
 import { AppLayout } from "@/app/layout/AppLayout";
 import { RootStore } from "@/app/model/RootStore";
+import { DiscardGuardProvider } from "@/app/providers/DiscardGuard";
 import { I18nHost } from "@/app/providers/I18nHost";
 import { StoreProvider } from "@/app/providers/StoreProvider";
 import { AppRoutes } from "@/app/router";
@@ -19,13 +20,15 @@ export function App() {
     <StoreProvider store={store}>
       <I18nHost>
         <FeedbackProvider>
-          <HashRouter>
-            <AppLayout>
-              <RouteErrorBoundary>
-                <AppRoutes />
-              </RouteErrorBoundary>
-            </AppLayout>
-          </HashRouter>
+          <DiscardGuardProvider>
+            <HashRouter>
+              <AppLayout>
+                <RouteErrorBoundary>
+                  <AppRoutes />
+                </RouteErrorBoundary>
+              </AppLayout>
+            </HashRouter>
+          </DiscardGuardProvider>
         </FeedbackProvider>
       </I18nHost>
     </StoreProvider>

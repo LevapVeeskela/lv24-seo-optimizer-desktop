@@ -36,6 +36,9 @@ pub struct AppState {
     /// Config files the user picked in the native dialog. `settings_set` may
     /// only activate one of these (or the already-active path).
     approved_configs: Mutex<HashSet<PathBuf>>,
+    /// Folders the user picked in the native directory dialog. `init` may only
+    /// create a config in one of these or next to the current config.
+    approved_directories: Mutex<HashSet<PathBuf>>,
     update: UpdateGate,
 }
 
@@ -45,12 +48,19 @@ impl AppState {
             paths,
             settings: Arc::new(settings),
             approved_configs: Mutex::new(HashSet::new()),
+            approved_directories: Mutex::new(HashSet::new()),
             update: UpdateGate::default(),
         }
     }
 
     fn approved_configs(&self) -> MutexGuard<'_, HashSet<PathBuf>> {
         self.approved_configs
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    fn approved_directories(&self) -> MutexGuard<'_, HashSet<PathBuf>> {
+        self.approved_directories
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
@@ -64,6 +74,12 @@ impl AppState {
         // the settings file keep the normalized path the user picked.
         let canonical = fs::canonicalize(&validated).unwrap_or_else(|_| validated.clone());
         self.approved_configs().insert(canonical);
+        // Persist the known list so recent workspaces survive a restart. The
+        // in-process approval above already lets `settings_set` proceed, so a
+        // settings write failure is logged instead of failing the dialog.
+        if let Err(err) = self.settings.remember_config(&validated) {
+            log::warn!("cannot persist known config {}: {err}", validated.display());
+        }
         Ok(validated)
     }
 
@@ -76,6 +92,84 @@ impl AppState {
             Ok(canonical) => approved.iter().any(|path| same_path(path, &canonical)),
             Err(_) => approved.iter().any(|path| same_path(path, candidate)),
         }
+    }
+
+    /// A config path persisted by an earlier `pick_config`/`init`. The file is
+    /// not required to exist here; `ensure_config_path_allowed` reports
+    /// `CONFIG_NOT_FOUND` for a known path that was deleted.
+    fn is_config_known(&self, candidate: &Path) -> bool {
+        let settings = self.settings.get();
+        // The common case is the exact stored spelling: answer without any
+        // filesystem call, so a mapped drive in the list cannot stall the UI.
+        if settings
+            .known_configs
+            .iter()
+            .any(|known| same_path(Path::new(known), candidate))
+        {
+            return true;
+        }
+        let Ok(canonical) = fs::canonicalize(candidate) else {
+            return false;
+        };
+        settings.known_configs.iter().any(|known| {
+            fs::canonicalize(known)
+                .map(|path| same_path(&path, &canonical))
+                .unwrap_or(false)
+        })
+    }
+
+    /// Record a folder chosen in the native directory dialog. The canonical
+    /// form is stored for comparisons; the webview gets the normalized path it
+    /// picked so it can join `seo.toml` and `data` without a verbatim prefix.
+    pub fn approve_directory(&self, path: &Path) -> AppResult<PathBuf> {
+        let validated = paths::validate_directory_path(&path.display().to_string(), "directory")?;
+        let canonical = fs::canonicalize(&validated).map_err(|err| {
+            AppError::new(
+                "INVALID_PATH",
+                format!("cannot resolve {}: {err}", validated.display()),
+            )
+        })?;
+        self.approved_directories().insert(canonical);
+        Ok(validated)
+    }
+
+    fn is_directory_approved(&self, directory: &Path) -> bool {
+        let approved = self.approved_directories();
+        match fs::canonicalize(directory) {
+            Ok(canonical) => approved.iter().any(|path| same_path(path, &canonical)),
+            Err(_) => approved.iter().any(|path| same_path(path, directory)),
+        }
+    }
+
+    /// `init` writes local files. Its config may only be created in a folder
+    /// the user picked in the native dialog or next to the current config;
+    /// otherwise a compromised webview could drop a config anywhere.
+    fn ensure_init_parent_approved(&self, config: &Path) -> AppResult<()> {
+        let parent = config.parent().ok_or_else(|| {
+            AppError::new(
+                "INVALID_PATH",
+                format!("config path has no parent: {}", config.display()),
+            )
+        })?;
+        if self.is_directory_approved(parent) {
+            return Ok(());
+        }
+        let current = self.settings.get();
+        if let Some(active) = current.config_path.as_deref() {
+            if let Some(active_parent) = Path::new(active).parent() {
+                if same_path(parent, active_parent) {
+                    return Ok(());
+                }
+            }
+        }
+        Err(AppError::new(
+            "PATH_NOT_APPROVED",
+            "choose the project folder with the native directory dialog",
+        )
+        .with_details(serde_json::json!({
+            "path": config.display().to_string(),
+            "parent": parent.display().to_string(),
+        })))
     }
 }
 
@@ -456,6 +550,32 @@ pub async fn pick_config(
     Ok(Some(approved.display().to_string()))
 }
 
+/// Open the native directory dialog and remember the chosen folder. `init` may
+/// only create a config inside an approved folder, so the folder always comes
+/// from the OS dialog and never from a webview-supplied string.
+#[tauri::command]
+pub async fn pick_directory(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<Option<String>, AppError> {
+    let picked = app
+        .dialog()
+        .file()
+        .set_title("Project folder")
+        .blocking_pick_folder();
+    let Some(folder) = picked else {
+        return Ok(None);
+    };
+    let path = folder.into_path().map_err(|err| {
+        AppError::new(
+            "INVALID_PATH",
+            format!("cannot resolve the picked folder: {err}"),
+        )
+    })?;
+    let approved = state.approve_directory(&path)?;
+    Ok(Some(approved.display().to_string()))
+}
+
 /// Startup handshake. It never fails because the engine is missing: the
 /// missing/broken engine is returned as status data.
 #[tauri::command]
@@ -530,7 +650,34 @@ pub async fn cli_run(
 ) -> Result<cli::CliRunResult, AppError> {
     let command = CliCommandId::parse(&command)?;
     let mut args = args.unwrap_or_default();
-    let config_path = resolve_active_config_opt(state.inner(), config_path)?;
+    let requested_config = config_path;
+
+    if command == CliCommandId::Init {
+        // `init` creates a config that is not active yet; the destination is
+        // `args.configPath`. A top-level `configPath` is accepted as an alias
+        // only when both name the same file.
+        if let Some(top_level) = requested_config
+            .as_ref()
+            .filter(|value| !value.trim().is_empty())
+        {
+            match args.config_path.as_deref() {
+                Some(from_args) if !same_path(Path::new(from_args), Path::new(top_level)) => {
+                    return Err(AppError::new(
+                        "INVALID_ARGUMENT",
+                        "args.configPath and configPath name different files",
+                    ));
+                }
+                None => args.config_path = Some(top_level.clone()),
+                Some(_) => {}
+            }
+        }
+    }
+
+    let config_path = if command == CliCommandId::Init {
+        None
+    } else {
+        resolve_active_config_opt(state.inner(), requested_config)?
+    };
     let config_path = match (config_path, command.requires_config()) {
         (Some(path), true) => {
             if !path.is_file() {
@@ -553,6 +700,42 @@ pub async fn cli_run(
         }
         (None, false) => None,
     };
+    let init_target = if command == CliCommandId::Init {
+        let target = args
+            .config_path
+            .as_deref()
+            .ok_or_else(|| AppError::new("INVALID_ARGUMENT", "configPath is required for init"))?;
+        let target = paths::validate_init_config_path(target)?;
+        state.ensure_init_parent_approved(&target)?;
+        Some(target)
+    } else {
+        None
+    };
+    if command == CliCommandId::SchedulePrint {
+        // `schedule print` renders the artefact for the active project. A
+        // requested path must already be the active one; it is passed to the
+        // engine through args so `--config` appears once in argv.
+        let active = config_path.as_ref().ok_or_else(|| {
+            AppError::new(
+                "CONFIG_PATH_REQUIRED",
+                "schedule_print requires an absolute config path",
+            )
+        })?;
+        if let Some(requested) = args.config_path.as_deref() {
+            let requested = paths::validate_config_path(requested)?;
+            if !same_path(&requested, active) {
+                return Err(AppError::new(
+                    "PATH_NOT_ALLOWED",
+                    "the requested config is not the active project config selected in Settings",
+                )
+                .with_details(serde_json::json!({
+                    "requested": requested.display().to_string(),
+                    "active": active.display().to_string(),
+                })));
+            }
+        }
+        args.config_path = Some(active.display().to_string());
+    }
     if command == CliCommandId::ReportWeekly {
         args.out = Some(
             report_output_dir(state.inner(), args.out.take())?
@@ -561,8 +744,35 @@ pub async fn cli_run(
         );
     }
 
+    // `init` and `schedule_print` carry `--config` in argv; every other
+    // command gets it appended by the runner.
+    let engine_config = match command {
+        CliCommandId::Init | CliCommandId::SchedulePrint => None,
+        _ => config_path.as_deref(),
+    };
     let location = paths::locate_engine(&app)?;
-    cli::run(&location, config_path.as_deref(), command, &args).await
+    let result = cli::run(&location, engine_config, command, &args).await?;
+    if let Some(target) = init_target {
+        // `init` created the file: approve it now so the wizard can call
+        // `settings_set` without another dialog, and persist it for the next
+        // start. A recording failure must not turn a created project into an
+        // error response.
+        let created = result
+            .envelope
+            .get("ok")
+            .and_then(serde_json::Value::as_bool)
+            == Some(true)
+            && target.is_file();
+        if created {
+            if let Err(err) = state.approve_config(&target) {
+                log::warn!(
+                    "cannot record the config created by init at {}: {err}",
+                    target.display()
+                );
+            }
+        }
+    }
+    Ok(result)
 }
 
 /// Store a provider secret through stdin. The secret is never placed in argv,
@@ -1057,9 +1267,11 @@ fn opener_path(path: &Path) -> PathBuf {
     }
 }
 
-/// SEC-05: a config path may only become active when it equals the current one
-/// or came from the native dialog (`pick_config`). Otherwise any `.toml` on
-/// disk could be made the target of `config_write`/`config_patch`.
+/// SEC-05: a config path may only become active when it equals the current one,
+/// came from the native dialog in this process, or is a path the user already
+/// picked/created in an earlier run (persisted `known_configs`). Otherwise any
+/// `.toml` on disk could be made the target of `config_write`/`config_patch`.
+/// A known path whose file is gone is `CONFIG_NOT_FOUND`, not "unapproved".
 fn ensure_config_path_allowed(
     state: &AppState,
     current: &Settings,
@@ -1073,16 +1285,31 @@ fn ensure_config_path_allowed(
         return Ok(());
     };
     let validated = paths::validate_config_path(requested)?;
-    if state.is_config_approved(&validated) {
-        return Ok(());
+    // The same file may be spelled differently (case, separators) than the
+    // stored current path; that is still the current config.
+    let is_current = current
+        .config_path
+        .as_deref()
+        .is_some_and(|active| same_path(Path::new(active), &validated));
+    if !is_current && !state.is_config_approved(&validated) && !state.is_config_known(&validated) {
+        return Err(AppError::new(
+            "PATH_NOT_APPROVED",
+            "choose the project config with the native file dialog",
+        )
+        .with_details(serde_json::json!({
+            "path": validated.display().to_string(),
+        })));
     }
-    Err(AppError::new(
-        "PATH_NOT_APPROVED",
-        "choose the project config with the native file dialog",
-    )
-    .with_details(serde_json::json!({
-        "path": validated.display().to_string(),
-    })))
+    if !is_current && !validated.is_file() {
+        return Err(AppError::new(
+            "CONFIG_NOT_FOUND",
+            format!("config file not found: {}", validated.display()),
+        )
+        .with_details(serde_json::json!({
+            "path": validated.display().to_string(),
+        })));
+    }
+    Ok(())
 }
 
 /// Run blocking filesystem work off the UI thread with a deadline. A blocking
@@ -1744,5 +1971,188 @@ mod tests {
                 "PATH_NOT_ALLOWED"
             );
         }
+    }
+
+    #[test]
+    fn init_requires_a_directory_picked_in_the_native_dialog() {
+        let dir = tempfile::tempdir().unwrap();
+        let picked = dir.path().join("picked");
+        let other = dir.path().join("other");
+        fs::create_dir(&picked).unwrap();
+        fs::create_dir(&other).unwrap();
+        let state = app_state(dir.path(), None);
+
+        // Nothing is approved before the dialog runs.
+        assert_eq!(
+            state
+                .ensure_init_parent_approved(&picked.join("seo.toml"))
+                .unwrap_err()
+                .code(),
+            "PATH_NOT_APPROVED"
+        );
+
+        let approved = state.approve_directory(&picked).unwrap();
+        assert_eq!(approved, picked);
+        assert!(state
+            .ensure_init_parent_approved(&picked.join("seo.toml"))
+            .is_ok());
+        // A sibling folder is still rejected.
+        assert_eq!(
+            state
+                .ensure_init_parent_approved(&other.join("seo.toml"))
+                .unwrap_err()
+                .code(),
+            "PATH_NOT_APPROVED"
+        );
+        // A subdirectory of the approved folder is not the approved folder.
+        fs::create_dir(picked.join("nested")).unwrap();
+        assert_eq!(
+            state
+                .ensure_init_parent_approved(&picked.join("nested").join("seo.toml"))
+                .unwrap_err()
+                .code(),
+            "PATH_NOT_APPROVED"
+        );
+    }
+
+    #[test]
+    fn init_is_allowed_next_to_the_active_config() {
+        let dir = tempfile::tempdir().unwrap();
+        let active = dir.path().join("seo.toml");
+        fs::write(&active, "version = 1\n").unwrap();
+        let state = app_state(dir.path(), Some(&active));
+
+        // No folder dialog is needed for a second config in the open project.
+        assert!(state
+            .ensure_init_parent_approved(&dir.path().join("second.toml"))
+            .is_ok());
+        let nested = dir.path().join("nested");
+        fs::create_dir(&nested).unwrap();
+        assert_eq!(
+            state
+                .ensure_init_parent_approved(&nested.join("seo.toml"))
+                .unwrap_err()
+                .code(),
+            "PATH_NOT_APPROVED"
+        );
+    }
+
+    #[test]
+    fn approve_directory_rejects_files_and_network_shares() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("notes.txt");
+        fs::write(&file, "x").unwrap();
+        let state = app_state(dir.path(), None);
+
+        assert_eq!(
+            state.approve_directory(&file).unwrap_err().code(),
+            "INVALID_PATH"
+        );
+        for raw in [
+            r"\\server\share",
+            r"\\.\PhysicalDrive0",
+            r"\\?\C:\Windows",
+            "relative/folder",
+        ] {
+            assert_eq!(
+                state.approve_directory(Path::new(raw)).unwrap_err().code(),
+                "INVALID_PATH",
+                "{raw:?}"
+            );
+        }
+        // The returned path is usable as a config parent, not a verbatim one.
+        let approved = state.approve_directory(dir.path()).unwrap();
+        assert!(!approved.to_string_lossy().starts_with(r"\\?\"));
+        assert!(state.is_directory_approved(dir.path()));
+    }
+
+    #[test]
+    fn init_created_config_can_be_activated_without_another_dialog() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = dir.path().join("seo.toml");
+        fs::write(&config, "version = 1\n").unwrap();
+        let state = app_state(dir.path(), None);
+
+        // `cli_run(init)` records the created file through this call.
+        state.approve_config(&config).unwrap();
+        assert!(state
+            .settings
+            .get()
+            .known_configs
+            .iter()
+            .any(|known| same_path(Path::new(known), &config)));
+
+        let current = state.settings.get();
+        let updated = Settings {
+            config_path: Some(config.display().to_string()),
+            ..current.clone()
+        };
+        assert!(ensure_config_path_allowed(&state, &current, &updated).is_ok());
+    }
+
+    #[test]
+    fn a_known_config_survives_a_restart() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = dir.path().join("seo.toml");
+        fs::write(&config, "version = 1\n").unwrap();
+        {
+            let state = app_state(dir.path(), None);
+            state.approve_config(&config).unwrap();
+        }
+
+        // A new AppState over the same settings file has no in-process
+        // approvals, but the persisted known list still allows the switch.
+        let restarted = app_state(dir.path(), None);
+        assert!(!restarted.is_config_approved(&config));
+        let current = restarted.settings.get();
+        let updated = Settings {
+            config_path: Some(config.display().to_string()),
+            ..current.clone()
+        };
+        assert!(ensure_config_path_allowed(&restarted, &current, &updated).is_ok());
+    }
+
+    #[test]
+    fn an_arbitrary_config_is_still_unapproved_after_a_restart() {
+        let dir = tempfile::tempdir().unwrap();
+        let known = dir.path().join("known.toml");
+        let other = dir.path().join("other.toml");
+        fs::write(&known, "version = 1\n").unwrap();
+        fs::write(&other, "version = 1\n").unwrap();
+        {
+            let state = app_state(dir.path(), None);
+            state.approve_config(&known).unwrap();
+        }
+
+        let restarted = app_state(dir.path(), None);
+        let current = restarted.settings.get();
+        let updated = Settings {
+            config_path: Some(other.display().to_string()),
+            ..current.clone()
+        };
+        let error = ensure_config_path_allowed(&restarted, &current, &updated).unwrap_err();
+        assert_eq!(error.code(), "PATH_NOT_APPROVED");
+    }
+
+    #[test]
+    fn a_deleted_known_config_is_not_found() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = dir.path().join("seo.toml");
+        fs::write(&config, "version = 1\n").unwrap();
+        {
+            let state = app_state(dir.path(), None);
+            state.approve_config(&config).unwrap();
+        }
+        fs::remove_file(&config).unwrap();
+
+        // The entry is persisted, so the answer is "gone", not "never picked".
+        let restarted = app_state(dir.path(), None);
+        let current = restarted.settings.get();
+        let updated = Settings {
+            config_path: Some(config.display().to_string()),
+            ..current.clone()
+        };
+        let error = ensure_config_path_allowed(&restarted, &current, &updated).unwrap_err();
+        assert_eq!(error.code(), "CONFIG_NOT_FOUND");
     }
 }

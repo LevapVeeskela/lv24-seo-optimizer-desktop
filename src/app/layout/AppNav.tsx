@@ -1,4 +1,5 @@
 import { NavLink } from "react-router-dom";
+import { ROUTES } from "@/app/routes";
 import { useI18n, type MessageKey } from "@/shared/i18n";
 
 type IconName =
@@ -7,20 +8,24 @@ type IconName =
   | "settings"
   | "config"
   | "recommendations"
+  | "crawl"
+  | "integrations"
   | "diagnostics";
 
-interface NavItem {
+export interface NavItem {
   to: string;
   key: MessageKey;
   icon: IconName;
 }
 
-const ITEMS: readonly NavItem[] = [
-  { to: "/", key: "nav.dashboard", icon: "dashboard" },
-  { to: "/reports", key: "nav.reports", icon: "reports" },
-  { to: "/settings", key: "nav.settings", icon: "settings" },
-  { to: "/config", key: "nav.config", icon: "config" },
-  { to: "/recommendations", key: "nav.recommendations", icon: "recommendations" },
+export const NAV_ITEMS: readonly NavItem[] = [
+  { to: ROUTES.dashboard, key: "nav.dashboard", icon: "dashboard" },
+  { to: ROUTES.reports, key: "nav.reports", icon: "reports" },
+  { to: ROUTES.crawl, key: "nav.crawl", icon: "crawl" },
+  { to: ROUTES.integrations, key: "nav.integrations", icon: "integrations" },
+  { to: ROUTES.settings, key: "nav.settings", icon: "settings" },
+  { to: ROUTES.config, key: "nav.config", icon: "config" },
+  { to: ROUTES.recommendations, key: "nav.recommendations", icon: "recommendations" },
 ];
 
 function NavIcon({ name }: { name: IconName }) {
@@ -46,6 +51,19 @@ function NavIcon({ name }: { name: IconName }) {
         <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
           <path d="M7 3h7l4 4v14H7z" {...common} />
           <path d="M14 3v5h5M10 13h5M10 17h5" {...common} />
+        </svg>
+      );
+    case "crawl":
+      return (
+        <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+          <circle cx="10.5" cy="10.5" r="6.5" {...common} />
+          <path d="m15.5 15.5 4.5 4.5M7 10.5h7M10.5 7v7" {...common} />
+        </svg>
+      );
+    case "integrations":
+      return (
+        <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+          <path d="M9 3v4M15 3v4M7 7h10v4a5 5 0 0 1-10 0zM12 16v5" {...common} />
         </svg>
       );
     case "settings":
@@ -89,11 +107,11 @@ export function AppNav() {
   return (
     <nav className="sidebar-nav" aria-label={t("nav.primary")}>
       <p className="sidebar-nav-label">{t("nav.primary")}</p>
-      {ITEMS.map((item) => (
+      {NAV_ITEMS.map((item) => (
         <NavLink
           key={item.to}
           to={item.to}
-          end={item.to === "/"}
+          end={item.to === ROUTES.dashboard}
           className={({ isActive }) =>
             `sidebar-link${isActive ? " active" : ""}`
           }

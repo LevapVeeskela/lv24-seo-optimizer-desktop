@@ -1,6 +1,7 @@
 import { useEffect } from "react";
 import { observer } from "mobx-react-lite";
 import { useRootStore } from "@/app/providers/StoreProvider";
+import { useConfirmWorkspaceChange } from "@/app/providers/DiscardGuard";
 import { useI18n, type MessageKey } from "@/shared/i18n";
 import { appErrorText, toAppError } from "@/shared/lib/errors";
 import { formatDateTime } from "@/shared/lib/format";
@@ -66,6 +67,7 @@ function diffKindLabelKey(entry: ConfigDiffEntry): "config.diff.presence" | null
 export const ConfigPage = observer(function ConfigPage() {
   const { t, locale } = useI18n();
   const { engine, config } = useRootStore();
+  const confirmWorkspaceChange = useConfirmWorkspaceChange();
   const { notify } = useFeedback();
   const configPath = engine.status?.configPath ?? null;
 
@@ -90,6 +92,10 @@ export const ConfigPage = observer(function ConfigPage() {
   };
 
   const chooseConfig = async () => {
+    // The picker persists the path immediately; confirm before it opens.
+    if (!(await confirmWorkspaceChange())) {
+      return;
+    }
     try {
       // SEC-05: the shell owns the dialog and persists the path.
       const selected = await pickConfig();

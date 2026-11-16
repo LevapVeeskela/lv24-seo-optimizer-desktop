@@ -1,0 +1,96 @@
+.crawl-form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.crawl-form-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.crawl-form-hint {
+  margin: 0;
+  max-width: 72ch;
+}
+
+.crawl-facts {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: var(--space-3);
+}
+
+.crawl-fact {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  padding: var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--inset);
+}
+
+.crawl-fact strong {
+  font-size: var(--text-title);
+  line-height: 1.2;
+}
+
+.crawl-source {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2) var(--space-4);
+  margin: var(--space-4) 0 0;
+}
+
+.crawl-filters {
+  flex-wrap: wrap;
+  align-items: flex-end;
+}
+
+.crawl-filters .field {
+  flex: 1 1 180px;
+  max-width: 280px;
+}
+
+.crawl-filter-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-left: auto;
+}
+
+.crawl-table .crawl-col-severity {
+  width: 120px;
+}
+
+.crawl-table .crawl-col-rule {
+  width: 220px;
+}
+
+.crawl-table .crawl-col-url {
+  width: 34%;
+}
+
+.crawl-url {
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.crawl-detail {
+  color: var(--muted);
+  font-size: var(--text-sm);
+}
+
+@media (max-width: 780px) {
+  .crawl-filters .field {
+    max-width: none;
+  }
+
+  .crawl-filter-actions {
+    margin-left: 0;
+    justify-content: space-between;
+    width: 100%;
+  }
+}

@@ -1,9 +1,17 @@
 import { cliRun } from "@/shared/cli";
 import { toAppError, type AppError } from "@/shared/lib/errors";
 import { makeAutoObservable } from "mobx";
+import {
+  diffUnavailableReason,
+  parseReportDiff,
+  type DiffUnavailableReason,
+  type ReportDiff,
+  type ReportDiffMeta,
+} from "./diff";
 import type { ReportMeta, WeeklyReport } from "./types";
 
 export type ReportsState = "idle" | "loading" | "ready" | "error";
+export type DiffState = "idle" | "loading" | "ready" | "empty" | "error";
 
 export class ReportsStore {
   state: ReportsState = "idle";
@@ -12,12 +20,21 @@ export class ReportsStore {
   warnings: string[] = [];
   error: AppError | null = null;
   builtAt: string | null = null;
+
+  diffState: DiffState = "idle";
+  diff: ReportDiff | null = null;
+  diffMeta: ReportDiffMeta = {};
+  diffWarnings: string[] = [];
+  diffError: AppError | null = null;
+  diffUnavailable: DiffUnavailableReason | null = null;
+
   private generation = 0;
+  private diffGeneration = 0;
 
   constructor() {
-    makeAutoObservable<ReportsStore, "generation">(
+    makeAutoObservable<ReportsStore, "generation" | "diffGeneration">(
       this,
-      { generation: false },
+      { generation: false, diffGeneration: false },
       { autoBind: true },
     );
   }
@@ -28,6 +45,10 @@ export class ReportsStore {
 
   get hasReport(): boolean {
     return this.report !== null;
+  }
+
+  get diffLoading(): boolean {
+    return this.diffState === "loading";
   }
 
   /**
@@ -57,6 +78,57 @@ export class ReportsStore {
   }
 
   /**
+   * `report_diff` compares the two newest stored snapshots. The engine decides
+   * which periods are comparable, so the UI passes no arguments: a stale
+   * `--base/--head` from the webview would bypass its honesty rules.
+   *
+   * Fewer than two snapshots is not an error: it is the documented empty state
+   * with a next step ("build another weekly report").
+   */
+  async loadDiff(): Promise<boolean> {
+    const generation = ++this.diffGeneration;
+    this.diffState = "loading";
+    this.diffError = null;
+    this.diffUnavailable = null;
+    const result = await cliRun<unknown>("report_diff");
+    if (generation !== this.diffGeneration) {
+      return false;
+    }
+    if (result.ok) {
+      const diff = parseReportDiff(result.data);
+      if (!diff) {
+        this.diff = null;
+        this.diffMeta = {};
+        this.diffWarnings = result.warnings;
+        this.diffError = {
+          code: "INVALID_ENVELOPE",
+          message: "report_diff returned data without snapshot identities",
+          retryable: false,
+        };
+        this.diffState = "error";
+        return false;
+      }
+      this.diff = diff;
+      this.diffMeta = result.meta as ReportDiffMeta;
+      this.diffWarnings = result.warnings;
+      this.diffState = "ready";
+      return true;
+    }
+    this.diff = null;
+    this.diffMeta = result.meta as ReportDiffMeta;
+    this.diffWarnings = result.warnings;
+    const reason = diffUnavailableReason(result.error);
+    if (reason) {
+      this.diffUnavailable = reason;
+      this.diffState = "empty";
+      return false;
+    }
+    this.diffError = toAppError(result.error, "CLI_FAILED");
+    this.diffState = "error";
+    return false;
+  }
+
+  /**
    * Drop the previous workspace's report. `meta` carries `artifacts.html`, so
    * clearing it also drops the stale report HTML path shown on the page.
    */
@@ -68,5 +140,16 @@ export class ReportsStore {
     this.warnings = [];
     this.error = null;
     this.builtAt = null;
+    this.resetDiff();
+  }
+
+  resetDiff(): void {
+    this.diffGeneration += 1;
+    this.diffState = "idle";
+    this.diff = null;
+    this.diffMeta = {};
+    this.diffWarnings = [];
+    this.diffError = null;
+    this.diffUnavailable = null;
   }
 }

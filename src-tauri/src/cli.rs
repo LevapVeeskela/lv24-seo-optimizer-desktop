@@ -10,7 +10,10 @@ use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
 use tokio::process::Command;
 
 use crate::error::{AppError, AppResult};
-use crate::paths::{validate_absolute_path, EngineLocation};
+use crate::paths::{
+    validate_absolute_path, validate_config_path, validate_init_config_path,
+    validate_init_data_dir, EngineLocation,
+};
 
 /// Upper bounds keep a runaway engine from exhausting webview memory.
 const MAX_STDOUT: usize = 4 * 1024 * 1024;
@@ -39,10 +42,24 @@ pub enum CliCommandId {
     ReportWeekly,
     ReportDiff,
     Crawl,
+    /// Onboarding: writes a new `seo.toml` and its data directory.
+    Init,
+    /// Render a scheduler artefact (cron/systemd/windows); never installs it.
+    SchedulePrint,
     /// Internal commands used by dedicated auth commands; they are deliberately
     /// absent from the generic `cli_run` allow-list.
     AuthSet,
     AuthLogout,
+}
+
+/// How a command changes state. `init` writes local files only; no command in
+/// the allow-list spends provider quota or changes remote provider state.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum WriteKind {
+    /// Read-only: no file or provider state changes.
+    None,
+    /// Creates local files under a user-approved directory (`init`).
+    LocalState,
 }
 
 impl CliCommandId {
@@ -57,6 +74,8 @@ impl CliCommandId {
             "report_weekly" => Ok(Self::ReportWeekly),
             "report_diff" => Ok(Self::ReportDiff),
             "crawl" => Ok(Self::Crawl),
+            "init" => Ok(Self::Init),
+            "schedule_print" => Ok(Self::SchedulePrint),
             other => Err(AppError::new(
                 "INVALID_COMMAND",
                 format!("command {other:?} is not in the desktop allow-list"),
@@ -64,7 +83,8 @@ impl CliCommandId {
             .with_details(serde_json::json!({
                 "allowed": [
                     "version", "stats", "config_show", "doctor", "properties",
-                    "auth_status", "report_weekly", "report_diff", "crawl"
+                    "auth_status", "report_weekly", "report_diff", "crawl",
+                    "init", "schedule_print"
                 ]
             }))),
         }
@@ -81,19 +101,35 @@ impl CliCommandId {
             Self::ReportWeekly => "report_weekly",
             Self::ReportDiff => "report_diff",
             Self::Crawl => "crawl",
+            Self::Init => "init",
+            Self::SchedulePrint => "schedule_print",
             Self::AuthSet => "auth_set",
             Self::AuthLogout => "auth_delete",
         }
     }
 
     /// Commands that need an existing project config file. `version`, `stats`,
-    /// `doctor`, `properties` and `auth_status` may run without one; `auth_set`
-    /// and `auth_delete` are reached through their dedicated commands.
+    /// `doctor`, `properties`, `auth_status` and `init` may run without one;
+    /// `auth_set` and `auth_delete` are reached through their dedicated
+    /// commands.
     pub fn requires_config(self) -> bool {
         matches!(
             self,
-            Self::ConfigShow | Self::ReportWeekly | Self::ReportDiff | Self::Crawl
+            Self::ConfigShow
+                | Self::ReportWeekly
+                | Self::ReportDiff
+                | Self::Crawl
+                | Self::SchedulePrint
         )
+    }
+
+    /// How the command changes state. `init` creates local files and never
+    /// calls a provider, so the UI must not present it as a provider write.
+    pub fn write_kind(self) -> WriteKind {
+        match self {
+            Self::Init => WriteKind::LocalState,
+            _ => WriteKind::None,
+        }
     }
 
     pub fn timeout(self) -> Duration {
@@ -101,12 +137,16 @@ impl CliCommandId {
             Self::Crawl => Duration::from_secs(600),
             Self::AuthSet | Self::AuthLogout => Duration::from_secs(120),
             Self::Stats | Self::ReportWeekly | Self::ReportDiff => Duration::from_secs(120),
+            // Onboarding may create a directory tree on a slow disk.
+            Self::Init => Duration::from_secs(60),
             // A cold PyInstaller sidecar can spend well over ten seconds on
             // unpacking and antivirus scanning before it prints a version.
             Self::Version => Duration::from_secs(30),
-            Self::ConfigShow | Self::Doctor | Self::Properties | Self::AuthStatus => {
-                Duration::from_secs(30)
-            }
+            Self::ConfigShow
+            | Self::Doctor
+            | Self::Properties
+            | Self::AuthStatus
+            | Self::SchedulePrint => Duration::from_secs(30),
         }
     }
 }
@@ -126,6 +166,28 @@ pub struct CliArgs {
     pub out: Option<String>,
     /// Used only by the dedicated auth commands; never contains a secret.
     pub provider: Option<String>,
+    /// `init` only: site URL or GSC property (`sc-domain:example.com`).
+    pub property: Option<String>,
+    /// `init` (creates it) and `schedule_print` (reads it): absolute config.
+    pub config_path: Option<String>,
+    /// `init` only: absolute data directory the engine creates.
+    pub data_dir: Option<String>,
+    /// `schedule_print` only: five-field cron expression.
+    pub cron: Option<String>,
+    /// `schedule_print` only: `cron`, `systemd` or `windows`.
+    pub target: Option<String>,
+}
+
+impl CliArgs {
+    /// Fields owned by `init`/`schedule_print`. Every other command rejects
+    /// them instead of silently ignoring a path or a schedule.
+    fn has_init_or_schedule_args(&self) -> bool {
+        self.property.is_some()
+            || self.config_path.is_some()
+            || self.data_dir.is_some()
+            || self.cron.is_some()
+            || self.target.is_some()
+    }
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -137,6 +199,9 @@ pub struct CliRunResult {
     pub stderr: String,
     pub duration_ms: u64,
     pub truncated: bool,
+    /// `true` for a command that only writes local files (`init`); provider
+    /// quota and remote state are untouched.
+    pub writes_local_state: bool,
 }
 
 pub const AUTH_PROVIDERS: &[&str] = &[
@@ -246,6 +311,39 @@ pub fn build_argv(command: CliCommandId, args: &CliArgs) -> AppResult<Vec<String
                 "--json".into(),
             ]
         }
+        CliCommandId::Init => {
+            let property = validate_property(args.property.as_deref().unwrap_or(""))?;
+            let config = validate_init_config_path(args.config_path.as_deref().unwrap_or(""))?;
+            let data_dir = validate_init_data_dir(args.data_dir.as_deref().unwrap_or(""))?;
+            vec![
+                "init".into(),
+                "--property".into(),
+                property,
+                "--config".into(),
+                config.display().to_string(),
+                "--data-dir".into(),
+                data_dir.display().to_string(),
+                "--json".into(),
+            ]
+        }
+        CliCommandId::SchedulePrint => {
+            let cron = normalize_cron(args.cron.as_deref().unwrap_or(""))?;
+            let target = normalize_schedule_target(args.target.as_deref().unwrap_or(""))?;
+            let mut argv = vec![
+                "schedule".into(),
+                "print".into(),
+                "--cron".into(),
+                cron,
+                "--target".into(),
+                target,
+            ];
+            if let Some(config) = args.config_path.as_deref() {
+                argv.push("--config".into());
+                argv.push(validate_config_path(config)?.display().to_string());
+            }
+            argv.push("--json".into());
+            argv
+        }
     };
     Ok(argv)
 }
@@ -266,8 +364,9 @@ fn validate_args(command: CliCommandId, args: &CliArgs) -> AppResult<()> {
                 || args.max_urls.is_some()
                 || args.provider.is_some()
                 || args.out.is_some()
+                || args.has_init_or_schedule_args()
             {
-                return reject("base/head/start/maxUrls/provider/out");
+                return reject("base/head/start/maxUrls/provider/out/init/schedule");
             }
             validate_range(args.days.unwrap_or(DEFAULT_DAYS), 1, 365, "days")?;
             validate_range(args.lag_days.unwrap_or(DEFAULT_LAG_DAYS), 0, 30, "lagDays")?;
@@ -278,8 +377,9 @@ fn validate_args(command: CliCommandId, args: &CliArgs) -> AppResult<()> {
                 || args.start.is_some()
                 || args.max_urls.is_some()
                 || args.provider.is_some()
+                || args.has_init_or_schedule_args()
             {
-                return reject("base/head/start/maxUrls/provider");
+                return reject("base/head/start/maxUrls/provider/init/schedule");
             }
             validate_range(args.days.unwrap_or(DEFAULT_DAYS), 1, 365, "days")?;
             validate_range(args.lag_days.unwrap_or(DEFAULT_LAG_DAYS), 0, 30, "lagDays")?;
@@ -294,8 +394,9 @@ fn validate_args(command: CliCommandId, args: &CliArgs) -> AppResult<()> {
                 || args.max_urls.is_some()
                 || args.provider.is_some()
                 || args.out.is_some()
+                || args.has_init_or_schedule_args()
             {
-                return reject("days/lagDays/start/maxUrls/provider/out");
+                return reject("days/lagDays/start/maxUrls/provider/out/init/schedule");
             }
             if let Some(base) = args.base.as_deref() {
                 validate_period(base, "base")?;
@@ -311,8 +412,9 @@ fn validate_args(command: CliCommandId, args: &CliArgs) -> AppResult<()> {
                 || args.head.is_some()
                 || args.provider.is_some()
                 || args.out.is_some()
+                || args.has_init_or_schedule_args()
             {
-                return reject("days/lagDays/base/head/provider/out");
+                return reject("days/lagDays/base/head/provider/out/init/schedule");
             }
             if let Some(start) = args.start.as_deref() {
                 validate_url(start)?;
@@ -334,6 +436,7 @@ fn validate_args(command: CliCommandId, args: &CliArgs) -> AppResult<()> {
                 || args.max_urls.is_some()
                 || args.out.is_some()
                 || args.provider.is_some()
+                || args.has_init_or_schedule_args()
             {
                 return reject("all arguments");
             }
@@ -346,14 +449,71 @@ fn validate_args(command: CliCommandId, args: &CliArgs) -> AppResult<()> {
                 || args.start.is_some()
                 || args.max_urls.is_some()
                 || args.out.is_some()
+                || args.has_init_or_schedule_args()
             {
-                return reject("days/lagDays/base/head/start/maxUrls/out");
+                return reject("days/lagDays/base/head/start/maxUrls/out/init/schedule");
             }
             if args.provider.is_none() {
                 return Err(AppError::new(
                     "INVALID_ARGUMENT",
                     "provider is required for auth commands",
                 ));
+            }
+        }
+        CliCommandId::Init => {
+            if args.days.is_some()
+                || args.lag_days.is_some()
+                || args.base.is_some()
+                || args.head.is_some()
+                || args.start.is_some()
+                || args.max_urls.is_some()
+                || args.out.is_some()
+                || args.provider.is_some()
+                || args.cron.is_some()
+                || args.target.is_some()
+            {
+                return reject("an argument other than property/configPath/dataDir");
+            }
+            let property = args.property.as_deref().ok_or_else(|| {
+                AppError::new("INVALID_ARGUMENT", "property is required for init")
+            })?;
+            validate_property(property)?;
+            let config = args.config_path.as_deref().ok_or_else(|| {
+                AppError::new("INVALID_ARGUMENT", "configPath is required for init")
+            })?;
+            validate_init_config_path(config)?;
+            let data_dir = args
+                .data_dir
+                .as_deref()
+                .ok_or_else(|| AppError::new("INVALID_ARGUMENT", "dataDir is required for init"))?;
+            validate_init_data_dir(data_dir)?;
+        }
+        CliCommandId::SchedulePrint => {
+            if args.days.is_some()
+                || args.lag_days.is_some()
+                || args.base.is_some()
+                || args.head.is_some()
+                || args.start.is_some()
+                || args.max_urls.is_some()
+                || args.out.is_some()
+                || args.provider.is_some()
+                || args.property.is_some()
+                || args.data_dir.is_some()
+            {
+                return reject(
+                    "days/lagDays/base/head/start/maxUrls/out/provider/property/dataDir",
+                );
+            }
+            let cron = args.cron.as_deref().ok_or_else(|| {
+                AppError::new("INVALID_ARGUMENT", "cron is required for schedule_print")
+            })?;
+            normalize_cron(cron)?;
+            let target = args.target.as_deref().ok_or_else(|| {
+                AppError::new("INVALID_ARGUMENT", "target is required for schedule_print")
+            })?;
+            normalize_schedule_target(target)?;
+            if let Some(config) = args.config_path.as_deref() {
+                validate_config_path(config)?;
             }
         }
     }
@@ -453,6 +613,119 @@ fn validate_url(value: &str) -> AppResult<&str> {
         ));
     }
     Ok(trimmed)
+}
+
+/// Five-field cron expressions are the only shape all three scheduler targets
+/// understand. The shell checks length and charset (no shell metacharacters, no
+/// newlines); semantic ranges stay with the engine, which reports them with its
+/// typed envelope.
+const MAX_CRON_LEN: usize = 128;
+const SCHEDULE_TARGETS: &[&str] = &["cron", "systemd", "windows"];
+
+fn normalize_cron(raw: &str) -> AppResult<String> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Err(AppError::new("INVALID_ARGUMENT", "cron is empty"));
+    }
+    if trimmed.len() > MAX_CRON_LEN {
+        return Err(AppError::new(
+            "INVALID_ARGUMENT",
+            format!("cron is longer than {MAX_CRON_LEN} characters"),
+        ));
+    }
+    if trimmed
+        .chars()
+        .any(|ch| !(ch.is_ascii_alphanumeric() || matches!(ch, ' ' | '\t' | '*' | ',' | '-' | '/')))
+    {
+        return Err(AppError::new(
+            "INVALID_ARGUMENT",
+            "cron may only contain letters, digits, spaces and * , - /",
+        ));
+    }
+    let fields: Vec<&str> = trimmed.split_whitespace().collect();
+    if fields.len() != 5 {
+        return Err(AppError::new(
+            "INVALID_ARGUMENT",
+            format!("cron must have 5 fields, got {}", fields.len()),
+        ));
+    }
+    Ok(fields.join(" "))
+}
+
+fn normalize_schedule_target(raw: &str) -> AppResult<String> {
+    let value = raw.trim().to_ascii_lowercase();
+    if SCHEDULE_TARGETS.contains(&value.as_str()) {
+        Ok(value)
+    } else {
+        Err(AppError::new(
+            "INVALID_ARGUMENT",
+            format!("schedule target {raw:?} is not supported"),
+        )
+        .with_details(serde_json::json!({ "allowed": SCHEDULE_TARGETS })))
+    }
+}
+
+/// The `init` property is a site URL, a `sc-domain:` GSC property, or a bare
+/// host. It is normalized to the form the engine writes into `seo.toml`.
+fn validate_property(raw: &str) -> AppResult<String> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Err(AppError::new(
+            "INVALID_ARGUMENT",
+            "property is empty; pass a site URL or sc-domain: property",
+        ));
+    }
+    if trimmed.len() > 2048 {
+        return Err(AppError::new(
+            "INVALID_ARGUMENT",
+            "property is longer than 2048 characters",
+        ));
+    }
+    if trimmed
+        .chars()
+        .any(|ch| ch.is_control() || ch.is_whitespace())
+    {
+        return Err(AppError::new(
+            "INVALID_ARGUMENT",
+            "property must not contain whitespace or control characters",
+        ));
+    }
+    if let Some(host) = trimmed.strip_prefix("sc-domain:") {
+        let host = host.trim_end_matches('/');
+        if !is_host_like(host) {
+            return Err(AppError::new(
+                "INVALID_ARGUMENT",
+                format!("sc-domain property has an invalid host: {trimmed:?}"),
+            ));
+        }
+        return Ok(format!("sc-domain:{}", host.to_ascii_lowercase()));
+    }
+    if trimmed.starts_with("http://") || trimmed.starts_with("https://") {
+        validate_url(trimmed)?;
+        return Ok(trimmed.to_string());
+    }
+    let host = trimmed.trim_end_matches('/');
+    if !is_host_like(host) {
+        return Err(AppError::new(
+            "INVALID_ARGUMENT",
+            format!("property must be a URL or a host, got {trimmed:?}"),
+        ));
+    }
+    Ok(format!("https://{}", host.to_ascii_lowercase()))
+}
+
+fn is_host_like(host: &str) -> bool {
+    !host.is_empty()
+        && host.len() <= 253
+        && !host.starts_with('.')
+        && !host.starts_with('-')
+        && !host.starts_with(':')
+        && !host.ends_with('.')
+        && !host.ends_with('-')
+        && !host.ends_with(':')
+        && host
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '.' | '-' | '_' | ':'))
 }
 
 fn build_command(
@@ -1134,6 +1407,7 @@ async fn supervise(
         stderr: crate::error::redact_secrets(&stderr_text),
         duration_ms: started.elapsed().as_millis() as u64,
         truncated: stdout_truncated || stderr_truncated,
+        writes_local_state: command.write_kind() == WriteKind::LocalState,
     })
 }
 
@@ -1328,10 +1602,12 @@ mod tests {
             "report_weekly",
             "report_diff",
             "crawl",
+            "init",
+            "schedule_print",
         ] {
             assert_eq!(CliCommandId::parse(id).unwrap().id(), id);
         }
-        for id in ["shell", "rm", "auth_set", "report_send", ""] {
+        for id in ["shell", "rm", "auth_set", "report_send", "schedule", ""] {
             assert_eq!(
                 CliCommandId::parse(id).unwrap_err().code(),
                 "INVALID_COMMAND"
@@ -2045,5 +2321,342 @@ mod tests {
         assert_eq!(CliCommandId::Crawl.timeout(), Duration::from_secs(600));
         assert_eq!(CliCommandId::Doctor.timeout(), Duration::from_secs(30));
         assert_eq!(CliCommandId::Version.timeout(), Duration::from_secs(30));
+        assert_eq!(CliCommandId::Init.timeout(), Duration::from_secs(60));
+        assert_eq!(
+            CliCommandId::SchedulePrint.timeout(),
+            Duration::from_secs(30)
+        );
+    }
+
+    fn init_args(dir: &Path) -> CliArgs {
+        CliArgs {
+            property: Some("https://example.com".into()),
+            config_path: Some(dir.join("seo.toml").display().to_string()),
+            data_dir: Some(dir.join("data").display().to_string()),
+            ..CliArgs::default()
+        }
+    }
+
+    #[test]
+    fn init_argv_is_fixed_and_always_json() {
+        let dir = tempfile::tempdir().unwrap();
+        let args = init_args(dir.path());
+        let config = args.config_path.clone().unwrap();
+        let data_dir = args.data_dir.clone().unwrap();
+        let argv = build_argv(CliCommandId::Init, &args).unwrap();
+        assert_eq!(
+            argv.iter().map(String::as_str).collect::<Vec<_>>(),
+            vec![
+                "init",
+                "--property",
+                "https://example.com",
+                "--config",
+                config.as_str(),
+                "--data-dir",
+                data_dir.as_str(),
+                "--json",
+            ]
+        );
+        assert_eq!(CliCommandId::Init.write_kind(), WriteKind::LocalState);
+    }
+
+    #[test]
+    fn init_property_accepts_urls_properties_and_bare_hosts() {
+        let dir = tempfile::tempdir().unwrap();
+        for (raw, expected) in [
+            ("https://example.com/", "https://example.com/"),
+            ("sc-domain:Example.COM", "sc-domain:example.com"),
+            ("example.com/", "https://example.com"),
+        ] {
+            let mut args = init_args(dir.path());
+            args.property = Some(raw.into());
+            let argv = build_argv(CliCommandId::Init, &args).unwrap();
+            assert_eq!(argv[2], expected, "{raw}");
+        }
+        for raw in [
+            "",
+            "not a host",
+            "https://",
+            "sc-domain:",
+            "ftp://example.com",
+            "example.com/path",
+        ] {
+            let mut args = init_args(dir.path());
+            args.property = Some(raw.into());
+            assert_eq!(
+                build_argv(CliCommandId::Init, &args).unwrap_err().code(),
+                "INVALID_ARGUMENT",
+                "{raw:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn init_requires_every_argument() {
+        let dir = tempfile::tempdir().unwrap();
+        let base = init_args(dir.path());
+        for args in [
+            CliArgs {
+                property: None,
+                ..base.clone()
+            },
+            CliArgs {
+                config_path: None,
+                ..base.clone()
+            },
+            CliArgs {
+                data_dir: None,
+                ..base.clone()
+            },
+            CliArgs {
+                cron: Some("0 6 * * 1".into()),
+                ..base.clone()
+            },
+        ] {
+            assert_eq!(
+                build_argv(CliCommandId::Init, &args).unwrap_err().code(),
+                "INVALID_ARGUMENT"
+            );
+        }
+    }
+
+    #[test]
+    fn init_rejects_relative_network_device_and_non_toml_paths() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+
+        for config in [
+            "relative/seo.toml".to_string(),
+            root.join("seo.json").display().to_string(),
+            root.join("missing").join("seo.toml").display().to_string(),
+            root.join("..").join("seo.toml").display().to_string(),
+            r"\\server\share\seo.toml".to_string(),
+            r"\\.\PhysicalDrive0\seo.toml".to_string(),
+            r"\\?\C:\tmp\seo.toml".to_string(),
+        ] {
+            let mut args = init_args(root);
+            args.config_path = Some(config.clone());
+            assert_eq!(
+                build_argv(CliCommandId::Init, &args).unwrap_err().code(),
+                "INVALID_PATH",
+                "{config:?}"
+            );
+        }
+
+        for data_dir in [
+            "data".to_string(),
+            root.join("missing").join("data").display().to_string(),
+            r"\\server\share\data".to_string(),
+        ] {
+            let mut args = init_args(root);
+            args.data_dir = Some(data_dir.clone());
+            assert_eq!(
+                build_argv(CliCommandId::Init, &args).unwrap_err().code(),
+                "INVALID_PATH",
+                "{data_dir:?}"
+            );
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn init_rejects_reserved_windows_names() {
+        let dir = tempfile::tempdir().unwrap();
+        for name in ["CON.toml", "NUL.toml", "COM1.toml", "LPT9.toml"] {
+            let mut args = init_args(dir.path());
+            args.config_path = Some(dir.path().join(name).display().to_string());
+            assert_eq!(
+                build_argv(CliCommandId::Init, &args).unwrap_err().code(),
+                "INVALID_PATH",
+                "{name}"
+            );
+        }
+        let mut args = init_args(dir.path());
+        args.data_dir = Some(dir.path().join("NUL").display().to_string());
+        assert_eq!(
+            build_argv(CliCommandId::Init, &args).unwrap_err().code(),
+            "INVALID_PATH"
+        );
+    }
+
+    #[test]
+    fn schedule_print_argv_normalizes_cron_and_target() {
+        let argv = build_argv(
+            CliCommandId::SchedulePrint,
+            &CliArgs {
+                cron: Some("  0   6 * * 1 ".into()),
+                target: Some("Windows".into()),
+                ..CliArgs::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            argv,
+            vec![
+                "schedule",
+                "print",
+                "--cron",
+                "0 6 * * 1",
+                "--target",
+                "windows",
+                "--json"
+            ]
+        );
+
+        let dir = tempfile::tempdir().unwrap();
+        let config = dir.path().join("seo.toml");
+        let config_text = config.display().to_string();
+        let argv = build_argv(
+            CliCommandId::SchedulePrint,
+            &CliArgs {
+                cron: Some("0 6 * * 1".into()),
+                target: Some("systemd".into()),
+                config_path: Some(config_text.clone()),
+                ..CliArgs::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            argv.iter().map(String::as_str).collect::<Vec<_>>(),
+            vec![
+                "schedule",
+                "print",
+                "--cron",
+                "0 6 * * 1",
+                "--target",
+                "systemd",
+                "--config",
+                config_text.as_str(),
+                "--json",
+            ]
+        );
+    }
+
+    #[test]
+    fn schedule_print_rejects_bad_cron_and_target() {
+        let long = "*".repeat(129);
+        for cron in [
+            "",
+            "0 6 * *",
+            "0 6 * * 1 2",
+            "0 6 * * 1; rm -rf /",
+            "0 6 * * $(id)",
+            "0 6 * * 1\0",
+            long.as_str(),
+        ] {
+            assert_eq!(
+                build_argv(
+                    CliCommandId::SchedulePrint,
+                    &CliArgs {
+                        cron: Some(cron.into()),
+                        target: Some("cron".into()),
+                        ..CliArgs::default()
+                    }
+                )
+                .unwrap_err()
+                .code(),
+                "INVALID_ARGUMENT",
+                "{cron:?}"
+            );
+        }
+        for target in ["", "launchd", "cron;rm", "task scheduler"] {
+            assert_eq!(
+                build_argv(
+                    CliCommandId::SchedulePrint,
+                    &CliArgs {
+                        cron: Some("0 6 * * 1".into()),
+                        target: Some(target.into()),
+                        ..CliArgs::default()
+                    }
+                )
+                .unwrap_err()
+                .code(),
+                "INVALID_ARGUMENT",
+                "{target:?}"
+            );
+        }
+        for args in [
+            CliArgs {
+                target: Some("cron".into()),
+                ..CliArgs::default()
+            },
+            CliArgs {
+                cron: Some("0 6 * * 1".into()),
+                ..CliArgs::default()
+            },
+        ] {
+            assert_eq!(
+                build_argv(CliCommandId::SchedulePrint, &args)
+                    .unwrap_err()
+                    .code(),
+                "INVALID_ARGUMENT"
+            );
+        }
+    }
+
+    #[test]
+    fn init_and_schedule_arguments_are_rejected_by_other_commands() {
+        let config = std::env::temp_dir().join("seo.toml").display().to_string();
+        let data_dir = std::env::temp_dir().join("data").display().to_string();
+        let foreign = [
+            CliArgs {
+                property: Some("https://example.com".into()),
+                ..CliArgs::default()
+            },
+            CliArgs {
+                cron: Some("0 6 * * 1".into()),
+                target: Some("cron".into()),
+                ..CliArgs::default()
+            },
+            CliArgs {
+                config_path: Some(config),
+                ..CliArgs::default()
+            },
+            CliArgs {
+                data_dir: Some(data_dir),
+                ..CliArgs::default()
+            },
+        ];
+        for command in [
+            CliCommandId::Version,
+            CliCommandId::Stats,
+            CliCommandId::ConfigShow,
+            CliCommandId::Doctor,
+            CliCommandId::Properties,
+            CliCommandId::AuthStatus,
+            CliCommandId::ReportWeekly,
+            CliCommandId::ReportDiff,
+            CliCommandId::Crawl,
+        ] {
+            for args in &foreign {
+                assert_eq!(
+                    build_argv(command, args).unwrap_err().code(),
+                    "INVALID_ARGUMENT",
+                    "{}",
+                    command.id()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn only_init_is_a_local_state_write() {
+        assert_eq!(CliCommandId::Init.write_kind(), WriteKind::LocalState);
+        for command in [
+            CliCommandId::Version,
+            CliCommandId::Stats,
+            CliCommandId::ConfigShow,
+            CliCommandId::Doctor,
+            CliCommandId::Properties,
+            CliCommandId::AuthStatus,
+            CliCommandId::ReportWeekly,
+            CliCommandId::ReportDiff,
+            CliCommandId::Crawl,
+            CliCommandId::SchedulePrint,
+            CliCommandId::AuthSet,
+            CliCommandId::AuthLogout,
+        ] {
+            assert_eq!(command.write_kind(), WriteKind::None, "{}", command.id());
+        }
     }
 }
