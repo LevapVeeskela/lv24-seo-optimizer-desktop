@@ -1,6 +1,6 @@
 # Architecture
 
-Status: **implementation contract for `0.2.3` (released 2026-11-16).** The Rust command bridge and
+Status: **implementation contract for `0.3.0` (release candidate).** The Rust command bridge and
 product screens are implemented in this repository. Where this document describes a control, it is
 the requirement that implementation must satisfy. The pinned engine is `lv24-seo 0.5.3`.
 
@@ -106,17 +106,26 @@ The command surface is fixed. The generic `cli_run` allow-list is:
 | `report_weekly` | `report weekly --out <app data>/exports/reports --json` | local write |
 | `report_diff` | `report diff ... --json` | read |
 | `crawl` | `crawl ... --json` | local write |
+| `init` | `init <property> --config <path> --data-dir <path> --json` | local write |
+| `schedule_print` | `schedule print --cron <expr> --target <cron\|systemd\|windows> --config <path> --json` | read |
 
 Dedicated Tauri commands cover the rest: `shell_status`, `config_read`, `config_validate`,
 `config_write`, `config_patch`, `auth_set` (secret over stdin), `auth_delete`, `write_text_file`,
-`settings_get`, `settings_set`, `pick_config`, `open_path`, `prepare_update`, `update_install`,
-`update_cancel`. The webview cannot add a command at runtime.
+`settings_get`, `settings_set`, `pick_config`, `pick_directory`, `open_path`, `prepare_update`,
+`update_install`, `update_cancel`. The webview cannot add a command at runtime.
 
 `pick_config` is the only way to introduce a new workspace path: it opens the native dialog, records
 the canonical path as approved for this process and returns it. `settings_set` accepts a changed
-`configPath` only when it matches that approval, otherwise it fails with `PATH_NOT_APPROVED`. The
-webview no longer calls `@tauri-apps/plugin-dialog` for this, so it cannot name a file the dialog did
-not produce.
+`configPath` only when it matches that approval or a path in the persisted `knownConfigs` list,
+otherwise it fails with `PATH_NOT_APPROVED`. `knownConfigs` is written by `pick_config` and by a
+successful `init` (canonical, deduplicated, capped at 20), so a workspace opened in an earlier run can
+be re-activated after a restart without the dialog; it is a convenience, not a bypass. The webview no
+longer calls `@tauri-apps/plugin-dialog` for this, so it cannot name a file the dialog did not produce.
+
+`pick_directory` is the matching approval for `init`: the folder chosen in the native dialog is the
+only place `init` may create `seo.toml` and `data/` (or the parent of the active config). `init` and
+`schedule_print` validate their arguments in the shell before the engine sees them; `schedule_print`
+must target the active config and only renders text.
 
 `update_install` and `update_cancel` exist because the webview holds only `updater:allow-check`. The
 Rust side re-checks the endpoint, refuses a version that differs from the announced one, serializes

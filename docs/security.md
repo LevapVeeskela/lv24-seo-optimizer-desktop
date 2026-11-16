@@ -1,13 +1,15 @@
 # Security model
 
-Status: **security contract for `0.2.3` (released 2026-11-16).** The Rust bridge and screens are
+Status: **security contract for `0.3.0` (release candidate).** The Rust bridge and screens are
 implemented in this repository. This page states the controls the implementation must enforce and
 the residual risks accepted for the preview; where a control is future work, the text says so.
-`0.2.3` moves the update install into Rust, gates every config path behind the native dialog,
-redacts all engine output before it reaches the webview and gives Windows drafts and backups an
-owner-only DACL. `0.2.2` hardened the updater's sidecar cleanup, secret-source reporting and the
-durability of configuration writes. See [`SECURITY.md`](../SECURITY.md) for reporting a
-vulnerability.
+`0.3.0` adds a native directory picker that approves the folder for `init`, a persisted
+`knownConfigs` list that lets a previously picked or created config be re-activated, and a
+`core:window:allow-destroy` capability used only by the confirmed-discard close path. `0.2.3` moved
+the update install into Rust, gated every config path behind the native dialog, redacted all engine
+output before it reaches the webview and gave Windows drafts and backups an owner-only DACL. `0.2.2`
+hardened the updater's sidecar cleanup, secret-source reporting and the durability of configuration
+writes. See [`SECURITY.md`](../SECURITY.md) for reporting a vulnerability.
 
 ## 1. Assets and adversaries
 
@@ -242,7 +244,7 @@ connect-src ipc: http://ipc.localhost
 - Windows NSIS, macOS `.app` and Linux AppImage update in place. deb, rpm, MSI and the portable ZIP
   are manual-only: the UI disables the in-app installer for those bundle types and links to the
   release page.
-- `0.1.0` has no updater, endpoint or public key. Its users must install `0.2.3` manually once;
+- `0.1.0` has no updater, endpoint or public key. Its users must install `0.3.0` manually once;
   auto-update works from `0.2.0` onward.
 - OS code signing/notarization is separate. The default build is unsigned; see section 11.
 

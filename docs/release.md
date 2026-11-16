@@ -10,27 +10,28 @@ its checksums, its updater signatures or its engine version does not ship.
 
 ## 1. Release state
 
-`0.2.0` was the first multi-platform release; `0.2.3` is the latest published release (2026-11-16)
-and `0.2.2` is the previous patch, kept for rollback:
+`0.2.0` was the first multi-platform release; `0.2.3` is the latest published release (2026-11-16),
+`0.2.2` is the previous patch kept for rollback, and `0.3.0` is the release candidate:
 
 - **Windows x64:** unsigned NSIS installer, signed updater `.exe`, portable ZIP.
 - **Linux x64:** AppImage (signed updater), deb and rpm (manual-only).
 - **macOS arm64/x64:** DMG plus signed `.app.tar.gz` updater archives.
 - **Common:** `latest.json` and `SHA256SUMS.txt`.
 
-Release notes: [`docs/releases/0.2.3.md`](releases/0.2.3.md) for the published line,
+Release notes: [`docs/releases/0.3.0.md`](releases/0.3.0.md) for the candidate,
+[`docs/releases/0.2.3.md`](releases/0.2.3.md) for the published line and
 [`docs/releases/0.2.2.md`](releases/0.2.2.md) for the previous one.
 
 Auto-update is enabled for Windows NSIS, macOS `.app` and Linux AppImage. deb, rpm, MSI and the
 portable ZIP are manual-only; the UI disables in-app installation for those bundle types and links
-to the release page. `0.1.0` has no updater, so `0.1.0` users must install `0.2.3` manually once.
+to the release page. `0.1.0` has no updater, so `0.1.0` users must install `0.3.0` manually once.
 
-Release preconditions (as met for the `0.2.3` run; update the version pins for the next release):
+Release preconditions (for the `0.3.0` candidate; update the version pins for the next release):
 
-- `package.json`, `src-tauri/tauri.conf.json` and `src-tauri/Cargo.toml` all say `0.2.3`.
+- `package.json`, `src-tauri/tauri.conf.json` and `src-tauri/Cargo.toml` all say `0.3.0`.
 - `scripts/cli-checksums.json` says `0.5.3` and the workflow runs with `engine_version=0.5.3`.
   The release gate rejects a mismatch.
-- `MIN_ENGINE_VERSION` in `src-tauri/src/commands.rs` is `0.5.2`. The `0.2.3` bundle is `0.5.3`;
+- `MIN_ENGINE_VERSION` in `src-tauri/src/commands.rs` is `0.5.2`. The `0.3.0` bundle is `0.5.3`;
   the minimum stays one patch behind the pin so a `0.5.2` engine is still accepted. An older engine
   is reported as incompatible. Verify the gate and the pin agree before publishing.
 - CI (web, Rust matrix, contract drift) is green on the exact release commit. The contracts were
@@ -61,7 +62,7 @@ match the pin before uploading.
 
 ### Engine compatibility
 
-- A release build bundles the exact pinned engine version. `0.2.3` bundles `lv24-seo 0.5.3`.
+- A release build bundles the exact pinned engine version. `0.3.0` bundles `lv24-seo 0.5.3`.
 - The shell accepts an engine whose version is at least `MIN_ENGINE_VERSION` and marks an older one
   incompatible with a notice. It does not silently migrate commands to an older engine. The current
   source gates at `0.5.2`.
@@ -84,7 +85,7 @@ Trigger: **Actions → Desktop build → Run workflow**. It has no push, pull-re
 
 The `engine_version` input must equal `scripts/cli-checksums.json`; the release gate rejects the
 manifest mismatch. The workflow input default and the pin name the same version and are bumped
-together in the release commit (`0.5.3` for the `0.2.3` line). A different value is allowed for a
+together in the release commit (`0.5.3` for the `0.3.0` line). A different value is allowed for a
 rebuild only when `scripts/cli-checksums.json` is updated in the same commit.
 
 ### Matrix
@@ -289,7 +290,7 @@ fails `npm test` when an artifact is added to one consumer but not the others.
 
 Asset names are normalized before checksums: GitHub replaces spaces with dots. The staging and
 release scripts reject characters GitHub may rewrite and refuse duplicate basenames. The published
-Windows asset is therefore `LV24.SEO.Optimizer_0.2.3_x64-setup.exe`, not the spaced build output.
+Windows asset is therefore `LV24.SEO.Optimizer_0.3.0_x64-setup.exe`, not the spaced build output.
 
 ## 6. Updater signing and `latest.json`
 
@@ -486,7 +487,7 @@ The release job:
 ### Preflight (before running the workflow)
 
 - [ ] CI is green on the pull request that contains the release commit.
-- [ ] `package.json`, `tauri.conf.json`, `Cargo.toml` and the intended tag agree (`0.2.3`).
+- [ ] `package.json`, `tauri.conf.json`, `Cargo.toml` and the intended tag agree (`0.3.0`).
 - [ ] `scripts/cli-checksums.json` says `0.5.3` and `engine_version=0.5.3` will be supplied.
 - [ ] The `engine_version` workflow input default matches the pin (`0.5.3`); the release gate compares
       it with `scripts/cli-checksums.json`.
@@ -497,7 +498,7 @@ The release job:
       `scripts/cli-checksums.json` (strict `verify-sidecar.mjs`), or that target is explicitly
       `null` because its `0.5.3` sidecar has not been rebuilt yet. CI rebuilds are recorded, not
       compared.
-- [ ] README, `docs/*`, `docs/releases/0.2.3.md`, changelog/release notes and the unsigned warning
+- [ ] README, `docs/*`, `docs/releases/0.3.0.md`, changelog/release notes and the unsigned warning
       are current.
 - [ ] No secrets, private keys or customer data are in the diff or fixtures.
 - [ ] The GitHub environment `desktop-release` exists with the owner as required reviewer.
@@ -525,7 +526,7 @@ The release job:
 
 1. Update `scripts/cli-checksums.json` in a PR if the reviewed local build or engine pin changed;
    merge it.
-2. Run **Desktop build** with `publish=true`, the final `tag` (`v0.2.3`), `engine_version=0.5.3`
+2. Run **Desktop build** with `publish=true`, the final `tag` (`v0.3.0`), `engine_version=0.5.3`
    and `signed=false` (unless certificates are actually configured).
 3. Approve the `desktop-release` environment as the repository owner. The release job also requires
    the actor to be the repository owner; a non-owner run is skipped.
@@ -535,7 +536,8 @@ The release job:
    platforms, `latest.json` and notes.
 6. Verify the in-app update on a machine with the previous release installed. `0.2.0 → 0.2.1`,
    `0.2.1 → 0.2.2` and `0.2.2 → 0.2.3` are verified end-to-end on Windows NSIS, including the
-   Rust-side version re-check and a running sidecar stopped before the installer. Cancellation during
+   Rust-side version re-check and a running sidecar stopped before the installer. `0.2.3 → 0.3.0`
+   must be verified in this run on Windows NSIS, macOS `.app` and Linux AppImage. Cancellation during
    download and `UPDATE_ENGINE_BUSY` when cleanup is blocked are covered by unit tests. Do not
    advertise auto-update for deb/rpm/MSI/portable.
 7. Announce with the unsigned-build instructions, the manual-only cases and the checksum file.
@@ -595,7 +597,7 @@ are unsigned. SmartScreen/Gatekeeper may warn. Verify SHA256SUMS.txt.
 
 ### Auto-update
 Windows NSIS, macOS .app and Linux AppImage update in place after confirmation.
-deb/rpm/MSI/portable ZIP are manual-only. 0.1.0 must install 0.2.3 manually once.
+deb/rpm/MSI/portable ZIP are manual-only. 0.1.0 must install 0.3.0 manually once.
 Updater manifest: https://github.com/LevapVeeskela/lv24-seo-optimizer-desktop/releases/latest/download/latest.json
 
 ### Verification
