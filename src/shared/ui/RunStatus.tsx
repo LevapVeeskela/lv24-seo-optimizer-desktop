@@ -23,7 +23,7 @@ export function useElapsed(startedAt: number | null, running: boolean): number {
 
 /**
  * Honest progress for a long stats/report call: live elapsed time, the last
- * run's duration, truncation and limitation badges. 0.4.0 has no cancellation
+ * run's duration, truncation and limitation badges. 0.5.0 has no cancellation
  * path, so the copy says the call runs to completion instead of showing a
  * button that would do nothing.
  */
