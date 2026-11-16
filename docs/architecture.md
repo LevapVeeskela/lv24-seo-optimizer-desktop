@@ -1,8 +1,8 @@
 # Architecture
 
-Status: **implementation contract for `0.2.3` (draft).** The Rust command bridge and product screens
-are implemented in this repository. Where this document describes a control, it is the requirement
-that implementation must satisfy. The pinned engine is `lv24-seo 0.5.2`.
+Status: **implementation contract for `0.2.3` (release candidate).** The Rust command bridge and
+product screens are implemented in this repository. Where this document describes a control, it is
+the requirement that implementation must satisfy. The pinned engine is `lv24-seo 0.5.3`.
 
 ## 1. Shape
 
