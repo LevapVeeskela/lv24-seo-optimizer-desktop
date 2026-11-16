@@ -10,23 +10,23 @@ its checksums, its updater signatures or its engine version does not ship.
 
 ## 1. Release state
 
-`0.2.0` was the first multi-platform release; `0.2.3` is the latest published release (2026-11-16),
-`0.2.2` is the previous patch kept for rollback, and `0.3.0` is the release candidate:
+`0.2.0` was the first multi-platform release; `0.3.0` is the latest published release (2026-11-16),
+`0.2.3` is the previous patch kept for rollback and `0.2.2` is the one before it:
 
 - **Windows x64:** unsigned NSIS installer, signed updater `.exe`, portable ZIP.
 - **Linux x64:** AppImage (signed updater), deb and rpm (manual-only).
 - **macOS arm64/x64:** DMG plus signed `.app.tar.gz` updater archives.
 - **Common:** `latest.json` and `SHA256SUMS.txt`.
 
-Release notes: [`docs/releases/0.3.0.md`](releases/0.3.0.md) for the candidate,
-[`docs/releases/0.2.3.md`](releases/0.2.3.md) for the published line and
-[`docs/releases/0.2.2.md`](releases/0.2.2.md) for the previous one.
+Release notes: [`docs/releases/0.3.0.md`](releases/0.3.0.md) for the published line,
+[`docs/releases/0.2.3.md`](releases/0.2.3.md) for the previous one and
+[`docs/releases/0.2.2.md`](releases/0.2.2.md) for the one before it.
 
 Auto-update is enabled for Windows NSIS, macOS `.app` and Linux AppImage. deb, rpm, MSI and the
 portable ZIP are manual-only; the UI disables in-app installation for those bundle types and links
 to the release page. `0.1.0` has no updater, so `0.1.0` users must install `0.3.0` manually once.
 
-Release preconditions (for the `0.3.0` candidate; update the version pins for the next release):
+Release preconditions (as met for the `0.3.0` release; update the version pins for the next release):
 
 - `package.json`, `src-tauri/tauri.conf.json` and `src-tauri/Cargo.toml` all say `0.3.0`.
 - `scripts/cli-checksums.json` says `0.5.3` and the workflow runs with `engine_version=0.5.3`.
@@ -535,11 +535,10 @@ The release job:
 5. Verify the release page: asset names, checksums (including `*-portable.zip.sha256`), all four
    platforms, `latest.json` and notes.
 6. Verify the in-app update on a machine with the previous release installed. `0.2.0 → 0.2.1`,
-   `0.2.1 → 0.2.2` and `0.2.2 → 0.2.3` are verified end-to-end on Windows NSIS, including the
-   Rust-side version re-check and a running sidecar stopped before the installer. `0.2.3 → 0.3.0`
-   must be verified in this run on Windows NSIS, macOS `.app` and Linux AppImage. Cancellation during
-   download and `UPDATE_ENGINE_BUSY` when cleanup is blocked are covered by unit tests. Do not
-   advertise auto-update for deb/rpm/MSI/portable.
+   `0.2.1 → 0.2.2`, `0.2.2 → 0.2.3` and `0.2.3 → 0.3.0` are verified end-to-end on Windows NSIS,
+   including the Rust-side version re-check and a running sidecar stopped before the installer.
+   Cancellation during download and `UPDATE_ENGINE_BUSY` when cleanup is blocked are covered by unit
+   tests. Do not advertise auto-update for deb/rpm/MSI/portable.
 7. Announce with the unsigned-build instructions, the manual-only cases and the checksum file.
 
 ### Post-release
