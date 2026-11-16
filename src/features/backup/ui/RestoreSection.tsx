@@ -213,6 +213,24 @@ export const RestoreSection = observer(function RestoreSection({
         </Notice>
       ) : null}
 
+      {store.restoreState === "cancelled" ? (
+        <Notice
+          variant="info"
+          action={
+            <Button
+              variant="secondary"
+              disabled={blocked || busy || !store.restoreFile}
+              onClick={() => void review()}
+            >
+              {t("backup.restore.review")}
+            </Button>
+          }
+        >
+          <strong>{t("runStatus.cancelled")}</strong>
+          <span>{t("runStatus.restoreCancelledHint")}</span>
+        </Notice>
+      ) : null}
+
       {store.planning ? <Loading label={t("backup.restore.reviewing")} /> : null}
 
       {!plan && store.restoreState === "idle" ? (

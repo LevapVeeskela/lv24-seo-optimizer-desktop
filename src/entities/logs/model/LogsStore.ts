@@ -1,5 +1,7 @@
 import { toAppError, type AppError } from "@/shared/lib/errors";
 import { isRecord } from "@/shared/lib/format";
+import { trackRun } from "@/shared/run/lib/trackedRun";
+import type { RunStore } from "@/shared/run/model/RunStore";
 import { makeAutoObservable } from "mobx";
 import {
   normalizeLogsResult,
@@ -12,10 +14,11 @@ import {
   type LogsAnalyzeArgs,
 } from "../lib/ipc";
 
-export type LogsState = "idle" | "loading" | "ready" | "error";
+export type LogsState = "idle" | "loading" | "ready" | "error" | "cancelled";
 
 export type LogsAnalyzeFn = (
   args: LogsAnalyzeArgs,
+  runId?: string,
 ) => ReturnType<typeof runLogsAnalyze>;
 
 /**
@@ -39,19 +42,22 @@ export class LogsStore {
   private generation = 0;
   private readonly analyze: LogsAnalyzeFn;
   private readonly now: () => Date;
+  private readonly runs: RunStore | null;
 
   constructor(
     analyze: LogsAnalyzeFn = runLogsAnalyze,
     now: () => Date = () => new Date(),
+    runs: RunStore | null = null,
   ) {
     this.analyze = analyze;
     this.now = now;
+    this.runs = runs;
     makeAutoObservable<
       LogsStore,
-      "generation" | "analyze" | "now" | "raw"
+      "generation" | "analyze" | "now" | "raw" | "runs"
     >(
       this,
-      { generation: false, analyze: false, now: false, raw: false },
+      { generation: false, analyze: false, now: false, raw: false, runs: false },
       { autoBind: true },
     );
   }
@@ -102,8 +108,19 @@ export class LogsStore {
     if (this.bot) {
       args.bot = this.bot;
     }
-    const result = await this.analyze(args);
+    const result = this.runs
+      ? await trackRun(this.runs, {
+          kind: "logsAnalyze",
+          run: (runId) => this.analyze(args, runId),
+        })
+      : await this.analyze(args);
     if (generation !== this.generation) {
+      return false;
+    }
+    if (!result.ok && result.error.code === "RUN_CANCELLED") {
+      this.error = null;
+      this.warnings = result.warnings;
+      this.state = "cancelled";
       return false;
     }
     if (result.ok) {

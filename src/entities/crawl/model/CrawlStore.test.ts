@@ -4,6 +4,7 @@ import type { Envelope } from "@/shared/cli";
 vi.mock("@/shared/cli", () => ({ cliRun: vi.fn() }));
 
 import { cliRun } from "@/shared/cli";
+import { RunStore } from "@/shared/run/model/RunStore";
 import { CrawlStore } from "./CrawlStore";
 
 const runMock = vi.mocked(cliRun);
@@ -135,5 +136,32 @@ describe("CrawlStore", () => {
     expect(await run).toBe(false);
     expect(store.result).toBeNull();
     expect(store.state).toBe("idle");
+  });
+
+  it("maps RUN_CANCELLED to a distinct cancelled state and keeps the old result", async () => {
+    runMock.mockResolvedValueOnce(success());
+    const runs = new RunStore({
+      cancel: async () => true,
+      newId: () => "run-1",
+    });
+    const store = new CrawlStore(undefined, runs);
+    expect(await store.run()).toBe(true);
+
+    runMock.mockResolvedValueOnce({
+      ok: false,
+      error: { code: "RUN_CANCELLED", message: "cancelled", retryable: false },
+      meta: {},
+      warnings: [],
+    });
+    expect(await store.run()).toBe(false);
+
+    expect(store.state).toBe("cancelled");
+    expect(store.error).toBeNull();
+    expect(store.result?.issues).toHaveLength(1);
+    expect(runs.entries[0].status).toBe("cancelled");
+    expect(runMock).toHaveBeenLastCalledWith("crawl", {
+      args: {},
+      runId: "run-1",
+    });
   });
 });

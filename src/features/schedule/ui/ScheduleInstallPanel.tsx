@@ -139,6 +139,13 @@ export const ScheduleInstallPanel = observer(function ScheduleInstallPanel({
         </Button>
       </div>
 
+      {store.installState === "cancelled" ? (
+        <Notice variant="info">
+          <strong>{t("runStatus.cancelled")}</strong>
+          <span>{t("runStatus.installCancelledHint")}</span>
+        </Notice>
+      ) : null}
+
       {store.installError ? (
         <Notice variant="error">
           <strong>{t("integrations.schedule.installErrorTitle")}</strong>

@@ -4,7 +4,6 @@ import { useRootStore } from "@/app/providers/StoreProvider";
 import {
   LOG_BOTS,
   LOG_FILTERS_DEFAULT,
-  LogsStore,
   effectiveLogFilters,
   filterLogRows,
   logFacets,
@@ -46,8 +45,7 @@ const BOT_LABEL_KEYS = {
 
 export const LogsPage = observer(function LogsPage() {
   const { t, locale } = useI18n();
-  const { engine } = useRootStore();
-  const [store] = useState(() => new LogsStore());
+  const { engine, logs: store } = useRootStore();
   const [filters, setFilters] = useState<LogFilters>({ ...LOG_FILTERS_DEFAULT });
   const [pickError, setPickError] = useState<string | null>(null);
   const [picking, setPicking] = useState(false);
@@ -179,6 +177,24 @@ export const LogsPage = observer(function LogsPage() {
         </div>
       </Card>
 
+      {store.state === "cancelled" ? (
+        <Notice
+          variant="info"
+          action={
+            <Button
+              variant="secondary"
+              disabled={blocked || store.loading || !store.file}
+              onClick={() => void submit()}
+            >
+              {t("common.retry")}
+            </Button>
+          }
+        >
+          <strong>{t("runStatus.cancelled")}</strong>
+          <span>{t("runStatus.cancelledHint")}</span>
+        </Notice>
+      ) : null}
+
       {store.error ? (
         <Notice
           variant="error"
@@ -202,7 +218,7 @@ export const LogsPage = observer(function LogsPage() {
 
       {store.loading && !result ? <Loading label={t("logs.loading")} /> : null}
 
-      {!result && !store.loading && !store.error ? (
+      {!result && !store.loading && !store.error && store.state !== "cancelled" ? (
         <Card>
           <EmptyState
             title={t("logs.emptyTitle")}

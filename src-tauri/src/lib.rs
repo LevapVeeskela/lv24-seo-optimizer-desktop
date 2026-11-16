@@ -24,6 +24,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             commands::shell_status,
             commands::cli_run,
+            commands::run_cancel,
             commands::auth_set,
             commands::auth_delete,
             commands::config_read,

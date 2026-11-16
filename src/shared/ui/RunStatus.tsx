@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { useI18n } from "@/shared/i18n";
 import { formatDateTime } from "@/shared/lib/format";
 import { Badge } from "./Badge";
+import { Button } from "./Button";
 import { formatDuration, type RunSummary } from "./RunStatusModel";
 
 /** Whole seconds since `startedAt`, refreshed once a second while running. */
@@ -23,20 +24,23 @@ export function useElapsed(startedAt: number | null, running: boolean): number {
 
 /**
  * Honest progress for a long stats/report call: live elapsed time, the last
- * run's duration, truncation and limitation badges. 0.5.0 has no cancellation
- * path, so the copy says the call runs to completion instead of showing a
- * button that would do nothing.
+ * run's duration, truncation and limitation badges. A cancellable run also gets
+ * a Cancel button; a short read passes no handler and keeps no cancel control.
  */
 export function RunStatus({
   label,
   running,
   startedAt,
   lastRun,
+  cancelling = false,
+  onCancel,
 }: {
   label: string;
   running: boolean;
   startedAt: number | null;
   lastRun: RunSummary | null;
+  cancelling?: boolean;
+  onCancel?: () => void;
 }) {
   const { t, locale } = useI18n();
   const elapsed = useElapsed(startedAt, running);
@@ -57,6 +61,16 @@ export function RunStatus({
         <span className="run-status run-running" aria-live="off">
           {t("runStatus.running", { elapsed: formatDuration(elapsed) })}
         </span>
+      ) : null}
+      {running && onCancel ? (
+        <Button
+          variant="danger"
+          className="run-cancel-button"
+          disabled={cancelling}
+          onClick={onCancel}
+        >
+          {cancelling ? t("runStatus.cancelling") : t("runStatus.cancel")}
+        </Button>
       ) : null}
       {lastRun ? (
         <span className="badge-row" role="status" aria-live="polite">
@@ -87,7 +101,11 @@ export function RunStatus({
         </span>
       ) : null}
       {running ? (
-        <span className="muted small">{t("runStatus.noCancel")}</span>
+        <span className="muted small">
+          {onCancel
+            ? t("runStatus.backgroundHint")
+            : t("runStatus.readHint")}
+        </span>
       ) : null}
       {!running && lastRun?.durationSource === "measured" ? (
         <span className="muted small">{t("runStatus.measuredHint")}</span>

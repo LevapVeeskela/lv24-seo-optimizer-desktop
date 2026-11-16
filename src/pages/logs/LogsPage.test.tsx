@@ -3,6 +3,7 @@ import { MemoryRouter } from "react-router-dom";
 import { describe, expect, it, vi } from "vitest";
 import { StoreProvider } from "@/app/providers/StoreProvider";
 import type { RootStore } from "@/app/model/RootStore";
+import { LogsStore } from "@/entities/logs";
 import { LOCALES, I18nProvider, translate } from "@/shared/i18n";
 import { LogsPage } from "./LogsPage";
 
@@ -22,7 +23,7 @@ function renderPage(offline = false): string {
   };
   return renderToStaticMarkup(
     <I18nProvider locale="en" onLocaleChange={() => {}}>
-      <StoreProvider store={{ engine } as unknown as RootStore}>
+      <StoreProvider store={{ engine, logs: new LogsStore() } as unknown as RootStore}>
         <MemoryRouter>
           <LogsPage />
         </MemoryRouter>

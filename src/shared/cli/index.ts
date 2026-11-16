@@ -8,6 +8,7 @@ import type {
 
 export {
   CLI_COMMAND_IDS,
+  type CliArgs,
   type CliCommandId,
   type CliError,
   type CliRunOptions,
@@ -91,6 +92,9 @@ export async function cliRun<T>(
   }
   if (options.configPath) {
     payload.configPath = options.configPath;
+  }
+  if (options.runId) {
+    payload.runId = options.runId;
   }
   try {
     const raw = await invoke<unknown>("cli_run", payload);

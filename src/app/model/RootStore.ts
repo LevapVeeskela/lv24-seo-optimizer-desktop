@@ -1,6 +1,8 @@
 import { ConfigStore } from "@/entities/config";
+import { CrawlStore } from "@/entities/crawl";
 import { EngineStore } from "@/entities/engine/model/EngineStore";
 import { configMissing } from "@/entities/engine/model/types";
+import { LogsStore } from "@/entities/logs";
 import { ReportsStore } from "@/entities/report/model/ReportsStore";
 import { StatsStore } from "@/entities/stats/model/StatsStore";
 import { UpdateStore, isPortableEngineSource } from "@/entities/update";
@@ -8,7 +10,10 @@ import {
   PropertiesStore,
   WorkspaceStore,
 } from "@/entities/workspace";
+import { BackupStore } from "@/features/backup/model/BackupStore";
+import { ScheduleStore } from "@/features/schedule/model/ScheduleStore";
 import { setDesktopConfigPath } from "@/shared/desktop/settings";
+import { RunStore } from "@/shared/run/model/RunStore";
 import { makeAutoObservable, reaction } from "mobx";
 
 /**
@@ -24,9 +29,15 @@ import { makeAutoObservable, reaction } from "mobx";
  * numbers from the previous project.
  */
 export class RootStore {
+  /** Window-wide run registry: long calls survive route changes. */
+  runs = new RunStore();
   engine = new EngineStore();
   stats = new StatsStore();
-  reports = new ReportsStore();
+  reports = new ReportsStore({ runs: this.runs });
+  crawl = new CrawlStore(() => new Date(), this.runs);
+  logs = new LogsStore(undefined, undefined, this.runs);
+  backup = new BackupStore(undefined, undefined, undefined, this.runs);
+  schedule = new ScheduleStore(this.runs);
   config = new ConfigStore();
   properties = new PropertiesStore();
   workspace = new WorkspaceStore({
@@ -52,9 +63,14 @@ export class RootStore {
         bootstrapped: false,
         workspacePath: false,
         stopWorkspaceWatch: false,
+        runs: false,
         engine: false,
         stats: false,
         reports: false,
+        crawl: false,
+        logs: false,
+        backup: false,
+        schedule: false,
         config: false,
         properties: false,
         workspace: false,
@@ -83,6 +99,10 @@ export class RootStore {
   resetWorkspaceData(): void {
     this.stats.reset();
     this.reports.reset();
+    this.crawl.reset();
+    this.logs.reset();
+    this.backup.reset();
+    this.schedule.reset();
     this.properties.reset();
   }
 

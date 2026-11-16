@@ -1,10 +1,9 @@
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 import { observer } from "mobx-react-lite";
 import { Link } from "react-router-dom";
 import { useRootStore } from "@/app/providers/StoreProvider";
 import {
   CRAWL_FILTERS_DEFAULT,
-  CrawlStore,
   crawlIssueFacets,
   crawlLimitations,
   effectiveCrawlFilters,
@@ -33,10 +32,9 @@ import "./crawl.css";
 const VISIBLE_LIMIT = 500;
 
 export const CrawlPage = observer(function CrawlPage() {
-  const { locale } = useI18n();
-  const { engine } = useRootStore();
+  const { t, locale } = useI18n();
+  const { engine, crawl: store } = useRootStore();
   const copy = useMemo(() => crawlCopy(locale), [locale]);
-  const [store] = useState(() => new CrawlStore());
   const [start, setStart] = useState("");
   const [maxUrls, setMaxUrls] = useState("");
   const [startInvalid, setStartInvalid] = useState(false);
@@ -48,12 +46,6 @@ export const CrawlPage = observer(function CrawlPage() {
   const configPath = engine.status?.configPath ?? null;
   const blocked = engine.offline || engine.loading || !configPath;
   const exportDir = engine.status?.paths?.exportDir ?? null;
-
-  useEffect(() => {
-    // The workspace can be cleared from the header without leaving this route;
-    // another project's crawl must never stay on screen.
-    store.reset();
-  }, [configPath, store]);
 
   const result = store.result;
   const issues = result?.issues ?? [];
@@ -178,6 +170,24 @@ export const CrawlPage = observer(function CrawlPage() {
         />
       </Card>
 
+      {store.state === "cancelled" ? (
+        <Notice
+          variant="info"
+          action={
+            <Button
+              variant="secondary"
+              onClick={() => void submit()}
+              disabled={blocked || store.loading}
+            >
+              {copy.retry}
+            </Button>
+          }
+        >
+          <strong>{t("runStatus.cancelled")}</strong>
+          <span>{t("runStatus.cancelledHint")}</span>
+        </Notice>
+      ) : null}
+
       {store.error ? (
         <Notice
           variant="error"
@@ -198,7 +208,11 @@ export const CrawlPage = observer(function CrawlPage() {
 
       {store.loading && !result ? <Loading label={copy.loading} /> : null}
 
-      {!result && !store.loading && !blocked && !store.error ? (
+      {!result &&
+      !store.loading &&
+      !blocked &&
+      !store.error &&
+      store.state !== "cancelled" ? (
         <Card>
           <EmptyState title={copy.emptyTitle} hint={copy.emptyHint} />
         </Card>

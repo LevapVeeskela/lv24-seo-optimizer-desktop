@@ -849,6 +849,7 @@ pub async fn cli_run(
     command: String,
     args: Option<CliArgs>,
     config_path: Option<String>,
+    run_id: Option<String>,
 ) -> Result<cli::CliRunResult, AppError> {
     let command = CliCommandId::parse(&command)?;
     let mut args = args.unwrap_or_default();
@@ -1030,7 +1031,13 @@ pub async fn cli_run(
         _ => config_path.as_deref(),
     };
     let location = paths::locate_engine(&app)?;
-    let result = cli::run(&location, engine_config, command, &args).await?;
+    let result = match run_id.as_deref() {
+        // A run id is the webview's cancellation handle. It is only accepted
+        // for long local jobs (`CliCommandId::cancellable`); a short read keeps
+        // the plain synchronous path.
+        Some(run_id) => cli::run_tracked(&location, engine_config, command, &args, run_id).await?,
+        None => cli::run(&location, engine_config, command, &args).await?,
+    };
     if let Some(target) = init_target {
         // `init` created the file: approve it now so the wizard can call
         // `settings_set` without another dialog, and persist it for the next
@@ -1052,6 +1059,16 @@ pub async fn cli_run(
         }
     }
     Ok(result)
+}
+
+/// Cancel one active long-running engine call by its stable run id.
+///
+/// `false` means the run already finished (or the id is unknown): the webview
+/// must not show a cancelled state in that case. Only the exact child tracked
+/// for this run is signalled; no process is matched by name.
+#[tauri::command(rename_all = "camelCase")]
+pub async fn run_cancel(run_id: String) -> Result<bool, AppError> {
+    cli::cancel_run(&run_id).await
 }
 
 /// Store a provider secret through stdin. The secret is never placed in argv,

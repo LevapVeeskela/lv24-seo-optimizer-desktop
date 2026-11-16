@@ -104,9 +104,14 @@ export interface CliRunOptions {
   args?: CliArgs;
   /** Absolute seo.toml path; the shell validates it against approved roots. */
   configPath?: string;
+  /**
+   * Stable id for a cancellable run. Only long local jobs accept it; the shell
+   * rejects a run id for a short read (`RUN_NOT_CANCELLABLE`).
+   */
+  runId?: string;
 }
 
-/** Matches the Rust command signature `cli_run(command, args, configPath)`. */
+/** Matches the Rust command signature `cli_run(command, args, configPath, runId)`. */
 export interface CliRunRequest extends CliRunOptions {
   command: CliCommandId;
   args?: CliArgs;

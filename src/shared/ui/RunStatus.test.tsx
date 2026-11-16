@@ -113,14 +113,36 @@ describe("RunStatus", () => {
     expect(html).toContain("Not truncated");
   });
 
-  it("shows elapsed time and states that the call runs to completion", () => {
+  it("shows elapsed time and says a read runs to completion", () => {
     const html = render({
       running: true,
       startedAt: Date.now() - 3000,
     });
     expect(html).toContain("Running for");
-    expect(html).toContain("runs this call to completion");
-    expect(html).toContain("no cancel button");
+    expect(html).toContain("This read runs to completion");
+    expect(html).not.toContain("Cancel run");
     expect(html).not.toContain("Last run");
+  });
+
+  it("shows a Cancel button only when a cancellable handler is passed", () => {
+    const html = render({
+      running: true,
+      startedAt: Date.now() - 3000,
+      onCancel: () => {},
+    });
+    expect(html).toContain("Cancel run");
+    expect(html).toContain("continues in the background");
+    expect(html).not.toContain("This read runs to completion");
+  });
+
+  it("disables the Cancel button while the shell is answering", () => {
+    const html = render({
+      running: true,
+      startedAt: Date.now() - 3000,
+      cancelling: true,
+      onCancel: () => {},
+    });
+    expect(html).toContain("Cancelling…");
+    expect(html).toContain("disabled");
   });
 });

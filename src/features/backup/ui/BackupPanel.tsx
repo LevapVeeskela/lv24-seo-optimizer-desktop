@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { observer } from "mobx-react-lite";
 import { Link } from "react-router-dom";
 import { useRootStore } from "@/app/providers/StoreProvider";
@@ -16,7 +16,6 @@ import { Input } from "@/shared/ui/Input";
 import { Loading } from "@/shared/ui/Loading";
 import { Notice } from "@/shared/ui/Notice";
 import { Table } from "@/shared/ui/Table";
-import { BackupStore } from "../model/BackupStore";
 import { formatBytes } from "../model/format";
 import { backupLimitations } from "../model/types";
 import { RestoreSection } from "./RestoreSection";
@@ -29,19 +28,12 @@ import "./backup.css";
  */
 export const BackupPanel = observer(function BackupPanel() {
   const { t, locale } = useI18n();
-  const { engine } = useRootStore();
-  const [store] = useState(() => new BackupStore());
+  const { engine, backup: store } = useRootStore();
   const [picking, setPicking] = useState(false);
   const [pickError, setPickError] = useState<string | null>(null);
 
   const configPath = engine.status?.configPath ?? null;
   const blocked = engine.offline || engine.loading || !configPath;
-
-  useEffect(() => {
-    // Another workspace has another database; the archive shown belongs to the
-    // previous one until the user creates a new backup.
-    store.reset();
-  }, [configPath, store]);
 
   const pick = async () => {
     setPicking(true);
@@ -161,6 +153,24 @@ export const BackupPanel = observer(function BackupPanel() {
         </Notice>
       ) : null}
 
+      {store.state === "cancelled" ? (
+        <Notice
+          variant="info"
+          action={
+            <Button
+              variant="secondary"
+              disabled={blocked || store.creating || !store.outDir}
+              onClick={() => void submit()}
+            >
+              {t("common.retry")}
+            </Button>
+          }
+        >
+          <strong>{t("runStatus.cancelled")}</strong>
+          <span>{t("runStatus.cancelledHint")}</span>
+        </Notice>
+      ) : null}
+
       {store.error ? (
         <Notice
           variant="error"
@@ -184,7 +194,7 @@ export const BackupPanel = observer(function BackupPanel() {
 
       {store.creating ? <Loading label={t("backup.creating")} /> : null}
 
-      {!result && !store.creating && !store.error ? (
+      {!result && !store.creating && !store.error && store.state !== "cancelled" ? (
         <EmptyState title={t("backup.emptyTitle")} hint={t("backup.emptyHint")} />
       ) : null}
 

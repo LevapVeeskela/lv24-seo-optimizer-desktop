@@ -9,13 +9,14 @@ import { useDiscardGuard } from "@/app/providers/DiscardGuard";
 import { useRootStore } from "@/app/providers/StoreProvider";
 import { useUnsavedDraftGuard } from "@/features/save-config";
 import { useI18n } from "@/shared/i18n";
+import { RunBanner } from "@/shared/run/ui/RunBanner";
 import { useFeedback } from "@/shared/ui/Feedback";
 
 export const AppLayout = observer(function AppLayout({
   children,
 }: PropsWithChildren) {
   const { t } = useI18n();
-  const { engine, config } = useRootStore();
+  const { engine, config, runs } = useRootStore();
   const { confirmDiscard } = useDiscardGuard();
   const { notify } = useFeedback();
   const location = useLocation();
@@ -76,6 +77,7 @@ export const AppLayout = observer(function AppLayout({
       </aside>
       <div className="app-main">
         <AppHeader />
+        <RunBanner runs={runs} />
         <main
           id="main-content"
           className="app-content"

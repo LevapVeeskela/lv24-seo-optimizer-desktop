@@ -3,6 +3,7 @@ import { MemoryRouter } from "react-router-dom";
 import { describe, expect, it, vi } from "vitest";
 import { StoreProvider } from "@/app/providers/StoreProvider";
 import type { RootStore } from "@/app/model/RootStore";
+import { BackupStore } from "../model/BackupStore";
 import { I18nProvider } from "@/shared/i18n";
 import { BackupPanel } from "./BackupPanel";
 
@@ -22,7 +23,9 @@ function renderPanel(offline = false): string {
   };
   return renderToStaticMarkup(
     <I18nProvider locale="en" onLocaleChange={() => {}}>
-      <StoreProvider store={{ engine } as unknown as RootStore}>
+      <StoreProvider
+        store={{ engine, backup: new BackupStore() } as unknown as RootStore}
+      >
         <MemoryRouter>
           <BackupPanel />
         </MemoryRouter>

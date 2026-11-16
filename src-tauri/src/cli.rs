@@ -1,7 +1,8 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 use std::process::Stdio;
-use std::sync::{LazyLock, Mutex, MutexGuard};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, LazyLock, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
@@ -218,6 +219,25 @@ impl CliCommandId {
             | Self::AuthStatus
             | Self::SchedulePrint => Duration::from_secs(30),
         }
+    }
+
+    /// Commands whose UI may expose a Cancel button. Only long local jobs are
+    /// listed: a short read stays a synchronous call with no run banner, and a
+    /// command absent from this list rejects a webview-supplied run id.
+    ///
+    /// `backup_restore` is cancellable in both phases. Cancelling the apply
+    /// phase stops the engine mid-replace; the engine keeps a pre-restore copy,
+    /// and the UI says the restore may need to be reviewed again.
+    pub fn cancellable(self) -> bool {
+        matches!(
+            self,
+            Self::Crawl
+                | Self::ReportWeekly
+                | Self::LogsAnalyze
+                | Self::BackupCreate
+                | Self::BackupRestore
+                | Self::ScheduleInstall
+        )
     }
 }
 
@@ -1674,6 +1694,215 @@ pub fn tracked_engine_pids() -> Vec<u32> {
     ENGINE_CHILDREN.tracked()
 }
 
+/// A webview-supplied run id is a short ASCII key. It identifies one run, never
+/// a process, path or command, so it is safe to use as a registry key and in an
+/// error detail.
+const MAX_RUN_ID_LEN: usize = 64;
+
+fn validate_run_id(raw: &str) -> AppResult<String> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Err(AppError::new("INVALID_ARGUMENT", "run id is empty"));
+    }
+    if trimmed.len() > MAX_RUN_ID_LEN {
+        return Err(AppError::new(
+            "INVALID_ARGUMENT",
+            format!("run id is longer than {MAX_RUN_ID_LEN} characters"),
+        ));
+    }
+    if !trimmed
+        .chars()
+        .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_'))
+    {
+        return Err(AppError::new(
+            "INVALID_ARGUMENT",
+            "run id may only contain ASCII letters, digits, '-' and '_'",
+        ));
+    }
+    Ok(trimmed.to_string())
+}
+
+/// One cancellable run. `pid` is the exact child this process spawned; it is
+/// `None` between registration and spawn, and `finished` is the linearization
+/// point after which a cancel is refused instead of racing the result.
+#[derive(Default)]
+struct RunEntry {
+    pid: Option<u32>,
+    cancelled: Arc<AtomicBool>,
+    finished: bool,
+}
+
+enum CancelRequest {
+    /// The run was active and this request won; `pid` is its exact child, if
+    /// the spawn already happened.
+    Accepted { pid: Option<u32> },
+    /// Unknown id, already finished, or already cancelled. Nothing was killed.
+    Refused,
+}
+
+/// Per-run registry: run id -> exact child PID and cancellation state.
+///
+/// The global [`ENGINE_CHILDREN`] registry answers "which sidecars must be
+/// stopped before an update". This registry answers "which exact child belongs
+/// to the run the user just cancelled". A cancel never matches by image name:
+/// it signals one PID (and, on Unix, that PID's process group) that this
+/// process spawned for this run.
+#[derive(Default)]
+struct RunRegistry {
+    runs: Mutex<BTreeMap<String, RunEntry>>,
+}
+
+impl RunRegistry {
+    /// Register `run_id` and return its guard. The guard removes the entry on
+    /// every exit path, so a finished run can no longer be cancelled.
+    fn begin<'a>(&'a self, run_id: &str) -> AppResult<RunGuard<'a>> {
+        let run_id = validate_run_id(run_id)?;
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let mut runs = self.lock();
+        if runs.contains_key(&run_id) {
+            return Err(AppError::new(
+                "RUN_ALREADY_ACTIVE",
+                format!("run {run_id:?} is already active"),
+            )
+            .with_details(serde_json::json!({ "runId": run_id })));
+        }
+        runs.insert(
+            run_id.clone(),
+            RunEntry {
+                pid: None,
+                cancelled: cancelled.clone(),
+                finished: false,
+            },
+        );
+        Ok(RunGuard {
+            registry: self,
+            run_id,
+            cancelled,
+        })
+    }
+
+    fn attach(&self, run_id: &str, pid: u32) {
+        if let Some(entry) = self.lock().get_mut(run_id) {
+            entry.pid = Some(pid);
+        }
+    }
+
+    fn mark_finished(&self, run_id: &str) {
+        if let Some(entry) = self.lock().get_mut(run_id) {
+            entry.finished = true;
+        }
+    }
+
+    fn request_cancel(&self, run_id: &str) -> CancelRequest {
+        let mut runs = self.lock();
+        let Some(entry) = runs.get_mut(run_id) else {
+            return CancelRequest::Refused;
+        };
+        if entry.finished || entry.cancelled.load(Ordering::SeqCst) {
+            return CancelRequest::Refused;
+        }
+        entry.cancelled.store(true, Ordering::SeqCst);
+        CancelRequest::Accepted { pid: entry.pid }
+    }
+
+    fn finish(&self, run_id: &str) {
+        self.lock().remove(run_id);
+    }
+
+    fn lock(&self) -> MutexGuard<'_, BTreeMap<String, RunEntry>> {
+        // The lock guards map lookups and flags, never a partial file write;
+        // recover from a poisoned lock instead of panicking the app.
+        self.runs
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+}
+
+static ACTIVE_RUNS: LazyLock<RunRegistry> = LazyLock::new(RunRegistry::default);
+
+/// Unregisters a run when its call returns and exposes the cancellation flag to
+/// the supervisor. Holding the guard is what makes a run cancellable.
+struct RunGuard<'a> {
+    registry: &'a RunRegistry,
+    run_id: String,
+    cancelled: Arc<AtomicBool>,
+}
+
+impl RunGuard<'_> {
+    /// Record the exact PID. Returns `true` when a cancel arrived before the
+    /// spawn completed; the caller must kill the new child and return
+    /// `RUN_CANCELLED` without waiting for an envelope.
+    fn attach(&self, pid: u32) -> bool {
+        self.registry.attach(&self.run_id, pid);
+        self.is_cancelled()
+    }
+
+    fn is_cancelled(&self) -> bool {
+        self.cancelled.load(Ordering::SeqCst)
+    }
+
+    /// The child result is decided from this point on. A later cancel reports
+    /// `false` instead of claiming it stopped a run that already produced a
+    /// result.
+    fn mark_finished(&self) {
+        self.registry.mark_finished(&self.run_id);
+    }
+}
+
+impl Drop for RunGuard<'_> {
+    fn drop(&mut self) {
+        self.registry.finish(&self.run_id);
+    }
+}
+
+/// Cancel one active run by its stable id.
+///
+/// Returns `Ok(true)` only when this call won the race against an active run
+/// and its exact child was signalled (or the cancel was remembered before the
+/// spawn, so the new child is killed at attach). `Ok(false)` means the run
+/// already finished, the id is unknown, or the PID no longer names the engine
+/// sidecar, so the webview must not claim a cancellation.
+pub async fn cancel_run(run_id: &str) -> AppResult<bool> {
+    let run_id = validate_run_id(run_id)?;
+    match ACTIVE_RUNS.request_cancel(&run_id) {
+        CancelRequest::Refused => Ok(false),
+        CancelRequest::Accepted { pid: None } => Ok(true),
+        CancelRequest::Accepted { pid: Some(pid) } => Ok(cancel_engine_process(pid).await),
+    }
+}
+
+/// Signal the exact child of a cancelled run and report whether it was killed.
+///
+/// The run registry only ever stores a PID from the `Child` this process
+/// spawned, and the run guard keeps that child unreaped until the result is
+/// decided. The extra check keeps a recycled or unrelated PID out of reach: the
+/// PID must still be an engine image, or one of the exact children this process
+/// currently tracks (a development engine may be a Python interpreter rather
+/// than `lv24-seo`).
+async fn cancel_engine_process(pid: u32) -> bool {
+    if !process_alive(pid).await {
+        return false;
+    }
+    if !is_engine_sidecar(pid).await && !tracked_engine_pids().contains(&pid) {
+        log::warn!("cancelled run: PID {pid} is not a tracked engine child; not killing it");
+        return false;
+    }
+    match terminate(pid).await {
+        Ok(true) => {
+            log::info!("cancelled engine sidecar {pid}");
+            true
+        }
+        Ok(false) => {
+            log::warn!("cancelled run: engine sidecar {pid} was already gone");
+            false
+        }
+        Err(err) => {
+            log::warn!("cancelled run: cannot kill engine sidecar {pid}: {err}");
+            false
+        }
+    }
+}
+
 /// Kill every engine sidecar this app instance still tracks, wait until those
 /// PIDs are gone, and report how many processes were terminated.
 ///
@@ -2035,7 +2264,7 @@ pub async fn run(
     command: CliCommandId,
     args: &CliArgs,
 ) -> AppResult<CliRunResult> {
-    run_with_stdin(location, config_path, command, args, None).await
+    run_inner(location, config_path, command, args, None, None).await
 }
 
 /// Same as [`run`], optionally writing bytes to the child's stdin. Auth uses
@@ -2047,36 +2276,105 @@ pub async fn run_with_stdin(
     args: &CliArgs,
     stdin_data: Option<&[u8]>,
 ) -> AppResult<CliRunResult> {
+    run_inner(location, config_path, command, args, stdin_data, None).await
+}
+
+/// A cancellable run. The webview supplies the stable run id; while the guard
+/// is alive [`cancel_run`] can stop exactly this child. A successful cancel is
+/// reported as `RUN_CANCELLED`, never as a timeout, a parse error or a generic
+/// process failure.
+pub async fn run_tracked(
+    location: &EngineLocation,
+    config_path: Option<&Path>,
+    command: CliCommandId,
+    args: &CliArgs,
+    run_id: &str,
+) -> AppResult<CliRunResult> {
+    run_inner(location, config_path, command, args, None, Some(run_id)).await
+}
+
+async fn run_inner(
+    location: &EngineLocation,
+    config_path: Option<&Path>,
+    command: CliCommandId,
+    args: &CliArgs,
+    stdin_data: Option<&[u8]>,
+    run_id: Option<&str>,
+) -> AppResult<CliRunResult> {
     let argv = build_argv(command, args)?;
+    let run = match run_id {
+        Some(run_id) => {
+            if !command.cancellable() {
+                return Err(AppError::new(
+                    "RUN_NOT_CANCELLABLE",
+                    format!("{} does not support background cancellation", command.id()),
+                )
+                .with_details(serde_json::json!({ "command": command.id() })));
+            }
+            // Registered before the spawn so a cancel that arrives while the
+            // process is starting is remembered and kills the child at attach.
+            Some(ACTIVE_RUNS.begin(run_id)?)
+        }
+        None => None,
+    };
     let mut prepared = build_command(location, config_path, &argv)?;
     if stdin_data.is_some() {
         prepared.stdin(Stdio::piped());
     }
     let started = Instant::now();
-    let child = prepared.spawn().map_err(|err| {
-        AppError::new(
-            "ENGINE_SPAWN",
-            format!(
-                "cannot start lv24-seo at {}: {err}",
-                location.path.display()
-            ),
-        )
-    })?;
+    let mut child = match prepared.spawn() {
+        Ok(child) => child,
+        Err(err) => {
+            if let Some(run) = run.as_ref() {
+                run.mark_finished();
+            }
+            return Err(AppError::new(
+                "ENGINE_SPAWN",
+                format!(
+                    "cannot start lv24-seo at {}: {err}",
+                    location.path.display()
+                ),
+            ));
+        }
+    };
     // The guard lives until `supervise` returns, so the PID is untracked on
     // every path (success, timeout, stdin error, panic).
     let _tracked = child.id().map(track_engine_child);
-    supervise(child, command, stdin_data, command.timeout(), started).await
+    if let Some(run) = run.as_ref() {
+        if let Some(pid) = child.id() {
+            if run.attach(pid) {
+                // Cancel arrived before the spawn completed: kill the tree we
+                // just created and report the cancellation, not a parse error.
+                kill_child_tree(&mut child).await;
+                run.mark_finished();
+                return Err(cancelled_error(command));
+            }
+        }
+    }
+    supervise(
+        child,
+        command,
+        stdin_data,
+        command.timeout(),
+        started,
+        run.as_ref(),
+    )
+    .await
 }
 
 /// Collect one engine run under a single timeout budget. `started` is recorded
 /// before the spawn so `duration_ms` covers the whole run, and the same budget
-/// bounds both the stdin write and the process wait.
+/// bounds both the stdin write and the process wait. `run` is the optional
+/// per-run cancellation guard: every terminal path marks the run finished
+/// before it reports a result, so a cancel cannot claim a run that already
+/// produced an envelope.
 async fn supervise(
     mut child: tokio::process::Child,
     command: CliCommandId,
     stdin_data: Option<&[u8]>,
     timeout: Duration,
     started: Instant,
+    run: Option<&RunGuard<'_>>,
 ) -> AppResult<CliRunResult> {
     let stdout = child
         .stdout
@@ -2097,12 +2395,18 @@ async fn supervise(
                 kill_child_tree(&mut child).await;
                 stdout_task.abort();
                 stderr_task.abort();
+                if finish_run(run) {
+                    return Err(cancelled_error(command));
+                }
                 return Err(err);
             }
             Err(_) => {
                 kill_child_tree(&mut child).await;
                 stdout_task.abort();
                 stderr_task.abort();
+                if finish_run(run) {
+                    return Err(cancelled_error(command));
+                }
                 return Err(timeout_error(command, timeout));
             }
         }
@@ -2116,6 +2420,9 @@ async fn supervise(
         Ok(Err(err)) => {
             stdout_task.abort();
             stderr_task.abort();
+            if finish_run(run) {
+                return Err(cancelled_error(command));
+            }
             return Err(AppError::new(
                 "ENGINE_WAIT",
                 format!("engine process failed: {err}"),
@@ -2125,9 +2432,20 @@ async fn supervise(
             kill_child_tree(&mut child).await;
             stdout_task.abort();
             stderr_task.abort();
+            if finish_run(run) {
+                return Err(cancelled_error(command));
+            }
             return Err(timeout_error(command, timeout));
         }
     };
+
+    // The child exited. If a cancel won the race, report that instead of
+    // parsing the partial stdout the kill left behind.
+    if finish_run(run) {
+        stdout_task.abort();
+        stderr_task.abort();
+        return Err(cancelled_error(command));
+    }
 
     let (stdout_bytes, stdout_truncated) = stdout_task
         .await
@@ -2184,6 +2502,25 @@ async fn supervise(
         truncated: stdout_truncated || stderr_truncated,
         writes_local_state: command.write_kind() == WriteKind::LocalState,
     })
+}
+
+/// Mark the run finished, then report whether a cancel won the race.
+fn finish_run(run: Option<&RunGuard<'_>>) -> bool {
+    match run {
+        Some(run) => {
+            run.mark_finished();
+            run.is_cancelled()
+        }
+        None => false,
+    }
+}
+
+fn cancelled_error(command: CliCommandId) -> AppError {
+    AppError::new(
+        "RUN_CANCELLED",
+        format!("lv24-seo {} was cancelled", command.id()),
+    )
+    .with_details(serde_json::json!({ "command": command.id() }))
 }
 
 fn timeout_error(command: CliCommandId, timeout: Duration) -> AppError {
@@ -3682,7 +4019,9 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::await_holding_lock)] // the guard is the point: one forking test at a time
     async fn the_registry_tracks_and_forgets_engine_pids() {
+        let _serial = process_test_guard();
         let registry = ChildRegistry::default();
         let first = registry.track(4242);
         let second = registry.track(4243);
@@ -3954,6 +4293,7 @@ mod tests {
             None,
             Duration::from_secs(10),
             Instant::now(),
+            None,
         )
         .await
         .unwrap();
@@ -3973,6 +4313,159 @@ mod tests {
         );
     }
 
+    #[test]
+    fn run_ids_are_bounded_ascii_keys_and_duplicates_are_refused() {
+        let registry = RunRegistry::default();
+        let guard = registry.begin("run-1").unwrap();
+        let duplicate = registry
+            .begin("run-1")
+            .err()
+            .expect("a duplicate run id must fail");
+        assert_eq!(duplicate.code(), "RUN_ALREADY_ACTIVE");
+        drop(guard);
+        // The guard removed the entry: the same id can be used again.
+        let guard = registry.begin("run-1").unwrap();
+        drop(guard);
+
+        let long = "x".repeat(MAX_RUN_ID_LEN + 1);
+        for bad in ["", " ", "has space", "a/b", "a.b", long.as_str()] {
+            let error = registry
+                .begin(bad)
+                .err()
+                .unwrap_or_else(|| panic!("run id {bad:?} must be rejected"));
+            assert_eq!(error.code(), "INVALID_ARGUMENT", "{bad:?}");
+        }
+        for good in ["run-1", "run_2", "0f3a9c1e-6a4b-4c1e-9f2d-7b8c9d0e1f2a"] {
+            let guard = registry.begin(good).unwrap();
+            drop(guard);
+        }
+    }
+
+    #[test]
+    fn a_finished_run_cannot_be_cancelled_and_double_cancel_is_false() {
+        let registry = RunRegistry::default();
+
+        // Finished before any cancel: refused, so the webview must not claim a
+        // cancellation for a run that already produced its result.
+        let finished = registry.begin("run-finished").unwrap();
+        finished.mark_finished();
+        assert!(matches!(
+            registry.request_cancel("run-finished"),
+            CancelRequest::Refused
+        ));
+        drop(finished);
+
+        // Unknown or removed id: refused.
+        assert!(matches!(
+            registry.request_cancel("run-missing"),
+            CancelRequest::Refused
+        ));
+
+        // First cancel wins, the second is refused.
+        let active = registry.begin("run-active").unwrap();
+        assert!(matches!(
+            registry.request_cancel("run-active"),
+            CancelRequest::Accepted { pid: None }
+        ));
+        assert!(matches!(
+            registry.request_cancel("run-active"),
+            CancelRequest::Refused
+        ));
+        // A cancel that arrived before the spawn is remembered.
+        assert!(active.attach(4242));
+        drop(active);
+    }
+
+    #[tokio::test]
+    async fn cancel_run_rejects_invalid_ids_and_reports_an_unknown_run_as_false() {
+        assert_eq!(
+            cancel_run("bad id").await.unwrap_err().code(),
+            "INVALID_ARGUMENT"
+        );
+        assert!(!cancel_run("run-that-does-not-exist").await.unwrap());
+    }
+
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)] // the guard is the point: one forking test at a time
+    async fn a_cancelled_run_never_kills_an_unrelated_pid() {
+        let _serial = process_test_guard();
+        let registry = RunRegistry::default();
+        let mut unrelated = synthetic_child();
+        let pid = unrelated.id().unwrap();
+        let guard = registry.begin("run-foreign").unwrap();
+        guard.attach(pid);
+
+        let CancelRequest::Accepted { pid: Some(tracked) } = registry.request_cancel("run-foreign")
+        else {
+            panic!("an active run must accept the first cancel");
+        };
+        assert_eq!(tracked, pid);
+        assert!(
+            !cancel_engine_process(tracked).await,
+            "a foreign image is not an engine kill"
+        );
+
+        // SEC-08: the PID no longer names an engine sidecar, so it survives.
+        assert!(
+            process_alive(pid).await,
+            "a foreign image must survive a run cancel"
+        );
+
+        guard.mark_finished();
+        drop(guard);
+        let _ = unrelated.start_kill();
+        let _ = unrelated.wait().await;
+    }
+
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)] // the guard is the point: one forking test at a time
+    async fn a_tracked_dev_engine_child_is_cancelled_with_a_non_engine_image() {
+        let _serial = process_test_guard();
+        let mut child = synthetic_child();
+        let pid = child.id().unwrap();
+        // A development engine (`LV24_SEO_BIN`) may be a Python interpreter,
+        // not `lv24-seo`; the exact child registration is what makes it ours.
+        let tracked = track_engine_child(pid);
+        assert!(cancel_engine_process(pid).await);
+        assert!(!process_alive(pid).await);
+        let _ = child.wait().await;
+        drop(tracked);
+    }
+
+    #[tokio::test]
+    #[allow(clippy::await_holding_lock)] // the guard is the point: one forking test at a time
+    async fn a_cancelled_run_kills_its_exact_engine_child() {
+        let _serial = process_test_guard();
+        let dir = engine_test_dir();
+        let Some(mut child) = engine_named_child(dir.path()) else {
+            eprintln!(
+                "skipping a_cancelled_run_kills_its_exact_engine_child: cannot hard-link /bin/sleep \
+                 into {} (cross-device temp dir)",
+                dir.path().display()
+            );
+            return;
+        };
+        let pid = child.id().unwrap();
+        wait_for_engine_image(pid).await;
+
+        let registry = RunRegistry::default();
+        let guard = registry.begin("run-engine").unwrap();
+        guard.attach(pid);
+        let CancelRequest::Accepted { pid: Some(tracked) } = registry.request_cancel("run-engine")
+        else {
+            panic!("an active run must accept the first cancel");
+        };
+        assert_eq!(tracked, pid);
+        assert!(
+            cancel_engine_process(tracked).await,
+            "the exact engine child must be killed"
+        );
+
+        assert!(!process_alive(pid).await);
+        let _ = child.wait().await;
+        drop(guard);
+    }
+
     #[tokio::test]
     async fn the_timeout_covers_the_stdin_write_and_the_process_wait() {
         let started = Instant::now();
@@ -3989,6 +4482,7 @@ mod tests {
             Some(b"dummy-secret"),
             Duration::from_millis(200),
             started,
+            None,
         )
         .await
         .unwrap_err();
@@ -4031,6 +4525,39 @@ mod tests {
             CliCommandId::ScheduleInstall.timeout(),
             Duration::from_secs(60)
         );
+    }
+
+    #[test]
+    fn only_long_local_jobs_are_cancellable() {
+        for id in [
+            CliCommandId::Crawl,
+            CliCommandId::ReportWeekly,
+            CliCommandId::LogsAnalyze,
+            CliCommandId::BackupCreate,
+            CliCommandId::BackupRestore,
+            CliCommandId::ScheduleInstall,
+        ] {
+            assert!(id.cancellable(), "{}", id.id());
+        }
+        for id in [
+            CliCommandId::Version,
+            CliCommandId::Stats,
+            CliCommandId::ConfigShow,
+            CliCommandId::Doctor,
+            CliCommandId::Properties,
+            CliCommandId::AuthStatus,
+            CliCommandId::ReportDiff,
+            CliCommandId::Init,
+            CliCommandId::SchedulePrint,
+            CliCommandId::TasksList,
+            CliCommandId::TasksAdd,
+            CliCommandId::TasksUpdate,
+            CliCommandId::PortfolioList,
+            CliCommandId::AuthSet,
+            CliCommandId::AuthLogout,
+        ] {
+            assert!(!id.cancellable(), "{}", id.id());
+        }
     }
 
     fn init_args(dir: &Path) -> CliArgs {

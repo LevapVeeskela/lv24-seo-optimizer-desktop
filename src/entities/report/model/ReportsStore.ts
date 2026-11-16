@@ -1,6 +1,8 @@
 import { DEFAULT_WINDOW, type WindowParams } from "@/entities/window";
 import { cliRun } from "@/shared/cli";
 import { toAppError, type AppError } from "@/shared/lib/errors";
+import { trackedCliRun } from "@/shared/run/lib/trackedRun";
+import type { RunStore } from "@/shared/run/model/RunStore";
 import { buildRunSummary, type RunSummary } from "@/shared/ui/RunStatusModel";
 import { makeAutoObservable } from "mobx";
 import {
@@ -12,12 +14,13 @@ import {
 } from "./diff";
 import { reportLimitations, type ReportMeta, type WeeklyReport } from "./types";
 
-export type ReportsState = "idle" | "loading" | "ready" | "error";
+export type ReportsState = "idle" | "loading" | "ready" | "error" | "cancelled";
 export type DiffState = "idle" | "loading" | "ready" | "empty" | "error";
 
 /** Injectable clock so wall-time durations are testable. */
 export interface ReportsDeps {
   now?: () => number;
+  runs?: RunStore | null;
 }
 
 export class ReportsStore {
@@ -45,12 +48,17 @@ export class ReportsStore {
   private generation = 0;
   private diffGeneration = 0;
   private readonly now: () => number;
+  private readonly runs: RunStore | null;
 
   constructor(deps: ReportsDeps = {}) {
     this.now = deps.now ?? Date.now;
-    makeAutoObservable<ReportsStore, "generation" | "diffGeneration" | "now">(
+    this.runs = deps.runs ?? null;
+    makeAutoObservable<
+      ReportsStore,
+      "generation" | "diffGeneration" | "now" | "runs"
+    >(
       this,
-      { generation: false, diffGeneration: false, now: false },
+      { generation: false, diffGeneration: false, now: false, runs: false },
       { autoBind: true },
     );
   }
@@ -79,13 +87,26 @@ export class ReportsStore {
     this.lastParams = params;
     const startedAt = this.now();
     this.startedAt = startedAt;
-    const result = await cliRun<WeeklyReport>("report_weekly", {
-      args: { days: params.days, lagDays: params.lagDays },
-    });
+    const result = this.runs
+      ? await trackedCliRun<WeeklyReport>(this.runs, {
+          kind: "reportWeekly",
+          args: { days: params.days, lagDays: params.lagDays },
+        })
+      : await cliRun<WeeklyReport>("report_weekly", {
+          args: { days: params.days, lagDays: params.lagDays },
+        });
     if (generation !== this.generation) {
       return false;
     }
     this.startedAt = null;
+    if (!result.ok && result.error.code === "RUN_CANCELLED") {
+      // Keep the previous report and its last-run summary visible: a cancelled
+      // build produced no new snapshot and is not a failed provider call.
+      this.error = null;
+      this.warnings = result.warnings;
+      this.state = "cancelled";
+      return false;
+    }
     const data = result.ok ? result.data : null;
     this.lastRun = buildRunSummary({
       startedAt,

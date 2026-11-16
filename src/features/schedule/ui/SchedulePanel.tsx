@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { observer } from "mobx-react-lite";
 import { Link } from "react-router-dom";
 import { useRootStore } from "@/app/providers/StoreProvider";
@@ -21,7 +21,6 @@ import {
   formatScheduleArtifact,
   type ScheduleTarget,
 } from "@/entities/integrations";
-import { ScheduleStore } from "../model/ScheduleStore";
 import { ScheduleInstallPanel } from "./ScheduleInstallPanel";
 
 const TARGET_LABEL_KEYS: Record<ScheduleTarget, MessageKey> = {
@@ -39,17 +38,11 @@ type ScheduleMode = "preview" | "install";
  */
 export const SchedulePanel = observer(function SchedulePanel() {
   const { t } = useI18n();
-  const { engine } = useRootStore();
-  const [store] = useState(() => new ScheduleStore());
+  const { engine, schedule: store } = useRootStore();
   const [mode, setMode] = useState<ScheduleMode>("preview");
 
   const configPath = engine.status?.configPath ?? null;
   const platform = engine.status?.platform ?? null;
-
-  useEffect(() => {
-    // A different workspace has a different timezone and report command.
-    store.reset();
-  }, [configPath, store]);
 
   const validation = store.validation;
   const cronError = validation.valid

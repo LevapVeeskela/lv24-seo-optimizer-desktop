@@ -1,6 +1,8 @@
 import { cliRun } from "@/shared/cli";
 import { toAppError, type AppError } from "@/shared/lib/errors";
 import { isRecord } from "@/shared/lib/format";
+import { trackedCliRun } from "@/shared/run/lib/trackedRun";
+import type { RunStore } from "@/shared/run/model/RunStore";
 import { makeAutoObservable } from "mobx";
 import {
   normalizeCrawlResult,
@@ -8,7 +10,7 @@ import {
   type CrawlResult,
 } from "./types";
 
-export type CrawlState = "idle" | "loading" | "ready" | "error";
+export type CrawlState = "idle" | "loading" | "ready" | "error" | "cancelled";
 
 export interface CrawlRunArgs {
   /** Blank means "use the project base_url"; the shell validates the URL. */
@@ -33,12 +35,17 @@ export class CrawlStore {
   raw: unknown = null;
   private generation = 0;
   private now: () => Date;
+  private readonly runs: RunStore | null;
 
-  constructor(now: () => Date = () => new Date()) {
+  constructor(
+    now: () => Date = () => new Date(),
+    runs: RunStore | null = null,
+  ) {
     this.now = now;
-    makeAutoObservable<CrawlStore, "generation" | "now" | "raw">(
+    this.runs = runs;
+    makeAutoObservable<CrawlStore, "generation" | "now" | "raw" | "runs">(
       this,
-      { generation: false, now: false, raw: false },
+      { generation: false, now: false, raw: false, runs: false },
       { autoBind: true },
     );
   }
@@ -55,8 +62,19 @@ export class CrawlStore {
     const generation = ++this.generation;
     this.state = "loading";
     this.error = null;
-    const result = await cliRun<unknown>("crawl", { args });
+    const result = this.runs
+      ? await trackedCliRun<unknown>(this.runs, {
+          kind: "crawl",
+          args,
+        })
+      : await cliRun<unknown>("crawl", { args });
     if (generation !== this.generation) {
+      return false;
+    }
+    if (!result.ok && result.error.code === "RUN_CANCELLED") {
+      this.error = null;
+      this.warnings = result.warnings;
+      this.state = "cancelled";
       return false;
     }
     if (result.ok) {

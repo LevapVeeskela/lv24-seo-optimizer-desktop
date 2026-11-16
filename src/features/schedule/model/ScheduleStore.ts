@@ -1,5 +1,7 @@
 import { cliRun } from "@/shared/cli";
 import { toAppError, type AppError } from "@/shared/lib/errors";
+import { trackRun } from "@/shared/run/lib/trackedRun";
+import type { RunStore } from "@/shared/run/model/RunStore";
 import { makeAutoObservable } from "mobx";
 import {
   defaultScheduleTarget,
@@ -23,7 +25,8 @@ export type ScheduleInstallState =
   | "idle"
   | "installing"
   | "installed"
-  | "error";
+  | "error"
+  | "cancelled";
 
 function installError(error: unknown): AppError {
   const app = toAppError(error, "CLI_FAILED");
@@ -65,11 +68,16 @@ export class ScheduleStore {
 
   private generation = 0;
   private installGeneration = 0;
+  private readonly runs: RunStore | null;
 
-  constructor() {
-    makeAutoObservable<ScheduleStore, "generation" | "installGeneration">(
+  constructor(runs: RunStore | null = null) {
+    this.runs = runs;
+    makeAutoObservable<
+      ScheduleStore,
+      "generation" | "installGeneration" | "runs"
+    >(
       this,
-      { generation: false, installGeneration: false },
+      { generation: false, installGeneration: false, runs: false },
       { autoBind: true },
     );
   }
@@ -216,11 +224,26 @@ export class ScheduleStore {
     const generation = ++this.installGeneration;
     this.installState = "installing";
     this.installError = null;
-    const result = await cliRun<unknown>("schedule_install", {
-      args: { kind: this.installKind, ...(cron ? { cron } : {}) },
-      configPath,
-    });
+    const args = { kind: this.installKind, ...(cron ? { cron } : {}) };
+    const result = this.runs
+      ? await trackRun(this.runs, {
+          kind: "scheduleInstall",
+          run: (runId) =>
+            cliRun<unknown>("schedule_install", {
+              args,
+              configPath,
+              runId,
+            }),
+        })
+      : await cliRun<unknown>("schedule_install", { args, configPath });
     if (generation !== this.installGeneration) {
+      return false;
+    }
+    if (!result.ok && result.error.code === "RUN_CANCELLED") {
+      this.installResult = null;
+      this.installError = null;
+      this.installWarnings = result.warnings;
+      this.installState = "cancelled";
       return false;
     }
     if (result.ok) {
