@@ -1,8 +1,8 @@
 # Security model
 
-Status: **security contract for `0.5.0` (release candidate).** The Rust bridge and screens are
+Status: **security contract for `0.5.0` (released 2026-11-16).** The Rust bridge and screens are
 implemented in this repository. This page states the controls the implementation must enforce and
-the residual risks accepted for the preview; where a control is future work, the text says so.
+the residual risks accepted for the pre-1.0 line; where a control is future work, the text says so.
 `0.5.0` adds a native archive picker whose result is the only arbitrary backup path `backup restore`
 may read, a portfolio root that must be a dialog-picked folder, and a two-phase restore that writes
 only with `--allow-write` plus the plan token. `0.4.0` added a native log-file picker whose result is
