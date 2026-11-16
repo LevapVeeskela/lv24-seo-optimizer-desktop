@@ -465,6 +465,33 @@ fn is_reserved_windows_name(name: &str) -> bool {
         && (stem.starts_with("COM") || stem.starts_with("LPT"))
         && stem.as_bytes()[3].is_ascii_digit()
 }
+/// Windows treats `\\server\share` (UNC), `\\?\C:\...` (verbatim) and
+/// `\\.\device` as absolute paths, so a workspace config could point the shell
+/// and the engine at a remote share. Resolving such a path performs an
+/// outbound SMB authentication (NetNTLM leakage) and can block for the SMB
+/// timeout. The check is string-based on purpose: it must catch the raw
+/// `storage.data_dir` value before it is joined to the config directory.
+pub fn is_unsafe_share_reference(raw: &str) -> bool {
+    let trimmed = raw.trim_start();
+    let forward = trimmed.replace('\\', "/");
+    forward.starts_with("//") || forward.starts_with("/??/")
+}
+
+/// Reject a raw path value that names a network share or a device namespace.
+pub fn ensure_local_path(raw: &str, label: &str) -> AppResult<()> {
+    if is_unsafe_share_reference(raw) {
+        return Err(AppError::new(
+            "INVALID_PATH",
+            format!("{label} must be a local path, got a network or device path: {raw}"),
+        )
+        .with_details(serde_json::json!({
+            "path": raw,
+            "reason": "network_or_device_path",
+        })));
+    }
+    Ok(())
+}
+
 /// Validate a path to a configuration file. The parent must already exist.
 pub fn validate_config_path(raw: &str) -> AppResult<PathBuf> {
     let path = validate_absolute_path(raw, "config")?;
@@ -869,6 +896,41 @@ mod tests {
         assert_eq!(error.code(), "PATH_NOT_ALLOWED");
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn a_symlink_swap_cannot_redirect_the_resolved_target() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("exports");
+        let outside = dir.path().join("outside");
+        fs::create_dir(&root).unwrap();
+        fs::create_dir(&outside).unwrap();
+        let real = root.join("report.html");
+        let evil = outside.join("payload.app");
+        fs::write(&real, "report").unwrap();
+        fs::write(&evil, "payload").unwrap();
+        std::os::unix::fs::symlink(&real, root.join("link.html")).unwrap();
+
+        // The check resolves the link while it still points inside the root.
+        let canonical = ensure_within_roots(&root.join("link.html"), std::slice::from_ref(&root))
+            .expect("a link inside the root is allowed");
+        assert_eq!(canonical, fs::canonicalize(&real).unwrap());
+
+        // Swap the link after the check. Opening the canonical path (what
+        // `open_path` now does) still reaches the checked file; the raw request
+        // would have followed the new target.
+        fs::remove_file(root.join("link.html")).unwrap();
+        std::os::unix::fs::symlink(&evil, root.join("link.html")).unwrap();
+        assert_eq!(canonical, fs::canonicalize(&real).unwrap());
+        assert_eq!(fs::read_to_string(&canonical).unwrap(), "report");
+        // And a link that already points outside is rejected outright.
+        assert_eq!(
+            ensure_within_roots(&root.join("link.html"), std::slice::from_ref(&root))
+                .unwrap_err()
+                .code(),
+            "PATH_NOT_ALLOWED"
+        );
+    }
+
     #[test]
     fn paths_with_spaces_and_unicode_are_accepted() {
         let dir = tempfile::tempdir().unwrap();
@@ -884,6 +946,32 @@ mod tests {
             path,
             "normalization must not touch spaces or non-ASCII characters"
         );
+    }
+
+    #[test]
+    fn network_and_device_paths_are_rejected() {
+        for raw in [
+            r"\\attacker\share\data",
+            r"\\?\C:\data",
+            r"\\.\PhysicalDrive0",
+            r"\??\C:\data",
+            "//attacker/share/data",
+        ] {
+            assert!(is_unsafe_share_reference(raw), "{raw}");
+            let error = ensure_local_path(raw, "storage.data_dir").unwrap_err();
+            assert_eq!(error.code(), "INVALID_PATH", "{raw}");
+            assert_eq!(error.details().unwrap()["reason"], "network_or_device_path");
+        }
+        for raw in [
+            r"C:\projects\seo\data",
+            "/home/user/project/data",
+            "data",
+            "~/data",
+            "./data",
+        ] {
+            assert!(!is_unsafe_share_reference(raw), "{raw}");
+            assert!(ensure_local_path(raw, "storage.data_dir").is_ok(), "{raw}");
+        }
     }
 
     #[test]

@@ -18,7 +18,7 @@ pub fn run() {
             let paths = paths::AppPaths::resolve(app.handle())?;
             let settings =
                 settings::SettingsStore::load(paths.config_dir.join(settings::SETTINGS_FILE))?;
-            app.manage(commands::AppState { paths, settings });
+            app.manage(commands::AppState::new(paths, settings));
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -33,8 +33,11 @@ pub fn run() {
             commands::write_text_file,
             commands::settings_get,
             commands::settings_set,
+            commands::pick_config,
             commands::open_path,
             commands::prepare_update,
+            commands::update_install,
+            commands::update_cancel,
         ])
         .run(tauri::generate_context!())
         .expect("error while running LV24 SEO Optimizer");

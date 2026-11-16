@@ -8,7 +8,7 @@ import {
   runDoctor,
 } from "@/entities/config/api/configApi";
 import { diffConfigs, diffToPatches } from "@/entities/config/lib/diff";
-import { setConfigValue } from "@/entities/config/lib/model";
+import { configsEqual, setConfigValue } from "@/entities/config/lib/model";
 import { parseConfigToml, serializeConfig } from "@/entities/config/lib/toml";
 import { validateConfig } from "@/entities/config/lib/validate";
 import {
@@ -21,6 +21,13 @@ import {
 } from "@/entities/config/model/types";
 
 export type ConfigState = "idle" | "loading" | "ready" | "error";
+
+/**
+ * Tri-state validation result. `skipped` means no answer was produced for the
+ * current draft (a call is already running, the workspace switched, or the user
+ * kept typing) — the caller must not turn that into an "invalid" message.
+ */
+export type ValidationOutcome = "valid" | "invalid" | "skipped";
 
 const KNOWN_ROOTS = new Set([
   "project",
@@ -58,11 +65,13 @@ export class ConfigStore {
   doctor: DoctorRun | null = null;
   doctorLoading = false;
   private generation = 0;
+  /** Bumped on every draft mutation so in-flight work can detect edits. */
+  private revision = 0;
 
   constructor() {
-    makeAutoObservable<ConfigStore, "generation">(
+    makeAutoObservable<ConfigStore, "generation" | "revision">(
       this,
-      { generation: false },
+      { generation: false, revision: false },
       { autoBind: true },
     );
   }
@@ -76,10 +85,7 @@ export class ConfigStore {
   }
 
   get dirty(): boolean {
-    if (!this.saved || !this.draft) {
-      return false;
-    }
-    return JSON.stringify(this.saved) !== JSON.stringify(this.draft);
+    return !configsEqual(this.saved, this.draft);
   }
 
   get canSave(): boolean {
@@ -132,6 +138,7 @@ export class ConfigStore {
 
   async load(path: string): Promise<boolean> {
     const generation = ++this.generation;
+    this.revision += 1;
     if (this.path !== path) {
       this.lastBackup = null;
       this.backups = [];
@@ -219,6 +226,7 @@ export class ConfigStore {
       return;
     }
     this.draft = setConfigValue(this.draft, path, value);
+    this.revision += 1;
     this.validation = null;
     this.saveError = null;
   }
@@ -227,15 +235,17 @@ export class ConfigStore {
     if (this.saved) {
       this.draft = cloneConfig(this.saved);
     }
+    this.revision += 1;
     this.validation = null;
     this.saveError = null;
   }
 
-  async validate(): Promise<boolean> {
+  async validate(): Promise<ValidationOutcome> {
     if (!this.draft || !this.path || this.validating) {
-      return false;
+      return "skipped";
     }
     const generation = this.generation;
+    const revision = this.revision;
     const local = validateConfig(this.draft);
     const content = serializeConfig(this.draft);
     const checkedAt = new Date().toISOString();
@@ -253,11 +263,16 @@ export class ConfigStore {
           envelope: null,
         };
         this.lastValidatedAt = checkedAt;
-        return false;
+        return "invalid";
       }
       const result = await configValidate(this.path, content);
       if (generation !== this.generation) {
-        return false;
+        return "skipped";
+      }
+      // The user kept typing while the engine validated the previous content;
+      // that answer does not describe the current draft.
+      if (revision !== this.revision) {
+        return "skipped";
       }
       const engine = result.envelope;
       const errors = [...local.errors];
@@ -286,10 +301,10 @@ export class ConfigStore {
         envelope: engine,
       };
       this.lastValidatedAt = checkedAt;
-      return valid;
+      return valid ? "valid" : "invalid";
     } catch (error) {
-      if (generation !== this.generation) {
-        return false;
+      if (generation !== this.generation || revision !== this.revision) {
+        return "skipped";
       }
       const appError = toAppError(error, "CONFIG_VALIDATE");
       this.validation = {
@@ -302,7 +317,7 @@ export class ConfigStore {
         envelope: null,
       };
       this.lastValidatedAt = checkedAt;
-      return false;
+      return "invalid";
     } finally {
       // A newer load/validation may already own the flag after a workspace
       // switch; an older request must not clear it.
@@ -369,21 +384,30 @@ export class ConfigStore {
       this.warnings = outcome.warnings;
       this.engineError = outcome.engineError;
       this.saved = draftSnapshot;
-      this.draft = cloneConfig(draftSnapshot);
-      const checkedAt = new Date().toISOString();
-      this.validation = {
-        valid: true,
-        checkedAt,
-        syntaxError: null,
-        engineMessage: null,
-        errors: [],
-        warnings: [
-          ...local.warnings,
-          ...outcome.warnings.map((message) => ({ path: "", message })),
-        ],
-        envelope: null,
-      };
-      this.lastValidatedAt = checkedAt;
+      const currentDraft = this.draft;
+      if (currentDraft && !configsEqual(currentDraft, draftSnapshot)) {
+        // The user kept typing while the engine wrote the file. Keep those
+        // edits and let the diff show them; replacing the draft here is the
+        // silent data loss this guard exists to prevent.
+        this.validation = null;
+      } else {
+        this.draft = cloneConfig(draftSnapshot);
+        const checkedAt = new Date().toISOString();
+        this.validation = {
+          valid: true,
+          checkedAt,
+          syntaxError: null,
+          engineMessage: null,
+          errors: [],
+          warnings: [
+            ...local.warnings,
+            ...outcome.warnings.map((message) => ({ path: "", message })),
+          ],
+          envelope: null,
+        };
+        this.lastValidatedAt = checkedAt;
+      }
+      this.revision += 1;
       await this.refreshEffective();
       return true;
     } catch (error) {
@@ -434,19 +458,25 @@ export class ConfigStore {
       }
       this.raw = content;
       this.saved = cloneConfig(snapshot);
-      this.draft = cloneConfig(snapshot);
       this.usedFullWrite = true;
-      const checkedAt = new Date().toISOString();
-      this.validation = {
-        valid: true,
-        checkedAt,
-        syntaxError: null,
-        engineMessage: null,
-        errors: [],
-        warnings,
-        envelope: null,
-      };
-      this.lastValidatedAt = checkedAt;
+      const currentDraft = this.draft;
+      if (currentDraft && !configsEqual(currentDraft, snapshot)) {
+        this.validation = null;
+      } else {
+        this.draft = cloneConfig(snapshot);
+        const checkedAt = new Date().toISOString();
+        this.validation = {
+          valid: true,
+          checkedAt,
+          syntaxError: null,
+          engineMessage: null,
+          errors: [],
+          warnings,
+          envelope: null,
+        };
+        this.lastValidatedAt = checkedAt;
+      }
+      this.revision += 1;
       await this.refreshEffective();
       return true;
     } catch (error) {

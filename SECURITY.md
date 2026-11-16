@@ -68,8 +68,15 @@ Read [`docs/security.md`](docs/security.md) for the full model. The essentials:
   value still travels only over stdin. Environment-provided tokens are read-only in the UI, and a
   `auth logout` that deleted nothing (`deleted: false`) is reported as such.
 - **Durable, private file writes.** Configuration and settings writes are atomic and fsynced (temp
-  file, rename, parent directory), temp drafts and backups are mode `0600`, and configuration reads
-  are bounded. Windows reserved device names are rejected in every path component.
+  file, rename, parent directory), temp drafts and backups are `0600` on POSIX and get an owner-only
+  DACL on Windows before any bytes are written, and configuration reads are bounded. Windows
+  reserved device names are rejected in every path component.
+- **Consent-gated config paths.** A new workspace path can only come from the native `pick_config`
+  dialog; `settings_set` rejects any other value with `PATH_NOT_APPROVED`. `storage.data_dir` rejects
+  UNC, verbatim and device paths (`INVALID_PATH`) before resolution, so a config cannot make the app
+  authenticate to a remote share.
+- **Redacted engine output.** Every engine `stderr` and every bounded output preview is redacted
+  before truncation and before it reaches the webview, a log or a diagnostics bundle.
 - **No local HTTP API.** The desktop uses a fixed, allow-listed child-process bridge. There is no
   loopback server to authenticate or expose.
 - **No telemetry.** Nothing is uploaded automatically except the updater's request for
@@ -128,6 +135,12 @@ Read [`docs/security.md`](docs/security.md) for the full model. The essentials:
   version that is not greater than the running one, so it cannot downgrade.
 - The updater never installs without an explicit user action. An unsaved configuration draft
   disables the install button.
+- **Install is owned by Rust.** The webview holds only `updater:allow-check`; it can read the manifest
+  but cannot call `downloadAndInstall`. `update_install(expectedVersion)` re-checks the endpoint,
+  refuses a version that differs from the one the user saw (`UPDATE_VERSION_MISMATCH`), serializes one
+  install at a time (`UPDATE_IN_PROGRESS`) and stops tracked sidecars before the installer runs.
+  `update_cancel` stops a download before installation begins (`UPDATE_CANCELLED`); after that point
+  it returns `false` and the UI does not claim a cancellation.
 - deb, rpm, MSI and the portable ZIP are manual-only. The UI disables in-app installation and links
   to the release page instead of pretending the package can replace itself.
 - **Sidecar cleanup before an update.** The updater stops only the engine PIDs this app instance

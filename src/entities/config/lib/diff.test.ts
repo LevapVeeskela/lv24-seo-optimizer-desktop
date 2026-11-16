@@ -66,7 +66,7 @@ describe("diffToPatches", () => {
 
   it("writes the block explicitly when only provider presence changed", () => {
     const saved = defaultConfig();
-    const draft = setConfigValue(saved, "providers.gsc.property", "");
+    const draft = setConfigValue(saved, "providers.gsc.present", true);
     const entries = diffConfigs(saved, draft);
 
     expect(entries.map((item) => item.path)).toEqual(["providers.gsc.present"]);
@@ -77,6 +77,32 @@ describe("diffToPatches", () => {
       { path: "providers.gsc.auth", value: "keychain" },
     ]);
     expect(patches.some((patch) => patch.path.endsWith(".present"))).toBe(false);
+  });
+
+  it("does not enable a provider from a field edit", () => {
+    const saved = defaultConfig();
+    const draft = setConfigValue(saved, "providers.gsc.property", "sc-domain:example.com");
+
+    expect(draft.providers.gsc.present).toBe(false);
+    expect(diffConfigs(saved, draft).map((item) => item.path)).toEqual([
+      "providers.gsc.property",
+    ]);
+  });
+
+  it("removes a disabled provider block and keeps the removal idempotent", () => {
+    const saved = defaultConfig();
+    saved.providers.gsc.present = true;
+    saved.providers.gsc.property = "sc-domain:example.com";
+
+    const draft = setConfigValue(saved, "providers.gsc.present", false);
+    const entries = diffConfigs(saved, draft);
+    expect(entries.map((item) => item.path)).toEqual(["providers.gsc.present"]);
+
+    expect(diffToPatches(entries, draft)).toEqual([
+      { path: "providers.gsc", value: null },
+    ]);
+    // Re-saving an already disabled block has nothing to write.
+    expect(diffConfigs(draft, draft)).toEqual([]);
   });
 });
 
@@ -110,7 +136,11 @@ describe("diffConfigs", () => {
 
   it("makes adding a provider block visible", () => {
     const saved = defaultConfig();
-    const draft = setConfigValue(saved, "providers.gsc.property", "sc-domain:example.com");
+    const draft = setConfigValue(
+      setConfigValue(saved, "providers.gsc.present", true),
+      "providers.gsc.property",
+      "sc-domain:example.com",
+    );
     expect(diffConfigs(saved, draft)).toEqual(
       expect.arrayContaining([
         expect.objectContaining({

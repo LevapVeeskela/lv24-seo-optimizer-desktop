@@ -5,6 +5,7 @@ import { RootStore } from "@/app/model/RootStore";
 import { I18nHost } from "@/app/providers/I18nHost";
 import { StoreProvider } from "@/app/providers/StoreProvider";
 import { AppRoutes } from "@/app/router";
+import { RouteErrorBoundary } from "@/app/ui/ErrorBoundary";
 import { FeedbackProvider } from "@/shared/ui/Feedback";
 
 export function App() {
@@ -20,7 +21,9 @@ export function App() {
         <FeedbackProvider>
           <HashRouter>
             <AppLayout>
-              <AppRoutes />
+              <RouteErrorBoundary>
+                <AppRoutes />
+              </RouteErrorBoundary>
             </AppLayout>
           </HashRouter>
         </FeedbackProvider>

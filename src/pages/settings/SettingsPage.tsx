@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { observer } from "mobx-react-lite";
 import { useRootStore } from "@/app/providers/StoreProvider";
 import { useI18n, type MessageKey } from "@/shared/i18n";
@@ -22,12 +22,13 @@ import {
   openPath,
   type AuthProvider,
   type AuthProviderStatus,
+  type ProvidersConfig,
   type PsiStrategy,
   type ReportLocale,
 } from "@/entities/config";
+import { pickConfig } from "@/entities/engine/api/shell";
 import { SaveConfigBar } from "@/features/save-config";
 import { UpdatePanel } from "@/features/update";
-import { pickConfigFile } from "@/shared/desktop/settings";
 import {
   SecretModal,
   SecretStore,
@@ -147,13 +148,17 @@ export const SettingsPage = observer(function SettingsPage() {
   };
 
   const validate = async () => {
-    const ok = await config.validate();
-    if (config.path !== configPath) {
+    const outcome = await config.validate();
+    if (outcome === "skipped" || config.path !== configPath) {
+      // A parallel call (double click) or a workspace switch: no answer for
+      // this draft, so no toast that would claim it is invalid.
       return;
     }
     notify(
-      ok ? t("settings.validation.valid") : t("settings.validation.invalid"),
-      ok ? "success" : "error",
+      outcome === "valid"
+        ? t("settings.validation.valid")
+        : t("settings.validation.invalid"),
+      outcome === "valid" ? "success" : "error",
     );
   };
 
@@ -243,9 +248,52 @@ export const SettingsPage = observer(function SettingsPage() {
     </div>
   );
 
+  /**
+   * One provider block with an explicit enable/disable toggle. The toggle is
+   * the only place that writes `providers.<id>.present`: a disabled block is
+   * removed from seo.toml on save, and its fields stay out of reach.
+   */
+  const providerBlock = (
+    provider: keyof ProvidersConfig,
+    labelKey: MessageKey,
+    fields: ReactNode,
+  ) => {
+    const present = draft?.providers[provider].present ?? false;
+    const label = t(labelKey);
+    return (
+      <div className="provider-block" key={provider}>
+        <div className="provider-block-head">
+          <label className="checkbox">
+            <input
+              type="checkbox"
+              checked={present}
+              aria-label={t("settings.providers.toggle", { provider: label })}
+              onChange={(event) =>
+                set(`providers.${provider}.present`, event.target.checked)
+              }
+            />
+            <span>{label}</span>
+          </label>
+          <Badge tone={present ? "success" : "neutral"}>
+            {present
+              ? t("settings.providers.enabled")
+              : t("settings.providers.disabled")}
+          </Badge>
+        </div>
+        {present ? (
+          <div className="form-grid">{fields}</div>
+        ) : (
+          <p className="muted small">{t("settings.providers.disabledHint")}</p>
+        )}
+      </div>
+    );
+  };
+
   const chooseConfig = async () => {
     try {
-      const selected = await pickConfigFile();
+      // SEC-05: the shell owns the native dialog and persists the path, so the
+      // webview cannot point config_write/config_patch at an arbitrary file.
+      const selected = await pickConfig();
       if (!selected) {
         return;
       }
@@ -516,133 +564,156 @@ export const SettingsPage = observer(function SettingsPage() {
                 {t("settings.providers.refreshTokens")}
               </Button>
             </div>
-            <div className="form-grid">
-              <Field
-                id="provider-gsc-property"
-                label={t("settings.providers.property")}
-                hint={t("settings.providers.propertyHint")}
-              >
-                <Input
-                  id="provider-gsc-property"
-                  value={draft.providers.gsc.property}
-                  onChange={(event) =>
-                    set("providers.gsc.property", event.target.value)
-                  }
-                />
-                {tokenBadge("gsc")}
-              </Field>
-              <div className="field">
-                <span>{t("settings.reserved.gscAuth")}</span>
-                <div className="badge-row">
-                  <Badge tone="neutral">{t("settings.reserved.noEffect")}</Badge>
-                  <code>{draft.providers.gsc.auth}</code>
-                </div>
-                <small>{t("settings.reserved.hint")}</small>
-              </div>
-              <Field
-                id="provider-yandex-host"
-                label={t("settings.providers.hostId")}
-                hint={t("settings.providers.hostIdHint")}
-              >
-                <Input
+            <div className="stack">
+              {providerBlock(
+                "gsc",
+                "secrets.provider.gsc",
+                <>
+                  <Field
+                    id="provider-gsc-property"
+                    label={t("settings.providers.property")}
+                    hint={t("settings.providers.propertyHint")}
+                  >
+                    <Input
+                      id="provider-gsc-property"
+                      value={draft.providers.gsc.property}
+                      onChange={(event) =>
+                        set("providers.gsc.property", event.target.value)
+                      }
+                    />
+                    {tokenBadge("gsc")}
+                  </Field>
+                  {reserved("settings.reserved.gscAuth", draft.providers.gsc.auth)}
+                </>,
+              )}
+              {providerBlock(
+                "yandex_webmaster",
+                "secrets.provider.yandex",
+                <Field
                   id="provider-yandex-host"
-                  value={draft.providers.yandex_webmaster.host_id}
-                  onChange={(event) =>
-                    set("providers.yandex_webmaster.host_id", event.target.value)
-                  }
-                />
-                {tokenBadge("yandex")}
-              </Field>
-              <Field
-                id="provider-metrika-counter"
-                label={t("settings.providers.counter")}
-                hint={t("settings.providers.counterHint")}
-              >
-                <Input
-                  id="provider-metrika-counter"
-                  value={draft.providers.yandex_metrika.counter}
-                  onChange={(event) =>
-                    set("providers.yandex_metrika.counter", event.target.value)
-                  }
-                />
-                {tokenBadge("metrika")}
-              </Field>
-              <Field
-                id="provider-bing-site"
-                label={t("settings.providers.site")}
-                hint={t("settings.providers.siteHint")}
-              >
-                <Input
-                  id="provider-bing-site"
-                  value={draft.providers.bing.site}
-                  onChange={(event) =>
-                    set("providers.bing.site", event.target.value)
-                  }
-                />
-                {tokenBadge("bing")}
-              </Field>
-              <Field
-                id="provider-crux-origin"
-                label={t("settings.providers.origin")}
-                hint={t("settings.providers.originHint")}
-              >
-                <Input
-                  id="provider-crux-origin"
-                  value={draft.providers.crux.origin}
-                  onChange={(event) =>
-                    set("providers.crux.origin", event.target.value)
-                  }
-                />
-                {tokenBadge("crux")}
-              </Field>
-              <Field
-                id="provider-psi-strategy"
-                label={t("settings.providers.strategy")}
-                error={errorFor("providers.psi.strategy")}
-              >
-                <Select
-                  id="provider-psi-strategy"
-                  value={draft.providers.psi.strategy}
-                  onChange={(event) =>
-                    set(
-                      "providers.psi.strategy",
-                      event.target.value as PsiStrategy,
-                    )
-                  }
+                  label={t("settings.providers.hostId")}
+                  hint={t("settings.providers.hostIdHint")}
                 >
-                  <option value="mobile">
-                    {t("settings.providers.strategyMobile")}
-                  </option>
-                  <option value="desktop">
-                    {t("settings.providers.strategyDesktop")}
-                  </option>
-                </Select>
-                {tokenBadge("psi")}
-              </Field>
-              <Field
-                id="provider-psi-urls"
-                label={t("settings.providers.urls")}
-                hint={t("settings.providers.urlsHint")}
-              >
-                <textarea
-                  id="provider-psi-urls"
-                  className="input"
-                  rows={4}
-                  value={listText(draft.providers.psi.urls)}
-                  aria-describedby={describedBy("provider-psi-urls", "providers.psi.urls")}
-                  onChange={(event) =>
-                    set("providers.psi.urls", parseList(event.target.value))
-                  }
-                />
-                {warningFor("providers.psi.urls") ? (
-                  <small className="muted">
-                    {warningFor("providers.psi.urls")}
-                  </small>
-                ) : null}
-              </Field>
-              {reserved(
-                "settings.reserved.metrikaGoals",
-                draft.providers.yandex_metrika.goals.join(", ") || "—",
+                  <Input
+                    id="provider-yandex-host"
+                    value={draft.providers.yandex_webmaster.host_id}
+                    onChange={(event) =>
+                      set("providers.yandex_webmaster.host_id", event.target.value)
+                    }
+                  />
+                  {tokenBadge("yandex")}
+                </Field>,
+              )}
+              {providerBlock(
+                "yandex_metrika",
+                "secrets.provider.metrika",
+                <>
+                  <Field
+                    id="provider-metrika-counter"
+                    label={t("settings.providers.counter")}
+                    hint={t("settings.providers.counterHint")}
+                  >
+                    <Input
+                      id="provider-metrika-counter"
+                      value={draft.providers.yandex_metrika.counter}
+                      onChange={(event) =>
+                        set("providers.yandex_metrika.counter", event.target.value)
+                      }
+                    />
+                    {tokenBadge("metrika")}
+                  </Field>
+                  {reserved(
+                    "settings.reserved.metrikaGoals",
+                    draft.providers.yandex_metrika.goals.join(", ") || "—",
+                  )}
+                </>,
+              )}
+              {providerBlock(
+                "bing",
+                "secrets.provider.bing",
+                <Field
+                  id="provider-bing-site"
+                  label={t("settings.providers.site")}
+                  hint={t("settings.providers.siteHint")}
+                >
+                  <Input
+                    id="provider-bing-site"
+                    value={draft.providers.bing.site}
+                    onChange={(event) =>
+                      set("providers.bing.site", event.target.value)
+                    }
+                  />
+                  {tokenBadge("bing")}
+                </Field>,
+              )}
+              {providerBlock(
+                "crux",
+                "secrets.provider.crux",
+                <Field
+                  id="provider-crux-origin"
+                  label={t("settings.providers.origin")}
+                  hint={t("settings.providers.originHint")}
+                >
+                  <Input
+                    id="provider-crux-origin"
+                    value={draft.providers.crux.origin}
+                    onChange={(event) =>
+                      set("providers.crux.origin", event.target.value)
+                    }
+                  />
+                  {tokenBadge("crux")}
+                </Field>,
+              )}
+              {providerBlock(
+                "psi",
+                "secrets.provider.psi",
+                <>
+                  <Field
+                    id="provider-psi-strategy"
+                    label={t("settings.providers.strategy")}
+                    error={errorFor("providers.psi.strategy")}
+                  >
+                    <Select
+                      id="provider-psi-strategy"
+                      value={draft.providers.psi.strategy}
+                      onChange={(event) =>
+                        set(
+                          "providers.psi.strategy",
+                          event.target.value as PsiStrategy,
+                        )
+                      }
+                    >
+                      <option value="mobile">
+                        {t("settings.providers.strategyMobile")}
+                      </option>
+                      <option value="desktop">
+                        {t("settings.providers.strategyDesktop")}
+                      </option>
+                    </Select>
+                    {tokenBadge("psi")}
+                  </Field>
+                  <Field
+                    id="provider-psi-urls"
+                    label={t("settings.providers.urls")}
+                    hint={t("settings.providers.urlsHint")}
+                  >
+                    <textarea
+                      id="provider-psi-urls"
+                      className="input"
+                      rows={4}
+                      value={listText(draft.providers.psi.urls)}
+                      aria-describedby={describedBy("provider-psi-urls", "providers.psi.urls")}
+                      onChange={(event) =>
+                        set("providers.psi.urls", parseList(event.target.value))
+                      }
+                    />
+                    {warningFor("providers.psi.urls") ? (
+                      <small className="muted">
+                        {warningFor("providers.psi.urls")}
+                      </small>
+                    ) : null}
+                  </Field>
+                </>,
               )}
             </div>
           </Card>

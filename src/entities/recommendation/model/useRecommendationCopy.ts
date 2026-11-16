@@ -1,6 +1,11 @@
 import { useMemo } from "react";
 import { useI18n } from "@/shared/i18n";
-import { recommendationCopy } from "./copy";
+import {
+  PROVIDER_LABEL_KEYS,
+  recommendationCopy,
+  recommendationTaskText,
+} from "./copy";
+import type { Recommendation, RecommendationTextField } from "./types";
 
 /**
  * Localized view of the recommendation UI copy. Technical source names stay
@@ -8,8 +13,21 @@ import { recommendationCopy } from "./copy";
  */
 export function useRecommendationCopy() {
   const { t } = useI18n();
-  return useMemo(
-    () => ({
+  return useMemo(() => {
+    const providerLabel = (id: string): string => {
+      const key = PROVIDER_LABEL_KEYS[id];
+      return key ? t(key) : id;
+    };
+    const sourceLabel = (source: string, provider?: string | null): string => {
+      const base = providerLabel(source);
+      if (!provider) {
+        return base;
+      }
+      const extra = providerLabel(provider);
+      return extra === base ? base : `${base} · ${extra}`;
+    };
+
+    return {
       ...recommendationCopy,
       title: t("recommendations.title"),
       subtitle: t("recommendations.subtitle"),
@@ -118,9 +136,15 @@ export function useRecommendationCopy() {
         kind: t("recommendations.evidence.kind"),
         note: t("recommendations.evidence.note"),
       },
-    }),
-    [t],
-  );
+      providerLabel,
+      sourceLabel,
+      taskText: (
+        recommendation: Recommendation,
+        field: RecommendationTextField,
+      ): string =>
+        recommendationTaskText(recommendation, field, t, providerLabel),
+    };
+  }, [t]);
 }
 
 export type RecommendationCopy = ReturnType<typeof useRecommendationCopy>;

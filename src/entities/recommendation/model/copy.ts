@@ -1,6 +1,9 @@
+import type { MessageKey, MessageParams } from "@/shared/i18n";
 import type {
+  Recommendation,
   RecommendationCategory,
   RecommendationSeverity,
+  RecommendationTextField,
 } from "./types";
 
 const severityLabels: Record<RecommendationSeverity, string> = {
@@ -155,3 +158,42 @@ export function recommendationSourceLabel(
 export function recommendationEvidenceLabel(key: string): string {
   return recommendationCopy.evidenceLabel[key] ?? key;
 }
+
+/**
+ * Message keys for the provider/source label used inside task copy. Product
+ * names are shared by all locales; the generic origins are translated.
+ */
+export const PROVIDER_LABEL_KEYS: Record<string, MessageKey> = {
+  gsc: "recommendations.provider.gsc",
+  yandex_webmaster: "recommendations.provider.yandex_webmaster",
+  yandex_metrika: "recommendations.provider.yandex_metrika",
+  bing: "recommendations.provider.bing",
+  crux: "recommendations.provider.crux",
+  psi: "recommendations.provider.psi",
+  crawl: "recommendations.provider.crawl",
+  report: "recommendations.provider.report",
+  stats: "recommendations.provider.stats",
+};
+
+/**
+ * Resolve one localisable task field. Older queued tasks have no `i18n` block,
+ * so the English text stored on the recommendation is the fallback. The
+ * `{label}` placeholder is resolved here, where the active locale is known.
+ */
+export function recommendationTaskText(
+  recommendation: Recommendation,
+  field: RecommendationTextField,
+  translate: (key: MessageKey, params?: MessageParams) => string,
+  providerLabel: (id: string) => string,
+): string {
+  const text = recommendation.i18n;
+  if (!text) {
+    return recommendation[field];
+  }
+  const params: MessageParams = { ...(text.params ?? {}) };
+  if (params.label !== undefined) {
+    params.label = providerLabel(recommendation.provider ?? recommendation.source);
+  }
+  return translate(text[field], params);
+}
+

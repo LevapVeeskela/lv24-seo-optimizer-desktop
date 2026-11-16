@@ -2,9 +2,6 @@ import { useEffect, useMemo, useState } from "react";
 import { observer } from "mobx-react-lite";
 import { Link } from "react-router-dom";
 import { useRootStore } from "@/app/providers/StoreProvider";
-import {
-  recommendationSourceLabel,
-} from "@/entities/recommendation/model/copy";
 import { useRecommendationCopy } from "@/entities/recommendation/model/useRecommendationCopy";
 import {
   RECOMMENDATION_SEVERITIES,
@@ -331,7 +328,7 @@ export const RecommendationsPage = observer(function RecommendationsPage({
                 <option value="all">{copy.filters.allSources}</option>
                 {sources.map((source) => (
                   <option key={source} value={source}>
-                    {recommendationSourceLabel(source)}
+                    {copy.sourceLabel(source)}
                   </option>
                 ))}
               </Select>

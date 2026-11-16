@@ -1709,3 +1709,28 @@ h1, h2, h3, h4, p { overflow-wrap: anywhere; }
   .app-header-actions { width: 100%; justify-content: space-between; }
 }
 
+
+/* Provider blocks: the toggle is the only control that writes presence. */
+.provider-block {
+  display: grid;
+  gap: var(--space-3);
+  padding-top: var(--space-4);
+  border-top: 1px solid var(--border);
+}
+
+.provider-block:first-child {
+  padding-top: 0;
+  border-top: none;
+}
+
+.provider-block-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+}
+
+.provider-block-head .checkbox {
+  font-weight: 600;
+}

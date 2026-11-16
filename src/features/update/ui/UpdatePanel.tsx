@@ -254,7 +254,14 @@ export const UpdatePanel = observer(function UpdatePanel() {
               </Button>
             ) : null}
             {!update.securityBlocked ? (
-              <Button variant="ghost" onClick={() => update.dismiss()}>
+              <Button
+                variant="ghost"
+                onClick={() =>
+                  update.downloading
+                    ? void update.cancel()
+                    : update.dismiss()
+                }
+              >
                 {update.downloading ? t("common.cancel") : t("update.dismiss")}
               </Button>
             ) : null}

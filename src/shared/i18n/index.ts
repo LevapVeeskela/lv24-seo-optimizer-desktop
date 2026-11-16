@@ -28,7 +28,7 @@ export function translate(
   key: MessageKey,
   params?: MessageParams,
 ): string {
-  const template = dictionaries[locale][key] ?? en[key];
+  const template = dictionaries[locale][key] ?? en[key] ?? key;
   if (!params) {
     return template;
   }

@@ -1,9 +1,14 @@
+use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex, MutexGuard};
+use std::time::Duration;
 
 use serde::Serialize;
-use tauri::{AppHandle, State};
+use tauri::{AppHandle, Emitter, State};
+use tauri_plugin_dialog::DialogExt;
 use tauri_plugin_opener::OpenerExt;
+use tauri_plugin_updater::UpdaterExt;
 use toml_edit::DocumentMut;
 use zeroize::Zeroizing;
 
@@ -15,9 +20,156 @@ use crate::settings::{Settings, SettingsPatch, SettingsStore};
 
 pub const MIN_ENGINE_VERSION: &str = "0.5.2";
 
+/// Progress event emitted by the Rust updater while it downloads a release.
+pub const UPDATE_PROGRESS_EVENT: &str = "update://progress";
+/// How often a running download checks the cancellation flag.
+const UPDATE_CANCEL_POLL: Duration = Duration::from_millis(100);
+/// Canonicalizing a path on a dead network share can block for the SMB
+/// timeout; the UI must get an answer before that.
+const PATH_RESOLVE_TIMEOUT: Duration = Duration::from_secs(10);
+const SETTINGS_WRITE_TIMEOUT: Duration = Duration::from_secs(10);
+const EXPORT_WRITE_TIMEOUT: Duration = Duration::from_secs(30);
+
 pub struct AppState {
     pub paths: paths::AppPaths,
-    pub settings: SettingsStore,
+    pub settings: Arc<SettingsStore>,
+    /// Config files the user picked in the native dialog. `settings_set` may
+    /// only activate one of these (or the already-active path).
+    approved_configs: Mutex<HashSet<PathBuf>>,
+    update: UpdateGate,
+}
+
+impl AppState {
+    pub fn new(paths: paths::AppPaths, settings: SettingsStore) -> Self {
+        Self {
+            paths,
+            settings: Arc::new(settings),
+            approved_configs: Mutex::new(HashSet::new()),
+            update: UpdateGate::default(),
+        }
+    }
+
+    fn approved_configs(&self) -> MutexGuard<'_, HashSet<PathBuf>> {
+        self.approved_configs
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    /// Record a config path the user chose in the native dialog and return its
+    /// canonical form. The webview never gets to name a path that did not come
+    /// from this dialog.
+    pub fn approve_config(&self, path: &Path) -> AppResult<PathBuf> {
+        let validated = paths::validate_config_path(&path.display().to_string())?;
+        // The canonical form is only used for the comparison: the webview and
+        // the settings file keep the normalized path the user picked.
+        let canonical = fs::canonicalize(&validated).unwrap_or_else(|_| validated.clone());
+        self.approved_configs().insert(canonical);
+        Ok(validated)
+    }
+
+    fn is_config_approved(&self, candidate: &Path) -> bool {
+        let approved = self.approved_configs();
+        if approved.contains(candidate) {
+            return true;
+        }
+        match fs::canonicalize(candidate) {
+            Ok(canonical) => approved.iter().any(|path| same_path(path, &canonical)),
+            Err(_) => approved.iter().any(|path| same_path(path, candidate)),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum UpdatePhase {
+    #[default]
+    Idle,
+    Downloading,
+    Installing,
+    Done,
+}
+
+#[derive(Default)]
+struct UpdateGateState {
+    phase: UpdatePhase,
+    cancelled: bool,
+}
+
+/// Serializes the Rust-side update: one download/install at a time, and a
+/// cancellation that is observed before the installer is started.
+#[derive(Default)]
+struct UpdateGate {
+    inner: Mutex<UpdateGateState>,
+}
+
+impl UpdateGate {
+    fn lock(&self) -> MutexGuard<'_, UpdateGateState> {
+        self.inner
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    fn begin(&self) -> AppResult<()> {
+        let mut inner = self.lock();
+        if matches!(
+            inner.phase,
+            UpdatePhase::Downloading | UpdatePhase::Installing
+        ) {
+            return Err(AppError::new(
+                "UPDATE_IN_PROGRESS",
+                "an update is already being downloaded or installed",
+            ));
+        }
+        inner.phase = UpdatePhase::Downloading;
+        inner.cancelled = false;
+        Ok(())
+    }
+
+    /// `true` when the download was cancelled before the installer started.
+    fn cancel(&self) -> bool {
+        let mut inner = self.lock();
+        if inner.phase != UpdatePhase::Downloading {
+            return false;
+        }
+        inner.cancelled = true;
+        true
+    }
+
+    fn is_cancelled(&self) -> bool {
+        self.lock().cancelled
+    }
+
+    fn start_install(&self) -> bool {
+        let mut inner = self.lock();
+        if inner.cancelled {
+            return false;
+        }
+        inner.phase = UpdatePhase::Installing;
+        true
+    }
+
+    fn finish(&self, installed: bool) {
+        let mut inner = self.lock();
+        inner.phase = if installed {
+            UpdatePhase::Done
+        } else {
+            UpdatePhase::Idle
+        };
+        inner.cancelled = false;
+    }
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateProgress {
+    pub downloaded: u64,
+    pub total: Option<u64>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateInstallResult {
+    pub version: String,
+    pub installed: bool,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -149,6 +301,161 @@ pub async fn prepare_update() -> Result<u32, AppError> {
     Ok(killed)
 }
 
+/// Download and install the announced release from the Rust side.
+///
+/// The webview can no longer call `downloadAndInstall` itself: it has no
+/// `updater:*` permission, so `prepare_update` (stop sidecars) and this
+/// re-check cannot be bypassed. The announced version must still be the one the
+/// user saw; a changed endpoint answer is a hard error, not a silent upgrade.
+#[tauri::command(rename_all = "camelCase")]
+pub async fn update_install(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    expected_version: String,
+) -> Result<UpdateInstallResult, AppError> {
+    let expected = expected_version.trim().to_string();
+    if expected.is_empty() {
+        return Err(AppError::new(
+            "INVALID_ARGUMENT",
+            "expectedVersion is empty",
+        ));
+    }
+    state.update.begin()?;
+    // Defense in depth: the webview calls `prepare_update` first, but the
+    // installer must never replace a file a tracked sidecar still locks.
+    cli::stop_tracked_children(cli::ENGINE_STOP_WAIT).await?;
+    let outcome = install_update(&app, &state.update, &expected).await;
+    state.update.finish(outcome.is_ok());
+    outcome
+}
+
+/// Cancel a running download. Returns `false` once the installer has started:
+/// at that point the update cannot be undone and the UI must say so instead of
+/// pretending the click cancelled it.
+#[tauri::command]
+pub fn update_cancel(state: State<'_, AppState>) -> bool {
+    state.update.cancel()
+}
+
+async fn install_update(
+    app: &AppHandle,
+    gate: &UpdateGate,
+    expected: &str,
+) -> AppResult<UpdateInstallResult> {
+    let updater = app.updater().map_err(|err| {
+        AppError::new(
+            "UPDATE_UNAVAILABLE",
+            format!("the updater is not configured: {err}"),
+        )
+    })?;
+    let update = updater
+        .check()
+        .await
+        .map_err(|err| AppError::new("UPDATE_CHECK", format!("cannot check for updates: {err}")))?;
+    let Some(update) = update else {
+        return Err(AppError::new(
+            "UPDATE_NOT_AVAILABLE",
+            "no update is available",
+        ));
+    };
+    if update.version != expected {
+        return Err(AppError::new(
+            "UPDATE_VERSION_MISMATCH",
+            format!(
+                "the announced release is {} but {expected} was requested",
+                update.version
+            ),
+        )
+        .with_details(serde_json::json!({
+            "announced": update.version,
+            "expected": expected,
+        })));
+    }
+
+    let mut downloaded = 0u64;
+    let emitter = app.clone();
+    let mut download = Box::pin(update.download(
+        move |len: usize, content_length: Option<u64>| {
+            downloaded = downloaded.saturating_add(len as u64);
+            let _ = emitter.emit(
+                UPDATE_PROGRESS_EVENT,
+                UpdateProgress {
+                    downloaded,
+                    total: content_length,
+                },
+            );
+        },
+        || {},
+    ));
+    let bytes = loop {
+        tokio::select! {
+            result = &mut download => break result.map_err(|err| {
+                AppError::new("UPDATE_INSTALL", format!("cannot download the update: {err}"))
+            })?,
+            _ = tokio::time::sleep(UPDATE_CANCEL_POLL) => {
+                // Dropping the download future closes the HTTP stream, so a
+                // cancelled update is never installed.
+                if gate.is_cancelled() {
+                    return Err(AppError::new(
+                        "UPDATE_CANCELLED",
+                        "the update download was cancelled",
+                    ));
+                }
+            }
+        }
+    };
+    if !gate.start_install() {
+        return Err(AppError::new(
+            "UPDATE_CANCELLED",
+            "the update download was cancelled",
+        ));
+    }
+    let _ = app.emit(
+        UPDATE_PROGRESS_EVENT,
+        UpdateProgress {
+            downloaded: bytes.len() as u64,
+            total: Some(bytes.len() as u64),
+        },
+    );
+    update.install(&bytes).map_err(|err| {
+        AppError::new(
+            "UPDATE_INSTALL",
+            format!("cannot install the update: {err}"),
+        )
+    })?;
+    Ok(UpdateInstallResult {
+        version: update.version.clone(),
+        installed: true,
+    })
+}
+
+/// Open the native file dialog and remember the chosen config. This is the
+/// only way a new `seo.toml` may become the active project config, so a
+/// workspace config cannot redirect `config_write` to an arbitrary file.
+#[tauri::command]
+pub async fn pick_config(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<Option<String>, AppError> {
+    let picked = app
+        .dialog()
+        .file()
+        .set_title("seo.toml")
+        .add_filter("TOML", &["toml"])
+        .blocking_pick_file();
+    let Some(file) = picked else {
+        return Ok(None);
+    };
+    let path = file.into_path().map_err(|err| {
+        AppError::new(
+            "INVALID_PATH",
+            format!("cannot resolve the picked file: {err}"),
+        )
+    })?;
+    let approved = state.approve_config(&path)?;
+    Ok(Some(approved.display().to_string()))
+}
+
 /// Startup handshake. It never fails because the engine is missing: the
 /// missing/broken engine is returned as status data.
 #[tauri::command]
@@ -166,12 +473,7 @@ pub async fn shell_status(
         .as_ref()
         .map(|path| path.is_file())
         .unwrap_or(false);
-    let data_dir = config_path.as_ref().and_then(|path| {
-        config::read_raw(path)
-            .ok()
-            .and_then(|raw| raw.parse::<DocumentMut>().ok())
-            .and_then(|document| config::data_dir_from_document(&document, path))
-    });
+    let data_dir = config_path.as_ref().and_then(|path| safe_data_dir(path));
 
     let mut engine = EngineStatus::default();
     match paths::locate_engine(&app) {
@@ -352,6 +654,7 @@ pub async fn config_patch(
     let raw = config::read_raw(&target)?;
     let mut document = config::parse_toml(&raw)?;
     config::apply_patches(&mut document, &patches)?;
+    ensure_local_data_dir(&document, &target)?;
     let new_raw = document.to_string();
     if new_raw.len() as u64 > config::MAX_CONFIG_BYTES {
         return Err(AppError::new(
@@ -436,9 +739,10 @@ pub async fn config_patch(
 
 /// Write an export only under the app/project config and data roots. The
 /// active config and desktop settings files are reserved for their own
-/// validated commands.
+/// validated commands. The write runs off the UI thread: a 64 MiB export or a
+/// dead network share must not freeze the window.
 #[tauri::command(rename_all = "camelCase")]
-pub fn write_text_file(
+pub async fn write_text_file(
     state: State<'_, AppState>,
     path: String,
     content: String,
@@ -451,33 +755,38 @@ pub fn write_text_file(
         ));
     }
     let requested = paths::validate_absolute_path(&path, "export")?;
-    ensure_export_target(&requested)?;
+    let app_paths = state.paths.clone();
     let settings = state.settings.get();
-    if let Some(config_path) = settings.config_path.as_deref() {
-        if same_path(&requested, &PathBuf::from(config_path)) {
+    let settings_path = state.settings.path().to_path_buf();
+    spawn_blocking_with_timeout("export write", EXPORT_WRITE_TIMEOUT, move || {
+        ensure_export_target(&requested)?;
+        if let Some(config_path) = settings.config_path.as_deref() {
+            if same_path(&requested, &PathBuf::from(config_path)) {
+                return Err(AppError::new(
+                    "PATH_NOT_ALLOWED",
+                    "the active config must be changed with config_write/config_patch",
+                ));
+            }
+        }
+        if same_path(&requested, &settings_path) {
             return Err(AppError::new(
                 "PATH_NOT_ALLOWED",
-                "the active config must be changed with config_write/config_patch",
+                "desktop settings are reserved for settings_set",
             ));
         }
-    }
-    if same_path(&requested, state.settings.path()) {
-        return Err(AppError::new(
-            "PATH_NOT_ALLOWED",
-            "desktop settings are reserved for settings_set",
-        ));
-    }
-    let roots = vec![state.paths.export_dir.clone()];
-    let target = paths::ensure_write_within_roots(&requested, &roots)?;
-    // Re-check the resolved target: an 8.3 alias or a junction can name a file
-    // the raw string did not spell out, so the reserved/extension checks must
-    // run on what will actually be written.
-    ensure_export_target(&target)?;
-    let outcome = config::write_text_atomic(&target, &content)?;
-    Ok(WriteTextResult {
-        path: requested.display().to_string(),
-        bytes: outcome.bytes,
+        let roots = vec![app_paths.export_dir.clone()];
+        let target = paths::ensure_write_within_roots(&requested, &roots)?;
+        // Re-check the resolved target: an 8.3 alias or a junction can name a
+        // file the raw string did not spell out, so the reserved/extension
+        // checks must run on what will actually be written.
+        ensure_export_target(&target)?;
+        let outcome = config::write_text_atomic(&target, &content)?;
+        Ok(WriteTextResult {
+            path: requested.display().to_string(),
+            bytes: outcome.bytes,
+        })
     })
+    .await
 }
 
 /// Raw TOML plus the redacted effective config from
@@ -514,9 +823,12 @@ pub async fn config_read(
     match config::parse_toml(&raw) {
         Ok(document) => {
             result.data_dir = config::data_dir_from_document(&document, &config_path)
+                .ok()
+                .flatten()
+                .filter(|path| !paths::is_unsafe_share_reference(&path.to_string_lossy()))
                 .map(|path| path.display().to_string());
         }
-        Err(err) => result.syntax_error = Some(err.message()),
+        Err(err) => result.syntax_error = Some(redacted_syntax_error(&err)),
     }
 
     match paths::locate_engine(&app) {
@@ -548,11 +860,12 @@ pub async fn config_read(
                         .pointer("/data/data_dir")
                         .and_then(serde_json::Value::as_str)
                     {
-                        result.data_dir = Some(
-                            config::resolve_data_dir(data_dir, &config_path)
-                                .display()
-                                .to_string(),
-                        );
+                        let resolved = config::resolve_data_dir(data_dir, &config_path);
+                        // The engine may have accepted a share from a config
+                        // written by another tool; never surface it.
+                        if !paths::is_unsafe_share_reference(&resolved.to_string_lossy()) {
+                            result.data_dir = Some(resolved.display().to_string());
+                        }
                     }
                     if let Some(error) = envelope_error(&run.envelope) {
                         result.engine_error = Some(error);
@@ -591,7 +904,9 @@ pub async fn config_validate(
         return Ok(ConfigValidateResult {
             path: target.display().to_string(),
             valid: false,
-            syntax_error: Some(err.message()),
+            // A TOML error quotes the offending line, which can be a token the
+            // user pasted before the syntax error was fixed.
+            syntax_error: Some(redacted_syntax_error(&err)),
             envelope: None,
             exit_code: None,
             stderr: String::new(),
@@ -631,7 +946,8 @@ pub async fn config_write(
             ),
         ));
     }
-    config::parse_toml(&content)?;
+    let document = config::parse_toml(&content)?;
+    ensure_local_data_dir(&document, &target)?;
 
     let location = paths::locate_engine(&app)?;
     let validation = config::validate_with_engine(&location, &target, &content).await?;
@@ -667,34 +983,144 @@ pub fn settings_get(state: State<'_, AppState>) -> SettingsResponse {
 }
 
 #[tauri::command]
-pub fn settings_set(
+pub async fn settings_set(
     state: State<'_, AppState>,
     settings: SettingsPatch,
 ) -> Result<SettingsResponse, AppError> {
-    let updated = settings.apply_to(state.settings.get());
-    let settings = state.settings.set(updated)?;
-    Ok(SettingsResponse {
-        settings,
-        path: state.settings.path().display().to_string(),
+    let current = state.settings.get();
+    let updated = settings.apply_to(current.clone());
+    ensure_config_path_allowed(&state, &current, &updated)?;
+    let store = Arc::clone(&state.settings);
+    spawn_blocking_with_timeout("settings write", SETTINGS_WRITE_TIMEOUT, move || {
+        let settings = store.set(updated)?;
+        Ok(SettingsResponse {
+            settings,
+            path: store.path().display().to_string(),
+        })
     })
+    .await
 }
 
 /// Open a report/folder only when it lives under the app config/data dirs or
-/// the selected project's config/data dirs.
+/// the selected project's config/data dirs. The canonical path is resolved off
+/// the UI thread and opened instead of the raw request: a symlink or an
+/// executable handler swapped in after the check must not be launched.
 #[tauri::command]
-pub fn open_path(app: AppHandle, state: State<'_, AppState>, path: String) -> Result<(), AppError> {
-    let roots = allowed_roots(state.inner());
+pub async fn open_path(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    path: String,
+) -> Result<(), AppError> {
     let requested = paths::validate_absolute_path(&path, "open")?;
-    let canonical = paths::ensure_within_roots(&requested, &roots)?;
-    ensure_open_target(&canonical)?;
+    let app_paths = state.paths.clone();
+    let settings = state.settings.get();
+    let canonical = spawn_blocking_with_timeout("open path", PATH_RESOLVE_TIMEOUT, move || {
+        let roots = allowed_roots(&app_paths, &settings);
+        let canonical = paths::ensure_within_roots(&requested, &roots)?;
+        ensure_open_target(&canonical)?;
+        Ok(canonical)
+    })
+    .await?;
     app.opener()
-        .open_path(requested.to_string_lossy().to_string(), None::<&str>)
+        .open_path(
+            opener_path(&canonical).to_string_lossy().to_string(),
+            None::<&str>,
+        )
         .map_err(|err| {
             AppError::new(
                 "OPEN_PATH",
-                format!("cannot open {}: {err}", requested.display()),
+                format!("cannot open {}: {err}", canonical.display()),
             )
         })
+}
+
+/// Windows `fs::canonicalize` returns a verbatim path (`\\?\C:\...`). The
+/// check must use it, but shell-execution APIs reject that prefix, so the
+/// opener receives the same file without it. No re-resolution happens here.
+fn opener_path(path: &Path) -> PathBuf {
+    #[cfg(windows)]
+    {
+        let raw = path.to_string_lossy();
+        if let Some(rest) = raw.strip_prefix(r"\\?\") {
+            // `\\?\C:\...` -> `C:\...`; `\\?\UNC\...` stays verbatim because a
+            // plain UNC path is not allowed anywhere in this shell.
+            let bytes = rest.as_bytes();
+            if bytes.len() > 2 && bytes[1] == b':' {
+                return PathBuf::from(rest);
+            }
+        }
+        path.to_path_buf()
+    }
+    #[cfg(not(windows))]
+    {
+        path.to_path_buf()
+    }
+}
+
+/// SEC-05: a config path may only become active when it equals the current one
+/// or came from the native dialog (`pick_config`). Otherwise any `.toml` on
+/// disk could be made the target of `config_write`/`config_patch`.
+fn ensure_config_path_allowed(
+    state: &AppState,
+    current: &Settings,
+    updated: &Settings,
+) -> AppResult<()> {
+    if updated.config_path == current.config_path {
+        return Ok(());
+    }
+    let Some(requested) = updated.config_path.as_deref() else {
+        // Clearing the selection is always allowed.
+        return Ok(());
+    };
+    let validated = paths::validate_config_path(requested)?;
+    if state.is_config_approved(&validated) {
+        return Ok(());
+    }
+    Err(AppError::new(
+        "PATH_NOT_APPROVED",
+        "choose the project config with the native file dialog",
+    )
+    .with_details(serde_json::json!({
+        "path": validated.display().to_string(),
+    })))
+}
+
+/// Run blocking filesystem work off the UI thread with a deadline. A blocking
+/// task cannot be aborted, so a timed-out call keeps its thread until the
+/// kernel call returns; the UI is free either way.
+async fn spawn_blocking_with_timeout<T, F>(
+    label: &'static str,
+    timeout: Duration,
+    work: F,
+) -> AppResult<T>
+where
+    F: FnOnce() -> AppResult<T> + Send + 'static,
+    T: Send + 'static,
+{
+    match tokio::time::timeout(timeout, tokio::task::spawn_blocking(work)).await {
+        Ok(Ok(result)) => result,
+        Ok(Err(err)) => Err(AppError::new(
+            "INTERNAL",
+            format!("{label} task failed: {err}"),
+        )),
+        Err(_) => Err(AppError::new(
+            "PATH_TIMEOUT",
+            format!("{label} did not finish within {}s", timeout.as_secs()),
+        )),
+    }
+}
+
+/// A TOML parser error can quote the offending line. Redact it before it is
+/// serialized into `ConfigReadResult`/`ConfigValidateResult`.
+fn redacted_syntax_error(error: &AppError) -> String {
+    crate::error::redact_secrets(&error.message())
+}
+
+/// A draft must not persist a `storage.data_dir` that names a network share or
+/// a device: every later run would resolve it and authenticate to the share.
+fn ensure_local_data_dir(document: &DocumentMut, config_path: &Path) -> AppResult<()> {
+    config::data_dir_from_document(document, config_path)?;
+    Ok(())
 }
 
 /// Resolve the config a command may touch. The webview may only name the
@@ -774,13 +1200,12 @@ fn report_output_dir(state: &AppState, requested: Option<String>) -> AppResult<P
     Ok(directory)
 }
 
-fn allowed_roots(state: &AppState) -> Vec<PathBuf> {
-    let settings = state.settings.get();
+fn allowed_roots(app_paths: &paths::AppPaths, settings: &Settings) -> Vec<PathBuf> {
     let mut roots = vec![
-        state.paths.config_dir.clone(),
-        state.paths.data_dir.clone(),
-        state.paths.log_dir.clone(),
-        state.paths.export_dir.clone(),
+        app_paths.config_dir.clone(),
+        app_paths.data_dir.clone(),
+        app_paths.log_dir.clone(),
+        app_paths.export_dir.clone(),
     ];
     if let Some(raw) = &settings.config_path {
         let config_path = PathBuf::from(raw);
@@ -791,7 +1216,8 @@ fn allowed_roots(state: &AppState) -> Vec<PathBuf> {
         }
         if let Ok(raw) = config::read_raw(&config_path) {
             if let Ok(document) = raw.parse::<DocumentMut>() {
-                if let Some(data_dir) = config::data_dir_from_document(&document, &config_path) {
+                if let Ok(Some(data_dir)) = config::data_dir_from_document(&document, &config_path)
+                {
                     if data_dir.parent().is_some() {
                         roots.push(data_dir);
                     }
@@ -799,7 +1225,22 @@ fn allowed_roots(state: &AppState) -> Vec<PathBuf> {
             }
         }
     }
+    // A workspace config must not add a network share or a device namespace to
+    // the allow-list: canonicalizing it performs an outbound SMB authentication
+    // and can hang for the SMB timeout.
+    roots.retain(|root| !paths::is_unsafe_share_reference(&root.to_string_lossy()));
     roots
+}
+
+/// `storage.data_dir` as it may be reported to the webview: absent, unreadable
+/// and network/device values all become `None`.
+fn safe_data_dir(config_path: &Path) -> Option<PathBuf> {
+    let raw = config::read_raw(config_path).ok()?;
+    let document = raw.parse::<DocumentMut>().ok()?;
+    let data_dir = config::data_dir_from_document(&document, config_path)
+        .ok()
+        .flatten()?;
+    (!paths::is_unsafe_share_reference(&data_dir.to_string_lossy())).then_some(data_dir)
 }
 
 fn same_path(left: &Path, right: &Path) -> bool {
@@ -968,7 +1409,11 @@ mod tests {
         let mut current = settings.get();
         current.config_path = active.map(|path| path.display().to_string());
         settings.set(current).unwrap();
-        AppState { paths, settings }
+        let state = AppState::new(paths, settings);
+        if let Some(active) = active {
+            state.approve_config(active).unwrap();
+        }
+        state
     }
 
     #[test]
@@ -1041,6 +1486,148 @@ mod tests {
         fs::write(&file, "x").unwrap();
         assert_eq!(
             report_output_dir(&state, Some(file.display().to_string()))
+                .unwrap_err()
+                .code(),
+            "INVALID_PATH"
+        );
+    }
+
+    #[test]
+    fn only_a_dialog_picked_config_is_approved() {
+        let dir = tempfile::tempdir().unwrap();
+        let active = dir.path().join("seo.toml");
+        let other = dir.path().join("other.toml");
+        fs::write(&active, "version = 1\n").unwrap();
+        fs::write(&other, "version = 1\n").unwrap();
+        let state = app_state(dir.path(), Some(&active));
+
+        // The already-active config stays usable without a new dialog.
+        assert!(state.is_config_approved(&active));
+        // Any other .toml on disk is not a valid target for settings_set.
+        assert!(!state.is_config_approved(&other));
+
+        let approved = state.approve_config(&other).unwrap();
+        assert_eq!(approved, other);
+        assert!(state.is_config_approved(&other));
+        // An 8.3 alias of the same file compares equal to the canonical entry.
+        assert!(state.is_config_approved(&dir.path().join(".").join("other.toml")));
+
+        // Only a .toml with an existing parent can be approved.
+        assert_eq!(
+            state
+                .approve_config(&dir.path().join("notes.txt"))
+                .unwrap_err()
+                .code(),
+            "INVALID_PATH"
+        );
+        assert!(!state.is_config_approved(&dir.path().join("missing").join("seo.toml")));
+    }
+
+    #[test]
+    fn network_shares_are_never_an_allowed_root() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = dir.path().join("seo.toml");
+        fs::write(
+            &config,
+            "[storage]\ndata_dir = \"\\\\\\\\attacker\\\\share\\\\data\"\n",
+        )
+        .unwrap();
+        let state = app_state(dir.path(), Some(&config));
+
+        let roots = allowed_roots(&state.paths, &state.settings.get());
+        assert!(roots
+            .iter()
+            .all(|root| { !paths::is_unsafe_share_reference(&root.to_string_lossy()) }));
+        assert!(roots.contains(&state.paths.config_dir));
+        // The share is not surfaced to the webview either.
+        assert!(safe_data_dir(&config).is_none());
+    }
+
+    #[test]
+    fn the_update_gate_serializes_and_cancels() {
+        let gate = UpdateGate::default();
+        assert!(gate.begin().is_ok());
+        // A second concurrent install is refused, not queued.
+        assert_eq!(gate.begin().unwrap_err().code(), "UPDATE_IN_PROGRESS");
+        assert!(gate.cancel());
+        // Once cancelled the installer must not start.
+        assert!(!gate.start_install());
+        gate.finish(false);
+        assert!(!gate.is_cancelled());
+        // A cancelled download can be retried.
+        assert!(gate.begin().is_ok());
+        assert!(gate.start_install());
+        // After the installer started, the click cannot cancel anything.
+        assert!(!gate.cancel());
+        gate.finish(true);
+        assert!(!gate.cancel());
+    }
+
+    #[test]
+    fn a_toml_syntax_error_never_quotes_a_credential() {
+        let raw = "token = \"sk-live-123\"\n[storage\n";
+        let error = config::parse_toml(raw).unwrap_err();
+        let redacted = redacted_syntax_error(&error);
+        assert!(!redacted.contains("sk-live-123"), "{redacted}");
+        assert_eq!(error.code(), "CONFIG_TOML_INVALID");
+    }
+
+    #[test]
+    fn the_opener_receives_a_path_without_the_windows_verbatim_prefix() {
+        let verbatim = if cfg!(windows) {
+            PathBuf::from(r"\\?\C:\Users\me\exports\report.html")
+        } else {
+            PathBuf::from("/home/me/exports/report.html")
+        };
+        let opened = opener_path(&verbatim);
+        #[cfg(windows)]
+        {
+            assert_eq!(opened, PathBuf::from(r"C:\Users\me\exports\report.html"));
+            // A UNC path keeps its verbatim prefix; it is never allow-listed.
+            let unc = PathBuf::from(r"\\?\UNC\server\share\report.html");
+            assert_eq!(opener_path(&unc), unc);
+        }
+        #[cfg(not(windows))]
+        assert_eq!(opened, verbatim);
+    }
+
+    #[test]
+    fn settings_can_only_activate_an_approved_config() {
+        let dir = tempfile::tempdir().unwrap();
+        let active = dir.path().join("seo.toml");
+        let other = dir.path().join("other.toml");
+        fs::write(&active, "version = 1\n").unwrap();
+        fs::write(&other, "version = 1\n").unwrap();
+        let state = app_state(dir.path(), Some(&active));
+        let current = state.settings.get();
+
+        let mut updated = current.clone();
+        updated.config_path = Some(other.display().to_string());
+        let error = ensure_config_path_allowed(&state, &current, &updated).unwrap_err();
+        assert_eq!(error.code(), "PATH_NOT_APPROVED");
+        assert_eq!(
+            error.details().unwrap()["path"],
+            other.display().to_string()
+        );
+
+        // After the native dialog approved the file, the same patch is allowed.
+        state.approve_config(&other).unwrap();
+        assert!(ensure_config_path_allowed(&state, &current, &updated).is_ok());
+
+        // An unchanged selection and an explicit clear never need a dialog.
+        assert!(ensure_config_path_allowed(&state, &current, &current).is_ok());
+        let cleared = Settings {
+            config_path: None,
+            ..current.clone()
+        };
+        assert!(ensure_config_path_allowed(&state, &current, &cleared).is_ok());
+
+        // A path that is not a valid config is rejected before the approval
+        // check, with the shell's stable INVALID_PATH code.
+        let mut invalid = current.clone();
+        invalid.config_path = Some(dir.path().join("notes.txt").display().to_string());
+        assert_eq!(
+            ensure_config_path_allowed(&state, &current, &invalid)
                 .unwrap_err()
                 .code(),
             "INVALID_PATH"

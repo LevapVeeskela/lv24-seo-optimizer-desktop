@@ -9,6 +9,7 @@ import type { Recommendation } from "@/entities/recommendation/model/types";
 import {
   ensureMarkdownPath,
   exportRecommendationPrompt,
+  isWithinDirectory,
 } from "./actions";
 
 const saveMock = vi.mocked(save);
@@ -80,6 +81,49 @@ describe("exportRecommendationPrompt", () => {
       { status: "canceled" },
     );
     expect(writeMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects a save outside the export root before writing", async () => {
+    saveMock.mockResolvedValue("C:\\Users\\Public\\gsc-opportunity-1.md");
+
+    const result = await exportRecommendationPrompt(recommendation, null, null, {
+      defaultDir: "C:\\Users\\me\\AppData\\Roaming\\by.lv24.seo.desktop\\exports",
+    });
+
+    expect(result.status).toBe("failed");
+    expect(result.error?.code).toBe("PATH_NOT_ALLOWED");
+    expect(result.error?.message).toContain("Exports must be saved under");
+    // The shell is never asked to write a path it would refuse.
+    expect(writeMock).not.toHaveBeenCalled();
+  });
+
+  it("accepts a nested folder under the export root", async () => {
+    saveMock.mockResolvedValue("/home/user/exports/2026-11/gsc-opportunity-1.md");
+    writeMock.mockResolvedValue({
+      path: "/home/user/exports/2026-11/gsc-opportunity-1.md",
+      bytes: 10,
+    });
+
+    await expect(
+      exportRecommendationPrompt(recommendation, null, null, {
+        defaultDir: "/home/user/exports",
+      }),
+    ).resolves.toEqual({ status: "exported" });
+    expect(writeMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("compares export roots case-insensitively and without a trailing slash", () => {
+    expect(isWithinDirectory("C:\\Exports\\task.md", "c:\\exports\\")).toBe(true);
+    expect(isWithinDirectory("/home/user/exports/task.md", "/home/user/exports")).toBe(
+      true,
+    );
+    expect(isWithinDirectory("/home/user/exports-evil/task.md", "/home/user/exports")).toBe(
+      false,
+    );
+    expect(isWithinDirectory("/home/user/Exports/task.md", "/home/user/exports")).toBe(
+      true,
+    );
+    expect(isWithinDirectory("/home/user/exports/task.md", "")).toBe(false);
   });
 
   it("reports a rejected write with the shell's actionable error", async () => {

@@ -80,9 +80,9 @@ Trigger: **Actions → Desktop build → Run workflow**. It has no push, pull-re
 | `tag` | string | empty | `vX.Y.Z` release tag; required when `publish=true` |
 
 The `engine_version` input must equal `scripts/cli-checksums.json`; the release gate rejects the
-manifest mismatch. For `0.2.2` that value is `0.5.2`, so the workflow input default must be bumped
-from `0.5.1` in the same release commit. A different value is allowed for a rebuild only when
-`scripts/cli-checksums.json` is updated in the same commit.
+manifest mismatch. The workflow input default and the pin name the same version and are bumped
+together in the release commit (`0.5.2` for the `0.2.2` line). A different value is allowed for a
+rebuild only when `scripts/cli-checksums.json` is updated in the same commit.
 
 ### Matrix
 
@@ -100,6 +100,29 @@ document the new baseline. Do not silently raise the minimum glibc without a rel
 All runners are standard GitHub-hosted runners. No larger runner, paid minute, paid storage or paid
 signing service is used. Artifact retention is **7 days**; the release job uploads the final assets
 to the GitHub release, which is the durable distribution channel.
+
+### Pull-request CI gates
+
+[`.github/workflows/ci.yml`](../.github/workflows/ci.yml) runs on every pull request and on `main`
+(public repository, standard runners only):
+
+| Job | What it proves |
+|---|---|
+| `web` | `npm run typecheck`, `npm test` (unit + release-script tests), `npm run build` |
+| `contracts` | the committed contracts still match the pinned engine |
+| `rust` | `cargo fmt --check`, `cargo clippy -D warnings`, `cargo test` on linux-x64, windows-x64, macos-arm64 and macos-x64 |
+| `audit` | `npm audit --audit-level=high` and `cargo audit` (RustSec) |
+
+The Rust matrix includes `macos-15-intel`, the runner the release uses for `x86_64-apple-darwin`
+(QA-05), so an x64 macOS regression fails on the PR instead of at release time. Both workflows
+install Rust `1.95.0` rather than `stable`, so the shipped binary is built by the reviewed compiler;
+bump that pin deliberately with the release that reviews the new toolchain (QA-09).
+
+The release scripts are covered by `scripts/*.test.mjs` (QA-01/QA-02) against fixture directories in
+the OS temp dir: `merge-latest-json.mjs`, the published-asset allowlist, `SHA256SUMS.txt`, the
+portable ZIP and its `.sha256`, and validation against `contracts/latest.schema.json`. A bug fails
+`npm test` on the pull request, not the owner-gated publish run. `npm run test:release` runs only
+that subset.
 
 ## 4. Sidecar build
 
@@ -211,8 +234,8 @@ release build**:
 ```
 
 The values above illustrate the shape; the committed file is authoritative. For `0.5.2` every target
-is `null` until the `0.5.2` sidecar is rebuilt and reviewed on a matching host; the `0.5.1` Windows
-pin does not carry over because the executable changes with the engine. `null` means “not pinned
+is `null` until the `0.5.2` sidecar is rebuilt and reviewed on a matching host; a pin from an older
+engine does not carry over because the executable changes with the engine. `null` means “not pinned
 yet”. After a verified local build, compute the hash and commit the 64-hex value plus size in a
 focused PR (`node scripts/verify-sidecar.mjs ... --write` writes the pin after a verified build).
 
@@ -241,8 +264,8 @@ The policy is therefore:
 
 The release job uploads only the publishable allowlist:
 
-- Windows: `*-setup.exe`, `*-setup.exe.sig`, `*-portable.zip`, plus the `.nsis.zip` fallback pair
-  when Tauri produced it;
+- Windows: `*-setup.exe`, `*-setup.exe.sig`, `*-portable.zip`, `*-portable.zip.sha256`, plus the
+  `.nsis.zip` fallback pair when Tauri produced it;
 - Linux: `*.AppImage`, `*.AppImage.sig`, `*.deb`, `*.rpm` (and optional `.deb.sig`/`.rpm.sig`),
   plus the `.AppImage.tar.gz` fallback pair when Tauri produced it;
 - macOS: two `*.dmg`, two `*.app.tar.gz`, two `*.app.tar.gz.sig`;
@@ -253,6 +276,12 @@ evidence. `SHA256SUMS.txt` is generated from the published allowlist by basename
 `latest.json` and every `.sig` file. It fails on duplicate basenames or whitespace. Verify an
 installer with `SHA256SUMS.txt`; the sidecar executable is inside the installer, so its hash is not
 listed separately.
+
+The allowlist itself lives in [`scripts/release-assets.mjs`](../scripts/release-assets.mjs) and is
+used for the checksum list, the upload list and the release gate. It used to be duplicated between
+an inline `isPublished()` helper and a bash upload `case`; the portable ZIP checksum was produced and
+uploaded to the CI artifact but dropped from the release (QA-08). `scripts/release-assets.test.mjs`
+fails `npm test` when an artifact is added to one consumer but not the others.
 
 Asset names are normalized before checksums: GitHub replaces spaces with dots. The staging and
 release scripts reject characters GitHub may rewrite and refuse duplicate basenames. The published
@@ -343,24 +372,33 @@ under `releases/download/<tag>/`, every signature is checked against the `.sig` 
 every referenced asset must exist. The notes come from `docs/releases/<version>.md` when present;
 otherwise the version string is used.
 
+The merged manifest is then validated against
+[`contracts/latest.schema.json`](../contracts/latest.schema.json) by
+`node scripts/validate-latest-json.mjs --file dist/latest.json`. The schema is the contract with
+`tauri-plugin-updater` (QA-02): a manifest the plugin would reject — wrong `pub_date`, missing
+generic platform, short or non-base64 signature, non-HTTPS URL, unknown field — fails the release job
+before the draft is created. `scripts/latest-schema.test.mjs` keeps the schema, the validator and the
+merge script in agreement.
+
 ### Expected asset gates
 
 Before the draft is published, the release job independently checks:
 
 - exactly one Windows `-setup.exe` and its `.exe.sig` (or the `.nsis.zip` fallback pair);
+- exactly one `-portable.zip` and its `.sha256` sidecar, and the sidecar must hash the archive;
 - exactly one AppImage, one deb, one rpm, and the AppImage `.sig` (or the `.AppImage.tar.gz`
   fallback pair);
 - exactly two macOS DMGs (one `_aarch64`, one `_x64`), two `.app.tar.gz` archives and two `.sig`
   files;
-- `latest.json` with all generic platforms, all four aliases, non-empty signatures, URLs under the
-  release tag and assets that exist;
+- `latest.json` that is schema-valid, with all generic platforms, all four aliases, non-empty
+  signatures, URLs under the release tag and assets that exist;
 - `SHA256SUMS.txt` that references every `latest.json` asset.
 
 ### Draft, upload and undraft
 
 The release is created as a **draft** first. Assets are uploaded while it is a draft; the upload list
-is sorted and `latest.json` is uploaded last. The job then publishes with
-`gh release edit --draft=false` and verifies the remote asset names against `SHA256SUMS.txt`.
+comes from the tested allowlist and is sent in one `gh release upload` call. The job then publishes
+with `gh release edit --draft=false` and verifies the remote asset names against `SHA256SUMS.txt`.
 
 `releases/latest/download/latest.json` only resolves to a published (non-draft) release, so users
 never see a partially uploaded manifest. A rerun reuses an existing draft, clears its assets and
@@ -401,7 +439,7 @@ For each matrix entry:
 
 1. checkout the workflow commit;
 2. install Node 24 and run `npm ci`;
-3. install `uv`, Python 3.12 and the Rust target;
+3. install `uv`, Python 3.12, Rust `1.95.0` and the matrix target;
 4. install Linux WebKitGTK/AppImage/rpm build dependencies on Ubuntu;
 5. require the updater key when `publish=true`;
 6. build the onedir sidecar with the pinned engine;
@@ -426,12 +464,12 @@ The release job:
 1. downloads all artifacts;
 2. validates the tag and requires a valid sidecar checksum report per shipped target;
 3. normalizes/flattens names and rejects duplicate basenames;
-4. merges `latest.json`;
-5. verifies the expected asset set and `latest.json` references;
-6. generates `SHA256SUMS.txt` from the published allowlist;
+4. merges `latest.json` and validates it against `contracts/latest.schema.json`;
+5. verifies the expected asset set, the portable `.sha256` and `latest.json` references;
+6. generates `SHA256SUMS.txt` from the published allowlist (`scripts/release-assets.mjs`);
 7. writes release notes with the engine version, platforms, updater endpoint and unsigned warning;
-8. creates a draft release, uploads the allowlisted assets (`latest.json` last), undrafts it and
-   verifies the remote names.
+8. creates a draft release, uploads the allowlisted assets in one `gh release upload` call,
+   undrafts it and verifies the remote names.
 
 ## 9. Release procedure
 
@@ -483,7 +521,8 @@ The release job:
    the actor to be the repository owner; a non-owner run is skipped.
 4. The workflow creates the draft release, uploads the assets, verifies `latest.json` and
    `SHA256SUMS.txt`, then undrafts it.
-5. Verify the release page: asset names, checksums, all four platforms, `latest.json` and notes.
+5. Verify the release page: asset names, checksums (including `*-portable.zip.sha256`), all four
+   platforms, `latest.json` and notes.
 6. Verify the in-app update on a machine with the previous release installed. The only end-to-end
    run verified so far is `0.2.0 → 0.2.1`; `0.2.1 → 0.2.2` must be verified in this run, including
    that a running sidecar is stopped before the installer and that a blocked cleanup shows

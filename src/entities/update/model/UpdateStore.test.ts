@@ -2,23 +2,30 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@tauri-apps/api/app", () => ({ getVersion: vi.fn() }));
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
+vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn() }));
 vi.mock("@tauri-apps/plugin-process", () => ({ relaunch: vi.fn() }));
 vi.mock("@tauri-apps/plugin-updater", () => ({ check: vi.fn() }));
 
 import { getVersion } from "@tauri-apps/api/app";
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { relaunch } from "@tauri-apps/plugin-process";
-import {
-  check,
-  type DownloadEvent,
-  type Update,
-} from "@tauri-apps/plugin-updater";
+import { check, type Update } from "@tauri-apps/plugin-updater";
+import { UPDATE_PROGRESS_EVENT } from "../lib/shell";
 import { UpdateStore } from "./UpdateStore";
 
 const getVersionMock = vi.mocked(getVersion);
 const invokeMock = vi.mocked(invoke);
+const listenMock = vi.mocked(listen);
 const checkMock = vi.mocked(check);
 const relaunchMock = vi.mocked(relaunch);
+
+type ProgressHandler = (event: {
+  payload: { downloaded: number; total: number | null };
+}) => void;
+
+let progressHandler: ProgressHandler | null = null;
+let unlistenMock: ReturnType<typeof vi.fn>;
 
 function fakeUpdate(version = "0.2.0") {
   return {
@@ -26,9 +33,6 @@ function fakeUpdate(version = "0.2.0") {
     date: "2026-11-14T10:00:00Z",
     body: "Fixes\nFaster",
     close: vi.fn(async () => {}),
-    downloadAndInstall: vi.fn(
-      async (_onEvent?: (event: DownloadEvent) => void) => {},
-    ),
   };
 }
 
@@ -36,12 +40,40 @@ function asUpdate(update: ReturnType<typeof fakeUpdate>): Update {
   return update as unknown as Update;
 }
 
+function emitProgress(downloaded: number, total: number | null): void {
+  progressHandler?.({ payload: { downloaded, total } });
+}
+
+function commands(): string[] {
+  return invokeMock.mock.calls.map(([command]) => String(command));
+}
+
 describe("UpdateStore", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    progressHandler = null;
+    unlistenMock = vi.fn();
     getVersionMock.mockResolvedValue("0.1.0");
-    invokeMock.mockResolvedValue(0);
     relaunchMock.mockResolvedValue(undefined);
+    listenMock.mockImplementation((async (
+      _event: string,
+      handler: ProgressHandler,
+    ) => {
+      progressHandler = handler;
+      return unlistenMock;
+    }) as never);
+    invokeMock.mockImplementation((async (command: string) => {
+      if (command === "prepare_update") {
+        return 0;
+      }
+      if (command === "update_install") {
+        return { version: "0.2.0", installed: true };
+      }
+      if (command === "update_cancel") {
+        return true;
+      }
+      return 0;
+    }) as never);
   });
 
   it("announces a newer release and reuses the current version", async () => {
@@ -144,43 +176,49 @@ describe("UpdateStore", () => {
     expect(store.error).toBeNull();
   });
 
-  it("accumulates download progress and relaunches after install", async () => {
+  it("follows the Rust progress events and relaunches after install", async () => {
     const update = fakeUpdate();
     checkMock.mockResolvedValue(asUpdate(update));
     const store = new UpdateStore();
     await store.check();
     const observed: Array<number | null> = [];
-    update.downloadAndInstall.mockImplementation(async (onEvent) => {
-      onEvent?.({ event: "Started", data: { contentLength: 100 } });
+    invokeMock.mockImplementation((async (command: string) => {
+      if (command === "prepare_update") {
+        return 0;
+      }
+      emitProgress(40, 100);
       observed.push(store.progress);
-      onEvent?.({ event: "Progress", data: { chunkLength: 40 } });
+      emitProgress(70, 100);
       observed.push(store.progress);
-      onEvent?.({ event: "Progress", data: { chunkLength: 30 } });
+      emitProgress(100, 100);
       observed.push(store.progress);
-      onEvent?.({ event: "Finished" });
-      observed.push(store.progress);
-    });
+      return { version: update.version, installed: true };
+    }) as never);
 
     await expect(store.install()).resolves.toBe(true);
 
-    expect(observed).toEqual([0, 0.4, 0.7, 1]);
+    expect(observed).toEqual([0.4, 0.7, 1]);
     expect(store.state).toBe("ready");
     expect(store.progress).toBe(1);
     expect(store.percent).toBe(100);
     expect(relaunchMock).toHaveBeenCalledTimes(1);
+    expect(listenMock).toHaveBeenCalledWith(
+      UPDATE_PROGRESS_EVENT,
+      expect.any(Function),
+    );
+    expect(unlistenMock).toHaveBeenCalledTimes(1);
   });
 
-  it("stops engine sidecars before downloading the update", async () => {
+  it("stops engine sidecars before asking the shell to install", async () => {
     const order: string[] = [];
-    invokeMock.mockImplementation(async (command) => {
+    invokeMock.mockImplementation((async (command: string) => {
       order.push(command);
-      return 0;
-    });
-    const update = fakeUpdate();
-    update.downloadAndInstall.mockImplementation(async () => {
-      order.push("downloadAndInstall");
-    });
-    checkMock.mockResolvedValue(asUpdate(update));
+      if (command === "prepare_update") {
+        return 0;
+      }
+      return { version: "0.2.0", installed: true };
+    }) as never);
+    checkMock.mockResolvedValue(asUpdate(fakeUpdate()));
     const store = new UpdateStore();
     await store.check();
 
@@ -188,8 +226,7 @@ describe("UpdateStore", () => {
 
     // A running sidecar keeps the installed engine locked, so the shell must
     // stop it before the installer touches any file.
-    expect(invokeMock).toHaveBeenCalledWith("prepare_update");
-    expect(order).toEqual(["prepare_update", "downloadAndInstall"]);
+    expect(order).toEqual(["prepare_update", "update_install"]);
   });
 
   it("does not stop engine sidecars on a mere check", async () => {
@@ -204,8 +241,7 @@ describe("UpdateStore", () => {
   });
 
   it("blocks the install when the engine sidecar cannot be stopped", async () => {
-    const update = fakeUpdate();
-    checkMock.mockResolvedValue(asUpdate(update));
+    checkMock.mockResolvedValue(asUpdate(fakeUpdate()));
     invokeMock.mockRejectedValue({
       code: "ENGINE_STOP_FAILED",
       message: "engine sidecar 4242 is still running; close it before installing",
@@ -220,33 +256,38 @@ describe("UpdateStore", () => {
     expect(store.error?.code).toBe("UPDATE_ENGINE_BUSY");
     expect(store.error?.message).toContain("still running");
     expect(store.progress).toBeNull();
-    expect(update.downloadAndInstall).not.toHaveBeenCalled();
+    expect(commands()).not.toContain("update_install");
     expect(relaunchMock).not.toHaveBeenCalled();
   });
 
   it("keeps an unknown download size indeterminate", async () => {
-    const update = fakeUpdate();
-    checkMock.mockResolvedValue(asUpdate(update));
+    checkMock.mockResolvedValue(asUpdate(fakeUpdate()));
     const store = new UpdateStore();
     await store.check();
     const observed: Array<number | null> = [];
-    update.downloadAndInstall.mockImplementation(async (onEvent) => {
-      onEvent?.({ event: "Started", data: {} });
+    invokeMock.mockImplementation((async (command: string) => {
+      if (command === "prepare_update") {
+        return 0;
+      }
+      emitProgress(40, null);
       observed.push(store.progress);
-      onEvent?.({ event: "Progress", data: { chunkLength: 40 } });
-      observed.push(store.progress);
-    });
+      return { version: "0.2.0", installed: true };
+    }) as never);
 
     await store.install();
 
-    expect(observed).toEqual([null, null]);
+    expect(observed).toEqual([null]);
     expect(store.progress).toBe(1);
   });
 
   it("reports an install failure without relaunching", async () => {
-    const update = fakeUpdate();
-    checkMock.mockResolvedValue(asUpdate(update));
-    update.downloadAndInstall.mockRejectedValue(new Error("installer failed"));
+    checkMock.mockResolvedValue(asUpdate(fakeUpdate()));
+    invokeMock.mockImplementation((async (command: string) => {
+      if (command === "prepare_update") {
+        return 0;
+      }
+      throw { code: "UPDATE_INSTALL", message: "installer failed" };
+    }) as never);
     const store = new UpdateStore();
     await store.check();
 
@@ -258,9 +299,29 @@ describe("UpdateStore", () => {
     expect(relaunchMock).not.toHaveBeenCalled();
   });
 
+  it("treats a shell-side cancellation as a no-op, not an error", async () => {
+    checkMock.mockResolvedValue(asUpdate(fakeUpdate()));
+    invokeMock.mockImplementation((async (command: string) => {
+      if (command === "prepare_update") {
+        return 0;
+      }
+      throw {
+        code: "UPDATE_CANCELLED",
+        message: "the update download was cancelled",
+      };
+    }) as never);
+    const store = new UpdateStore();
+    await store.check();
+
+    await expect(store.install()).resolves.toBe(false);
+
+    expect(store.state).toBe("idle");
+    expect(store.error).toBeNull();
+    expect(relaunchMock).not.toHaveBeenCalled();
+  });
+
   it("keeps the update ready when the restart fails", async () => {
-    const update = fakeUpdate();
-    checkMock.mockResolvedValue(asUpdate(update));
+    checkMock.mockResolvedValue(asUpdate(fakeUpdate()));
     relaunchMock.mockRejectedValueOnce(new Error("cannot restart"));
     const store = new UpdateStore();
     await store.check();
@@ -278,31 +339,93 @@ describe("UpdateStore", () => {
   it("cancels an in-flight download and returns to idle", async () => {
     const update = fakeUpdate();
     checkMock.mockResolvedValue(asUpdate(update));
+    let finish!: (value: unknown) => void;
+    invokeMock.mockImplementation(((command: string) => {
+      if (command === "prepare_update") {
+        return Promise.resolve(0);
+      }
+      if (command === "update_install") {
+        return new Promise((resolve) => {
+          finish = resolve;
+        });
+      }
+      return Promise.resolve(true);
+    }) as never);
     const store = new UpdateStore();
     await store.check();
-    let finish!: () => void;
-    update.downloadAndInstall.mockImplementation(
-      () =>
-        new Promise<void>((resolve) => {
-          finish = resolve;
-        }),
-    );
 
     const installing = store.install();
     expect(store.state).toBe("downloading");
-    // The sidecar cleanup is awaited before the download starts.
     await vi.waitFor(() =>
-      expect(update.downloadAndInstall).toHaveBeenCalledTimes(1),
+      expect(commands()).toContain("update_install"),
     );
 
-    store.dismiss();
+    await store.cancel();
     expect(store.state).toBe("idle");
     expect(store.available).toBeNull();
+    expect(commands()).toContain("update_cancel");
     expect(update.close).toHaveBeenCalledTimes(1);
 
-    finish();
+    finish({ version: "0.2.0", installed: true });
     await expect(installing).resolves.toBe(false);
     expect(store.state).toBe("idle");
+    expect(relaunchMock).not.toHaveBeenCalled();
+  });
+
+  it("never relaunches after the panel was dismissed mid-download", async () => {
+    checkMock.mockResolvedValue(asUpdate(fakeUpdate()));
+    let finish!: (value: unknown) => void;
+    invokeMock.mockImplementation(((command: string) => {
+      if (command === "prepare_update") {
+        return Promise.resolve(0);
+      }
+      if (command === "update_install") {
+        return new Promise((resolve) => {
+          finish = resolve;
+        });
+      }
+      return Promise.resolve(true);
+    }) as never);
+    const store = new UpdateStore();
+    await store.check();
+
+    const installing = store.install();
+    await vi.waitFor(() => expect(progressHandler).not.toBeNull());
+    store.dismiss();
+    expect(store.state).toBe("idle");
+
+    finish({ version: "0.2.0", installed: true });
+    await expect(installing).resolves.toBe(false);
+    expect(store.state).toBe("idle");
+    expect(relaunchMock).not.toHaveBeenCalled();
+  });
+
+  it("does not claim a cancellation once the installer started", async () => {
+    checkMock.mockResolvedValue(asUpdate(fakeUpdate()));
+    invokeMock.mockImplementation(((command: string) => {
+      if (command === "prepare_update") {
+        return Promise.resolve(0);
+      }
+      if (command === "update_install") {
+        // The installer is running; the promise never resolves.
+        return new Promise(() => {});
+      }
+      if (command === "update_cancel") {
+        return Promise.resolve(false);
+      }
+      return Promise.resolve(0);
+    }) as never);
+    const store = new UpdateStore();
+    await store.check();
+
+    void store.install();
+    await vi.waitFor(() => expect(commands()).toContain("update_install"));
+    await store.cancel();
+
+    // The shell said the install cannot be cancelled: the panel stays honest
+    // instead of pretending the click stopped it.
+    expect(store.state).toBe("downloading");
+    expect(store.available).not.toBeNull();
     expect(relaunchMock).not.toHaveBeenCalled();
   });
 
@@ -375,11 +498,13 @@ describe("UpdateStore", () => {
   });
 
   it("blocks a bad signature and never retries the install", async () => {
-    const update = fakeUpdate();
-    checkMock.mockResolvedValue(asUpdate(update));
-    update.downloadAndInstall.mockRejectedValue(
-      new Error("Signature verification failed"),
-    );
+    checkMock.mockResolvedValue(asUpdate(fakeUpdate()));
+    invokeMock.mockImplementation((async (command: string) => {
+      if (command === "prepare_update") {
+        return 0;
+      }
+      throw new Error("Signature verification failed");
+    }) as never);
     const store = new UpdateStore();
     await store.check();
 
@@ -392,7 +517,7 @@ describe("UpdateStore", () => {
     expect(relaunchMock).not.toHaveBeenCalled();
 
     await expect(store.install()).resolves.toBe(false);
-    expect(update.downloadAndInstall).toHaveBeenCalledTimes(1);
+    expect(commands().filter((command) => command === "update_install")).toHaveLength(1);
   });
 
   it("persists a signature failure across store instances", async () => {
@@ -406,9 +531,12 @@ describe("UpdateStore", () => {
     try {
       const update = fakeUpdate("0.2.1");
       checkMock.mockResolvedValue(asUpdate(update));
-      update.downloadAndInstall.mockRejectedValue(
-        new Error("Signature verification failed"),
-      );
+      invokeMock.mockImplementation((async (command: string) => {
+        if (command === "prepare_update") {
+          return 0;
+        }
+        throw new Error("Signature verification failed");
+      }) as never);
       const store = new UpdateStore();
       await store.check();
       await store.install();
@@ -430,7 +558,12 @@ describe("UpdateStore", () => {
   it("keeps the security block after dismiss and clears it for a new version", async () => {
     const update = fakeUpdate();
     checkMock.mockResolvedValue(asUpdate(update));
-    update.downloadAndInstall.mockRejectedValue(new Error("minisign: bad signature"));
+    invokeMock.mockImplementation((async (command: string) => {
+      if (command === "prepare_update") {
+        return 0;
+      }
+      throw new Error("minisign: bad signature");
+    }) as never);
     const store = new UpdateStore();
     await store.check();
     await store.install();
