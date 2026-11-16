@@ -1,0 +1,14 @@
+.report-cwv-table code {
+  overflow-wrap: anywhere;
+}
+
+.report-cwv-regression {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  align-items: flex-start;
+}
+
+.report-cwv-limitations {
+  margin-top: var(--space-3);
+}

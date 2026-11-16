@@ -1,0 +1,74 @@
+.portfolio-root-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.portfolio-root-row .input {
+  flex: 1 1 320px;
+  min-width: 0;
+}
+
+.portfolio-facts {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: var(--space-3);
+}
+
+.portfolio-fact {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  padding: var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--inset);
+  overflow-wrap: anywhere;
+}
+
+.portfolio-fact strong {
+  font-size: var(--text-title);
+  line-height: 1.2;
+}
+
+.portfolio-filters {
+  align-items: flex-end;
+  margin-bottom: var(--space-4);
+}
+
+.portfolio-filters .field {
+  flex: 1 1 200px;
+  max-width: 320px;
+}
+
+.portfolio-table .portfolio-path {
+  display: block;
+  overflow-wrap: anywhere;
+}
+
+.portfolio-site-meta {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  margin-top: var(--space-1);
+}
+
+.portfolio-issues {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.portfolio-site-error {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 780px) {
+  .portfolio-filters .field {
+    max-width: none;
+  }
+}

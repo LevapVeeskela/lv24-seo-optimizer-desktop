@@ -29,8 +29,14 @@ import {
   reportSections,
 } from "@/entities/report/model/types";
 import { isDigestSection, reportDigestSection } from "@/entities/report/model/digest";
+import {
+  isCwvLimitation,
+  isCwvSection,
+  reportCwvSection,
+} from "@/entities/report/model/cwv";
 import { ReportDiffCard } from "./ReportDiffCard";
 import { ReportDigestCard } from "./ReportDigestCard";
+import { ReportCwvCard } from "./ReportCwvCard";
 
 export const ReportsPage = observer(function ReportsPage() {
   const { t, locale } = useI18n();
@@ -51,12 +57,22 @@ export const ReportsPage = observer(function ReportsPage() {
   const meta = reports.meta;
   const htmlPath = reportHtmlPath(meta);
   const digestSection = reportDigestSection(report);
-  // The digest has its own compact card; it is not an "unknown section".
+  const cwvSection = reportCwvSection(report);
+  // The digest and CWV have their own compact cards; neither is an "unknown
+  // section", so the generic section list must not render them twice.
   const sections = reportSections(report).filter((section) => {
     const candidate: unknown = section;
-    return !isDigestSection(candidate);
+    return !isDigestSection(candidate) && !isCwvSection(candidate);
   });
   const limitations = reportLimitations(report, meta);
+  // CWV caveats belong to the CWV card, but only when that card actually
+  // renders; otherwise they stay in the generic limitations list.
+  const cwvLimitations = cwvSection
+    ? limitations.filter(isCwvLimitation)
+    : [];
+  const reportLimitationsRest = cwvSection
+    ? limitations.filter((item) => !isCwvLimitation(item))
+    : limitations;
   const warnings = [
     ...new Set([...(report?.warnings ?? []), ...reports.warnings]),
   ].filter((item) => typeof item === "string" && item.trim());
@@ -338,6 +354,8 @@ export const ReportsPage = observer(function ReportsPage() {
 
           <ReportDigestCard section={digestSection} />
 
+          <ReportCwvCard section={cwvSection} limitations={cwvLimitations} />
+
           {sections.length ? (
             sections.map((section, index) => (
               <ReportSectionView
@@ -351,11 +369,11 @@ export const ReportsPage = observer(function ReportsPage() {
             </Card>
           )}
 
-          {limitations.length ? (
+          {reportLimitationsRest.length ? (
             <Card>
               <h4>{t("reports.limitations")}</h4>
               <ul className="report-notes">
-                {limitations.map((item) => (
+                {reportLimitationsRest.map((item) => (
                   <li key={item}>{item}</li>
                 ))}
               </ul>

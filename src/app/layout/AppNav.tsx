@@ -11,6 +11,7 @@ type IconName =
   | "crawl"
   | "logs"
   | "tasks"
+  | "portfolio"
   | "integrations"
   | "diagnostics";
 
@@ -26,6 +27,7 @@ export const NAV_ITEMS: readonly NavItem[] = [
   { to: ROUTES.crawl, key: "nav.crawl", icon: "crawl" },
   { to: ROUTES.logs, key: "nav.logs", icon: "logs" },
   { to: ROUTES.tasks, key: "nav.tasks", icon: "tasks" },
+  { to: ROUTES.portfolio, key: "nav.portfolio", icon: "portfolio" },
   { to: ROUTES.integrations, key: "nav.integrations", icon: "integrations" },
   { to: ROUTES.settings, key: "nav.settings", icon: "settings" },
   { to: ROUTES.config, key: "nav.config", icon: "config" },
@@ -81,6 +83,14 @@ function NavIcon({ name }: { name: IconName }) {
         <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
           <rect x="4" y="4" width="16" height="16" rx="2.5" {...common} />
           <path d="m8.5 12 2.5 2.5 4.5-5" {...common} />
+        </svg>
+      );
+    case "portfolio":
+      return (
+        <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+          <rect x="3" y="4.5" width="8" height="6.5" rx="1.5" {...common} />
+          <rect x="13" y="4.5" width="8" height="6.5" rx="1.5" {...common} />
+          <rect x="8" y="14" width="8" height="6" rx="1.5" {...common} />
         </svg>
       );
     case "settings":
