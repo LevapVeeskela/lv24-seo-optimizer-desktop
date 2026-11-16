@@ -3,6 +3,9 @@ import { MemoryRouter } from "react-router-dom";
 import { describe, expect, it, vi } from "vitest";
 import { StoreProvider } from "@/app/providers/StoreProvider";
 import type { RootStore } from "@/app/model/RootStore";
+import { BackupStore } from "@/features/backup/model/BackupStore";
+import { ScheduleStore } from "@/features/schedule/model/ScheduleStore";
+import { RunStore } from "@/shared/run/model/RunStore";
 import { I18nProvider } from "@/shared/i18n";
 import { IntegrationsPage } from "./IntegrationsPage";
 
@@ -19,7 +22,16 @@ function renderPage(offline = false): string {
   };
   return renderToStaticMarkup(
     <I18nProvider locale="en" onLocaleChange={() => {}}>
-      <StoreProvider store={{ engine } as unknown as RootStore}>
+      <StoreProvider
+        store={
+          {
+            engine,
+            backup: new BackupStore(),
+            schedule: new ScheduleStore(),
+            runs: new RunStore(),
+          } as unknown as RootStore
+        }
+      >
         <MemoryRouter>
           <IntegrationsPage />
         </MemoryRouter>

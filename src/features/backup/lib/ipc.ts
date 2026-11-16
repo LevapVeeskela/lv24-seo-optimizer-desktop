@@ -12,8 +12,12 @@ export interface BackupCreateArgs {
 
 export function runBackupCreate(
   args: BackupCreateArgs,
+  runId?: string,
 ): Promise<Envelope<unknown>> {
-  return cliRun<unknown>("backup_create", { args });
+  return cliRun<unknown>("backup_create", {
+    args,
+    ...(runId ? { runId } : {}),
+  });
 }
 
 /**
@@ -30,6 +34,7 @@ export interface BackupRestoreArgs {
 
 export function runBackupRestore(
   args: BackupRestoreArgs,
+  runId?: string,
 ): Promise<Envelope<unknown>> {
   return cliRun<unknown>("backup_restore", {
     args: {
@@ -38,6 +43,7 @@ export function runBackupRestore(
       ...(args.confirm ? { confirm: args.confirm } : {}),
     },
     configPath: args.configPath,
+    ...(runId ? { runId } : {}),
   });
 }
 

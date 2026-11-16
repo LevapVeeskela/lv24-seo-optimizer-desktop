@@ -2,7 +2,9 @@
 
 Status: **implementation contract for `0.5.0` (released 2026-11-16).** The Rust command bridge and
 product screens are implemented in this repository. Where this document describes a control, it is
-the requirement that implementation must satisfy. The pinned engine is `lv24-seo 0.7.0`.
+the requirement that implementation must satisfy. The pinned engine is `lv24-seo 0.7.0`. The
+post-`0.5.0` working tree adds cancellable background runs (`run_cancel`); the published `0.5.0`
+binaries do not include that control yet.
 
 ## 1. Shape
 
@@ -115,13 +117,20 @@ The command surface is fixed. The generic `cli_run` allow-list is:
 | `backup_create` | `backup create --out <dir> [--force] --json` | local write |
 | `backup_restore` | `backup restore --file <zip> --config <path> [--allow-write --confirm <token>] --json` | local write (gated) |
 | `portfolio_list` | `portfolio list --root <dir> [--limit <n>] --json` | read |
-| `schedule_install` | `schedule install --kind weekly\|daily [--cron <expr>] --config <path> --json` | host write (gated) |
+| `schedule_install` | `schedule install --kind weekly\|daily [--cron <expr>] --config <path> --allow-write --json` | host write (gated) |
 
 Dedicated Tauri commands cover the rest: `shell_status`, `config_read`, `config_validate`,
 `config_write`, `config_patch`, `auth_set` (secret over stdin), `auth_delete`, `write_text_file`,
 `settings_get`, `settings_set`, `pick_config`, `pick_directory`, `pick_log_file`,
-`pick_backup_archive`, `open_path`, `prepare_update`, `update_install`, `update_cancel`. The webview
-cannot add a command at runtime.
+`pick_backup_archive`, `open_path`, `prepare_update`, `update_install`, `update_cancel` and
+`run_cancel`. The webview cannot add a command at runtime.
+
+`cli_run` accepts an optional `runId` only for the six long local jobs listed in
+`CliCommandId::cancellable` (`crawl`, `report_weekly`, `logs_analyze`, `backup_create`,
+`backup_restore`, `schedule_install`). A run id for any other command is rejected with
+`RUN_NOT_CANCELLABLE`, so a short read keeps its plain synchronous path. The id is a bounded ASCII
+key supplied by the webview before the call; it is a cancellation handle, never a process, path or
+command.
 
 `pick_config` is the only way to introduce a new workspace path: it opens the native dialog, records
 the canonical path as approved for this process and returns it. `settings_set` accepts a changed
@@ -148,8 +157,9 @@ archive the shell will read, and a path under the app export directory is also a
 is two-phase: the plan call carries neither `allowWrite` nor `confirm`, the apply call carries both
 and the token must come from the plan. `pick_directory` also approves the portfolio root, so
 `portfolio_list` can only scan a folder the user picked. `schedule_install` requires the active
-config and writes a host job; the UI asks for confirmation first, and the shell passes only the
-validated kind, cron and config.
+config and a confirmed `allowWrite=true`; the UI asks for confirmation first, and the shell appends
+`--allow-write` only then. Without that opt-in the call is refused with `CONFIRM_REQUIRED` before
+the engine is spawned, so a plan-only engine default cannot be bypassed by the webview.
 
 `update_install` and `update_cancel` exist because the webview holds only `updater:allow-check`. The
 Rust side re-checks the endpoint, refuses a version that differs from the announced one, serializes
@@ -241,8 +251,25 @@ Engine calls are synchronous from the UI's perspective. Each command has a fixed
 `doctor`, `properties` and `auth status` 30 seconds; `auth set`/`auth delete` 120 seconds. A timeout
 kills the exact child process and returns a typed error.
 
-- Engine calls have no job queue and no cancel button. The update download is the one long operation
-  that reports progress (`update://progress`) and can be cancelled (`update_cancel`).
+- **Cancellable long jobs.** `crawl`, `report weekly`, `logs analyze`, `backup create`,
+  `backup restore` and `schedule install` may carry a stable run id. The Rust runner registers
+  `run id -> exact child PID` before the spawn. `run_cancel(runId)` marks that run cancelled and
+  signals only the recorded PID (and, on Unix, its process group), after confirming the PID is still
+  an engine image or one of the exact children this process tracks (a development engine may be a
+  Python interpreter). It never matches a process by name, so another installed copy or an unrelated
+  process is not touched. `false` means the run already finished, the id is unknown, or the PID is no
+  longer ours; the UI must not claim a cancellation then.
+- **Distinct cancelled result.** A cancelled run returns `RUN_CANCELLED`, not `CLI_TIMEOUT` and not a
+  stdout parse error. The supervisor marks the run finished before deciding its result, so a cancel
+  that loses the race returns `false` and the real envelope stands.
+- **No job queue.** Runs are concurrent child processes with no scheduler; each run is independent.
+  The update download remains the only operation with progress events (`update://progress`) and its
+  own `update_cancel`.
+- **Cancellation is not rollback.** `taskkill /T /F` (Windows) and `SIGKILL` to the exact PID and
+  group (Unix) stop the process, but files it already wrote stay on disk. A cancelled crawl or report
+  may leave a partial local artefact; a cancelled restore may have replaced one of the database or
+  config files. The engine keeps its pre-restore copy, and the UI tells the user to review a fresh
+  plan before retrying.
 - `stdout` is capped at 4 MiB and `stderr` at 128 KiB; an oversized response is an error, not a
   truncated success.
 - Every engine `stderr` and every bounded preview is redacted (`redact_secrets`) before it reaches the
@@ -261,9 +288,9 @@ Feature-Sliced Design, dependencies pointing downward:
 ```
 app/        root store, providers, router, layout, styles
 pages/      dashboard, reports, settings, configuration, recommendations, not-found
-features/   save-config, secret-set, update, agent-task
-entities/   config, engine, report, stats, recommendation, update
-shared/     CLI transport, desktop settings/files, i18n, UI primitives, formatting
+features/   save-config, secret-set, update, agent-task, backup, schedule
+entities/   config, engine, report, stats, recommendation, update, crawl, logs, workspace
+shared/     CLI transport, desktop settings/files, i18n, UI primitives, formatting, run registry
 ```
 
 There is no `widgets/` layer today. The header, navigation and update badge live in `app/layout` and
@@ -279,6 +306,12 @@ There is no `widgets/` layer today. The header, navigation and update badge live
   read by the hash router as a route and render NotFound.
 - State is scoped to the current workspace: changing the workspace or losing the engine clears
   report, stats, doctor and secret state instead of showing the previous project's data.
+- Long engine calls live in one root `RunStore` (`shared/run`), not on a page. The app layout renders
+  a persistent banner with the run kind, elapsed time, status and a Cancel button; leaving the route
+  does not clear the run, and returning to the page reads the same store. Only commands in
+  `CliCommandId::cancellable` are tracked, so a short read never gets a banner. The banner shows
+  every active run and keeps the newest cancelled run until it is dismissed; succeeded and failed
+  runs stay on the page that started them, where the result or error is explained.
 - Actions that cannot succeed are disabled, not left to fail on click: no workspace selected, engine
   offline, engine below `MIN_ENGINE_VERSION`, or a saved config path that no longer exists.
 - Validation is tri-state: `valid`, `invalid` and `skipped`. A call that returns no answer for the

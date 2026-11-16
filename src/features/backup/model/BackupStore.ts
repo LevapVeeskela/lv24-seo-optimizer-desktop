@@ -1,5 +1,7 @@
 import { toAppError, type AppError } from "@/shared/lib/errors";
 import { isRecord } from "@/shared/lib/format";
+import { trackRun } from "@/shared/run/lib/trackedRun";
+import type { RunStore } from "@/shared/run/model/RunStore";
 import { makeAutoObservable } from "mobx";
 import {
   runBackupCreate,
@@ -15,12 +17,13 @@ import {
 } from "./restore";
 import { normalizeBackupResult, type BackupResult } from "./types";
 
-export type BackupState = "idle" | "creating" | "ready" | "error";
+export type BackupState = "idle" | "creating" | "ready" | "error" | "cancelled";
 
 /**
  * Restore is deliberately two-phase: `planned` is the only state that can ask
  * for confirmation, and only a confirmed request may reach the engine with the
- * write opt-in and token.
+ * write opt-in and token. A cancelled plan or apply is `cancelled`, not
+ * `error`, and always drops the plan so the user reviews it again.
  */
 export type RestoreState =
   | "idle"
@@ -28,14 +31,17 @@ export type RestoreState =
   | "planned"
   | "restoring"
   | "restored"
-  | "error";
+  | "error"
+  | "cancelled";
 
 export type BackupCreateFn = (
   args: BackupCreateArgs,
+  runId?: string,
 ) => ReturnType<typeof runBackupCreate>;
 
 export type BackupRestoreFn = (
   args: BackupRestoreArgs,
+  runId?: string,
 ) => ReturnType<typeof runBackupRestore>;
 
 /** A Typer usage error is what an engine without `backup restore` returns. */
@@ -81,18 +87,21 @@ export class BackupStore {
   private readonly create: BackupCreateFn;
   private readonly now: () => Date;
   private readonly restore: BackupRestoreFn;
+  private readonly runs: RunStore | null;
 
   constructor(
     create: BackupCreateFn = runBackupCreate,
     now: () => Date = () => new Date(),
     restore: BackupRestoreFn = runBackupRestore,
+    runs: RunStore | null = null,
   ) {
     this.create = create;
     this.now = now;
     this.restore = restore;
+    this.runs = runs;
     makeAutoObservable<
       BackupStore,
-      "generation" | "restoreGeneration" | "create" | "now" | "restore"
+      "generation" | "restoreGeneration" | "create" | "now" | "restore" | "runs"
     >(
       this,
       {
@@ -101,6 +110,7 @@ export class BackupStore {
         create: false,
         now: false,
         restore: false,
+        runs: false,
       },
       { autoBind: true },
     );
@@ -148,8 +158,21 @@ export class BackupStore {
     const generation = ++this.generation;
     this.state = "creating";
     this.error = null;
-    const result = await this.create({ out: this.outDir, force: this.force });
+    const outDir = this.outDir;
+    const force = this.force;
+    const result = this.runs
+      ? await trackRun(this.runs, {
+          kind: "backupCreate",
+          run: (runId) => this.create({ out: outDir, force }, runId),
+        })
+      : await this.create({ out: outDir, force });
     if (generation !== this.generation) {
+      return false;
+    }
+    if (!result.ok && result.error.code === "RUN_CANCELLED") {
+      this.error = null;
+      this.warnings = result.warnings;
+      this.state = "cancelled";
       return false;
     }
     if (result.ok) {
@@ -215,13 +238,26 @@ export class BackupStore {
     this.restoreError = null;
     this.restorePending = false;
     this.restoreOutcome = null;
-    const result = await this.restore({
+    const request: BackupRestoreArgs = {
       file,
       configPath,
       allowWrite: false,
       confirm: null,
-    });
+    };
+    const result = this.runs
+      ? await trackRun(this.runs, {
+          kind: "backupRestore",
+          run: (runId) => this.restore(request, runId),
+        })
+      : await this.restore(request);
     if (generation !== this.restoreGeneration) {
+      return false;
+    }
+    if (!result.ok && result.error.code === "RUN_CANCELLED") {
+      this.restorePlan = null;
+      this.restoreError = null;
+      this.restoreWarnings = result.warnings;
+      this.restoreState = "cancelled";
       return false;
     }
     if (result.ok) {
@@ -291,13 +327,29 @@ export class BackupStore {
     const generation = ++this.restoreGeneration;
     this.restoreState = "restoring";
     this.restoreError = null;
-    const result = await this.restore({
+    const request: BackupRestoreArgs = {
       file,
       configPath,
       allowWrite: true,
       confirm: token,
-    });
+    };
+    const result = this.runs
+      ? await trackRun(this.runs, {
+          kind: "backupRestore",
+          run: (runId) => this.restore(request, runId),
+        })
+      : await this.restore(request);
     if (generation !== this.restoreGeneration) {
+      return false;
+    }
+    if (!result.ok && result.error.code === "RUN_CANCELLED") {
+      // The apply phase may have replaced one file already. Drop the token:
+      // the user must review a fresh plan instead of replaying a consumed one.
+      this.restorePlan = null;
+      this.restorePending = false;
+      this.restoreError = null;
+      this.restoreWarnings = result.warnings;
+      this.restoreState = "cancelled";
       return false;
     }
     if (result.ok) {

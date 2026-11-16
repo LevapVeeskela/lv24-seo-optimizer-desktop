@@ -61,6 +61,11 @@ not want to remember flags:
   card that previews a cron/systemd/Windows artifact or installs the host job after confirmation.
 - **A per-workspace reporting window** (7/28/90 days, 2- or 3-day provider lag) and honest run status:
   elapsed time, last run, truncation and limitations.
+- **Cancellable background runs (post-`0.5.0` working tree):** crawl, weekly report, log analysis,
+  backup create/restore and host schedule install get a window-wide run banner with a **Cancel**
+  button. The shell cancels only the exact child process it spawned for that run; a run that already
+  finished answers `false`, and a cancelled run is shown as cancelled rather than as a generic
+  error. The published `0.5.0` binaries do not include this control yet.
 - **Explicit write gates** for delivery, schedule installation, MCP client installation and any
   provider write action.
 - **Signed in-app updates** for the bundle types that can replace themselves, with a manual release
@@ -472,6 +477,10 @@ action. The desktop does not apply site edits itself.
   signed package and refuses downgrades. A signature failure blocks the artifact. The install itself
   runs in Rust with a version re-check and a cancellable download; the webview cannot start an
   install.
+- **Exact-process cancellation.** `run_cancel` accepts a bounded run id and signals only the exact
+  child PID registered for that run (and, on Unix, its process group). It never matches an image
+  name, so another installed copy, a portable build or an unrelated process is never killed. A PID
+  that no longer names the engine is left alone, and a run that already finished returns `false`.
 - **Sidecar integrity.** Release builds use a PyInstaller onedir tree with a reviewed local pin
   where available and rebuild-aware CI checksum reports. See [`docs/security.md`](docs/security.md).
 
@@ -504,6 +513,7 @@ build from source and sign it with your own certificate. See [`docs/release.md`]
 | CI (web, Rust matrix, contract check) | active on pull requests and `main`; standard runners only |
 | Manual desktop build workflow (NSIS, DMG, AppImage, deb, rpm) | available; owner-triggered; publish requires the updater key |
 | Tauri command bridge (config read/validate/write/patch, CLI runner incl. `init`, `schedule_print`, `logs_analyze`, `tasks_*`, `backup_create`, `backup_restore`, `portfolio_list` and `schedule_install`, file and directory pickers, known configs, secrets, diagnostics) | implemented |
+| Cancellable background runs (`run_cancel`, run banner) | implemented in the post-`0.5.0` working tree; not part of the published `0.5.0` binaries |
 | React screens (onboarding, dashboard, crawl, logs, tasks, portfolio, settings, configuration, reports, recommendations, integrations, backup) | implemented |
 | Bundled onedir sidecar | all four targets built in CI and by the release workflow; the Windows x64 pin records the reviewed `0.7.0` build, Linux/macOS reviewed pins remain `null` and are covered by rebuild-aware CI checksum reports |
 | Published installers | `0.5.0`: Windows x64, Linux x64, macOS arm64/x64; `0.4.0` and `0.3.0` remain available for rollback |

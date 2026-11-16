@@ -113,8 +113,13 @@ opt-in file. The desktop must show which source is active.
 - A timeout or dropped child handle kills the exact child process handle/PID. It never uses a
   wildcard process name; several LV24 applications can run concurrently. On Unix the engine is
   started in its own process group so a PyInstaller bootloader's interpreter child is killed with it
-  instead of surviving and locking the engine executable. There is no user-facing cancel button for
-  engine commands; the update download is the only cancellable operation (section 8).
+  instead of surviving and locking the engine executable.
+- `run_cancel` cancels one long engine call by its stable run id and signals only the exact child
+  PID registered for that run (and its process group on Unix), after checking that the PID is still
+  an engine image or one of the exact children this process tracks. It never matches a process by
+  name and returns `false` for a run that already finished. A cancelled run is reported as
+  `RUN_CANCELLED`, distinct from a timeout. The update download is the only other cancellable
+  operation (section 8).
 - Blocking filesystem work (config/settings writes, export writes, `open_path` resolution) runs on a
   blocking task with a deadline: 10 s for settings and path resolution, 30 s for exports. A call that
   exceeds it returns `PATH_TIMEOUT` instead of freezing the window. The timed-out task cannot be

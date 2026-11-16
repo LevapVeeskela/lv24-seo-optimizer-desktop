@@ -47,7 +47,7 @@ describe("ScheduleStore install", () => {
     expect(await store.confirmInstall("C:\\ws\\seo.toml")).toBe(true);
 
     expect(runMock).toHaveBeenCalledWith("schedule_install", {
-      args: { kind: "daily" },
+      args: { kind: "daily", allowWrite: true },
       configPath: "C:\\ws\\seo.toml",
     });
     expect(store.installState).toBe("installed");
@@ -68,7 +68,7 @@ describe("ScheduleStore install", () => {
 
     expect(await store.confirmInstall("C:\\ws\\seo.toml")).toBe(true);
     expect(runMock).toHaveBeenLastCalledWith("schedule_install", {
-      args: { kind: "weekly", cron: "0 7 * * 1" },
+      args: { kind: "weekly", cron: "0 7 * * 1", allowWrite: true },
       configPath: "C:\\ws\\seo.toml",
     });
   });

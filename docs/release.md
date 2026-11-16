@@ -40,6 +40,28 @@ Release preconditions (as used for `0.5.0`; update the version pins for the next
 - The `TAURI_SIGNING_PRIVATE_KEY` repository secret exists. `publish=true` fails without it.
 - README, `docs/*`, release notes and the unsigned warning are current.
 
+### Cancellable background runs (post-`0.5.0`, unreleased)
+
+The working tree after `0.5.0` adds `run_cancel` and a window-wide run banner. It does **not**
+change the published `0.5.0` line, the version pins or the updater manifest:
+
+- Cancellable commands are exactly `crawl`, `report_weekly`, `logs_analyze`, `backup_create`,
+  `backup_restore` and `schedule_install` (`CliCommandId::cancellable`). `cli_run` rejects a run id
+  for every other command with `RUN_NOT_CANCELLABLE`; short reads keep their synchronous path.
+- `run_cancel(runId)` returns `false` for an unknown or already finished run, or when the PID is no
+  longer ours. It signals only the exact child PID registered for that run (and its process group on
+  Unix), after checking that the PID is still an engine image or one of the exact children this
+  process tracks. It never matches a process by name.
+- A cancelled run returns `RUN_CANCELLED`; the UI shows a distinct cancelled state, not a generic
+  error. Cancellation is not rollback: files already written stay on disk, and a cancelled restore
+  keeps the engine's pre-restore copy but may have replaced one file.
+- Verification for the branch that ships this: `cargo test --all-targets` (registry, finished run,
+  double cancel, unrelated PID), `npm test` (cancel visibility, cancelled state, banner across a
+  route change), plus the standard `npm run typecheck`, `npm run build`, `npm run test:release`,
+  `cargo fmt --check` and `cargo clippy --all-targets -- -D warnings`.
+- The release notes for the first version that includes it must name the new command and the
+  no-rollback limitation. Do not backport the claim into the `0.5.0` notes.
+
 ## 2. Versioning
 
 The desktop follows [Semantic Versioning 2.0.0](https://semver.org/):

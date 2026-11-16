@@ -20,6 +20,10 @@ export interface LogsAnalyzeArgs {
 
 export function runLogsAnalyze(
   args: LogsAnalyzeArgs,
+  runId?: string,
 ): Promise<Envelope<unknown>> {
-  return cliRun<unknown>("logs_analyze", { args });
+  return cliRun<unknown>("logs_analyze", {
+    args,
+    ...(runId ? { runId } : {}),
+  });
 }

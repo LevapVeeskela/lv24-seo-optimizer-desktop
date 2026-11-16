@@ -30,7 +30,7 @@ import { PropertiesPanel } from "./PropertiesPanel";
 
 export const DashboardPage = observer(function DashboardPage() {
   const { t, locale } = useI18n();
-  const { engine, stats, reports } = useRootStore();
+  const { engine, stats, reports, runs } = useRootStore();
   const confirmWorkspaceChange = useConfirmWorkspaceChange();
   const navigate = useNavigate();
   const { notify } = useFeedback();
@@ -50,6 +50,7 @@ export const DashboardPage = observer(function DashboardPage() {
   const workspaceMissing = configMissing(engine.status);
   const blocked =
     engine.offline || engine.loading || !configPath || workspaceMissing;
+  const activeRun = runs.activeFor("reportWeekly");
 
   useEffect(() => {
     // Without a workspace configuration `stats` is a guaranteed failure.
@@ -122,7 +123,7 @@ export const DashboardPage = observer(function DashboardPage() {
   };
 
   const buildWeekly = async () => {
-    if (blocked) {
+    if (blocked || reports.loading) {
       return;
     }
     const ok = await reports.buildWeekly(windowSettings.params);
@@ -131,10 +132,12 @@ export const DashboardPage = observer(function DashboardPage() {
       navigate("/reports");
       return;
     }
-    notify(
-      reports.error ? appErrorText(reports.error) : t("reports.buildFailed"),
-      "error",
-    );
+    if (reports.state !== "cancelled") {
+      notify(
+        reports.error ? appErrorText(reports.error) : t("reports.buildFailed"),
+        "error",
+      );
+    }
   };
 
   const requestBuild = () => {
@@ -254,6 +257,8 @@ export const DashboardPage = observer(function DashboardPage() {
         running={reports.loading}
         startedAt={reports.startedAt}
         lastRun={reports.lastRun}
+        cancelling={activeRun?.status === "cancelling"}
+        onCancel={activeRun ? () => void runs.cancel(activeRun.id) : undefined}
       />
 
       {stats.error && !workspaceMissing ? (

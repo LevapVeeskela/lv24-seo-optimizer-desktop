@@ -40,7 +40,7 @@ import { ReportCwvCard } from "./ReportCwvCard";
 
 export const ReportsPage = observer(function ReportsPage() {
   const { t, locale } = useI18n();
-  const { engine, reports } = useRootStore();
+  const { engine, reports, runs } = useRootStore();
   const { notify } = useFeedback();
   const [opening, setOpening] = useState(false);
   const [openError, setOpenError] = useState<AppError | null>(null);
@@ -52,6 +52,7 @@ export const ReportsPage = observer(function ReportsPage() {
     reports.lastParams !== null &&
     !sameWindowParams(reports.lastParams, windowSettings.params);
   const blocked = engine.offline || engine.loading || !configPath;
+  const activeRun = runs.activeFor("reportWeekly");
 
   const report = reports.report;
   const meta = reports.meta;
@@ -93,7 +94,7 @@ export const ReportsPage = observer(function ReportsPage() {
   }, [blocked, reports, reports.diffState]);
 
   const buildWeekly = async () => {
-    if (blocked) {
+    if (blocked || reports.loading) {
       return;
     }
     const ok = await reports.buildWeekly(windowSettings.params);
@@ -101,15 +102,17 @@ export const ReportsPage = observer(function ReportsPage() {
       // The fresh snapshot is the head side of the comparison; reload it so
       // the card never compares against a superseded report.
       void reports.loadDiff();
+      notify(t("reports.built"), "success");
+      return;
     }
-    notify(
-      ok
-        ? t("reports.built")
-        : reports.error
-          ? appErrorText(reports.error)
-          : t("reports.buildFailed"),
-      ok ? "success" : "error",
-    );
+    // A cancelled build is not a provider failure and gets no error toast; the
+    // page notice and the run banner carry the distinct cancelled state.
+    if (reports.state !== "cancelled") {
+      notify(
+        reports.error ? appErrorText(reports.error) : t("reports.buildFailed"),
+        "error",
+      );
+    }
   };
 
   const compare = async () => {
@@ -216,6 +219,10 @@ export const ReportsPage = observer(function ReportsPage() {
         running={reports.loading}
         startedAt={reports.startedAt}
         lastRun={reports.lastRun}
+        cancelling={activeRun?.status === "cancelling"}
+        onCancel={
+          activeRun ? () => void runs.cancel(activeRun.id) : undefined
+        }
       />
 
       {engine.offline ? (
@@ -256,6 +263,24 @@ export const ReportsPage = observer(function ReportsPage() {
         <Notice variant="error">
           <strong>{t("reports.openHtmlError")}</strong>
           <span>{appErrorText(openError)}</span>
+        </Notice>
+      ) : null}
+
+      {reports.state === "cancelled" ? (
+        <Notice
+          variant="info"
+          action={
+            <Button
+              variant="secondary"
+              onClick={requestBuild}
+              disabled={blocked}
+            >
+              {t("common.retry")}
+            </Button>
+          }
+        >
+          <strong>{t("runStatus.cancelled")}</strong>
+          <span>{t("runStatus.cancelledHint")}</span>
         </Notice>
       ) : null}
 
