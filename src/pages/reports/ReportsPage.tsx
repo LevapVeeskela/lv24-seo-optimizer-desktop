@@ -15,7 +15,14 @@ import { Notice } from "@/shared/ui/Notice";
 import { useFeedback } from "@/shared/ui/Feedback";
 import { openPath } from "@/entities/config";
 import { ReportSectionView } from "@/entities/report/ui/ReportSectionView";
+import {
+  activePeriod,
+  sameWindowParams,
+  useWindowSettings,
+} from "@/entities/window";
 import { ReportExportPanel } from "@/features/export";
+import { RunStatus } from "@/shared/ui/RunStatus";
+import { WindowPicker } from "@/shared/ui/WindowPicker";
 import {
   reportHtmlPath,
   reportLimitations,
@@ -31,6 +38,11 @@ export const ReportsPage = observer(function ReportsPage() {
   const [openError, setOpenError] = useState<AppError | null>(null);
   const [confirmOpen, setConfirmOpen] = useState(false);
   const configPath = engine.status?.configPath ?? null;
+  const windowSettings = useWindowSettings(configPath);
+  const windowPeriod = activePeriod(windowSettings.days, windowSettings.lagDays);
+  const windowStale =
+    reports.lastParams !== null &&
+    !sameWindowParams(reports.lastParams, windowSettings.params);
   const blocked = engine.offline || engine.loading || !configPath;
 
   const report = reports.report;
@@ -61,7 +73,7 @@ export const ReportsPage = observer(function ReportsPage() {
     if (blocked) {
       return;
     }
-    const ok = await reports.buildWeekly();
+    const ok = await reports.buildWeekly(windowSettings.params);
     if (ok) {
       // The fresh snapshot is the head side of the comparison; reload it so
       // the card never compares against a superseded report.
@@ -110,6 +122,11 @@ export const ReportsPage = observer(function ReportsPage() {
 
   const requestBuild = () => setConfirmOpen(true);
 
+  const resetWindow = () => {
+    windowSettings.reset();
+    notify(t("window.resetDone"));
+  };
+
   const period = report?.period ?? meta.period;
   const property = report?.property_id ?? meta.property_id;
 
@@ -151,6 +168,32 @@ export const ReportsPage = observer(function ReportsPage() {
           </Button>
         </div>
       </header>
+
+      <Card>
+        <div className="card-header">
+          <div>
+            <h2>{t("window.title")}</h2>
+            <p className="muted small">{t("window.hint")}</p>
+          </div>
+        </div>
+        <WindowPicker
+          days={windowSettings.days}
+          lagDays={windowSettings.lagDays}
+          period={windowPeriod}
+          disabled={blocked}
+          stale={windowStale}
+          onDaysChange={(days) => windowSettings.setDays(days)}
+          onLagChange={(lagDays) => windowSettings.setLagDays(lagDays)}
+          onReset={resetWindow}
+        />
+      </Card>
+
+      <RunStatus
+        label={t("runStatus.reportLabel")}
+        running={reports.loading}
+        startedAt={reports.startedAt}
+        lastRun={reports.lastRun}
+      />
 
       {engine.offline ? (
         <Notice
