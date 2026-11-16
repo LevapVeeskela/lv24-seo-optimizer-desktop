@@ -563,6 +563,68 @@ pub fn validate_init_data_dir(raw: &str) -> AppResult<PathBuf> {
     Ok(path)
 }
 
+/// The engine refuses logs larger than this before reading a byte; the shell
+/// mirrors the cap so an oversized file fails without spawning the sidecar.
+pub const MAX_LOG_FILE_BYTES: u64 = 100 * 1024 * 1024;
+
+/// Validate one user-supplied access log. The contract is deliberately narrow:
+/// one absolute local regular file, never a glob, a directory, a network share
+/// or a Windows device. Approval (native dialog or export/data roots) is
+/// checked by the caller; this function only proves the path is safe to hand to
+/// the engine.
+pub fn validate_log_file_path(raw: &str, label: &str) -> AppResult<PathBuf> {
+    ensure_local_path(raw, label)?;
+    if raw.chars().any(|ch| matches!(ch, '*' | '?' | '[')) {
+        return Err(AppError::new(
+            "INVALID_PATH",
+            format!("{label} must name exactly one file, not a glob"),
+        ));
+    }
+    let path = validate_absolute_path(raw, label)?;
+    #[cfg(windows)]
+    if !matches!(
+        path.components().next(),
+        Some(std::path::Component::Prefix(_))
+    ) {
+        return Err(AppError::new(
+            "INVALID_PATH",
+            format!("{label} must include a drive letter: {}", path.display()),
+        ));
+    }
+    let metadata = fs::metadata(&path).map_err(|err| {
+        AppError::new(
+            "INVALID_PATH",
+            format!("{label} is not accessible: {} ({err})", path.display()),
+        )
+    })?;
+    if metadata.is_dir() {
+        return Err(AppError::new(
+            "INVALID_PATH",
+            format!("{label} is a directory: {}", path.display()),
+        ));
+    }
+    if !metadata.is_file() {
+        return Err(AppError::new(
+            "INVALID_PATH",
+            format!("{label} is not a regular file: {}", path.display()),
+        ));
+    }
+    if metadata.len() > MAX_LOG_FILE_BYTES {
+        return Err(AppError::new(
+            "INVALID_PATH",
+            format!(
+                "{label} is larger than the {MAX_LOG_FILE_BYTES} byte limit: {}",
+                path.display()
+            ),
+        )
+        .with_details(serde_json::json!({
+            "sizeBytes": metadata.len(),
+            "maxBytes": MAX_LOG_FILE_BYTES,
+        })));
+    }
+    Ok(path)
+}
+
 /// Validate an existing local directory (the native folder dialog result).
 pub fn validate_directory_path(raw: &str, label: &str) -> AppResult<PathBuf> {
     ensure_local_path(raw, label)?;

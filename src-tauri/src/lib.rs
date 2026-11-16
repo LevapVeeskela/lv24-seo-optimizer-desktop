@@ -35,6 +35,7 @@ pub fn run() {
             commands::settings_set,
             commands::pick_config,
             commands::pick_directory,
+            commands::pick_log_file,
             commands::open_path,
             commands::prepare_update,
             commands::update_install,
