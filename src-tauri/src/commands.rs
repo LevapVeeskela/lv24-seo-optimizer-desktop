@@ -44,6 +44,9 @@ pub struct AppState {
     /// Access logs the user picked in the native file dialog. `logs_analyze`
     /// reads only one of these or a file under the app data/export roots.
     approved_log_files: Mutex<HashSet<PathBuf>>,
+    /// Backup archives the user picked in the native file dialog.
+    /// `backup_restore` reads only one of these.
+    approved_backup_archives: Mutex<HashSet<PathBuf>>,
     update: UpdateGate,
 }
 
@@ -55,6 +58,7 @@ impl AppState {
             approved_configs: Mutex::new(HashSet::new()),
             approved_directories: Mutex::new(HashSet::new()),
             approved_log_files: Mutex::new(HashSet::new()),
+            approved_backup_archives: Mutex::new(HashSet::new()),
             update: UpdateGate::default(),
         }
     }
@@ -73,6 +77,12 @@ impl AppState {
 
     fn approved_log_files(&self) -> MutexGuard<'_, HashSet<PathBuf>> {
         self.approved_log_files
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    fn approved_backup_archives(&self) -> MutexGuard<'_, HashSet<PathBuf>> {
+        self.approved_backup_archives
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
@@ -174,6 +184,63 @@ impl AppState {
             Ok(canonical) => approved.iter().any(|path| same_path(path, &canonical)),
             Err(_) => approved.iter().any(|path| same_path(path, candidate)),
         }
+    }
+
+    /// Record a backup archive chosen in the native file dialog. The canonical
+    /// form is stored for comparisons; the webview gets the normalized path the
+    /// user picked so the engine receives a plain absolute path.
+    pub fn approve_backup_archive(&self, path: &Path) -> AppResult<PathBuf> {
+        let validated = paths::validate_backup_archive_path(&path.display().to_string())?;
+        let canonical = fs::canonicalize(&validated).map_err(|err| {
+            AppError::new(
+                "INVALID_PATH",
+                format!("cannot resolve {}: {err}", validated.display()),
+            )
+        })?;
+        self.approved_backup_archives().insert(canonical);
+        Ok(validated)
+    }
+
+    fn is_backup_archive_approved(&self, candidate: &Path) -> bool {
+        let approved = self.approved_backup_archives();
+        match fs::canonicalize(candidate) {
+            Ok(canonical) => approved.iter().any(|path| same_path(path, &canonical)),
+            Err(_) => approved.iter().any(|path| same_path(path, candidate)),
+        }
+    }
+
+    /// `backup restore` reads exactly one local archive. It must come from
+    /// `pick_backup_archive` in this process; an arbitrary webview string is
+    /// rejected before the engine is spawned.
+    fn ensure_backup_archive_allowed(&self, raw: &str) -> AppResult<PathBuf> {
+        let validated = paths::validate_backup_archive_path(raw)?;
+        if self.is_backup_archive_approved(&validated) {
+            return Ok(validated);
+        }
+        Err(AppError::new(
+            "PATH_NOT_APPROVED",
+            "choose the backup archive with the native file dialog",
+        )
+        .with_details(serde_json::json!({
+            "path": validated.display().to_string(),
+        })))
+    }
+
+    /// `portfolio list` scans the project folders under one root. The root must
+    /// be a directory the user picked in the native dialog; read-only is not a
+    /// reason to let a compromised webview enumerate the filesystem.
+    fn ensure_portfolio_root_allowed(&self, raw: &str) -> AppResult<PathBuf> {
+        let directory = paths::validate_directory_path(raw, "portfolio root")?;
+        if self.is_directory_approved(&directory) {
+            return Ok(directory);
+        }
+        Err(AppError::new(
+            "PATH_NOT_APPROVED",
+            "choose the portfolio folder with the native directory dialog",
+        )
+        .with_details(serde_json::json!({
+            "path": directory.display().to_string(),
+        })))
     }
 
     /// `logs analyze` reads exactly one local file. It must either come from
@@ -683,6 +750,33 @@ pub async fn pick_log_file(
     Ok(Some(approved.display().to_string()))
 }
 
+/// Open the native file dialog for one backup archive and remember the
+/// canonical file. `backup_restore` only reads a file approved this way, so the
+/// webview cannot turn the engine into an arbitrary zip reader.
+#[tauri::command]
+pub async fn pick_backup_archive(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<Option<String>, AppError> {
+    let picked = app
+        .dialog()
+        .file()
+        .set_title("Backup archive")
+        .add_filter("Backup archive", &["zip"])
+        .blocking_pick_file();
+    let Some(file) = picked else {
+        return Ok(None);
+    };
+    let path = file.into_path().map_err(|err| {
+        AppError::new(
+            "INVALID_PATH",
+            format!("cannot resolve the picked archive: {err}"),
+        )
+    })?;
+    let approved = state.approve_backup_archive(&path)?;
+    Ok(Some(approved.display().to_string()))
+}
+
 /// Startup handshake. It never fails because the engine is missing: the
 /// missing/broken engine is returned as status data.
 #[tauri::command]
@@ -780,10 +874,24 @@ pub async fn cli_run(
         }
     }
 
-    let config_path = if matches!(command, CliCommandId::Init | CliCommandId::LogsAnalyze) {
+    if command == CliCommandId::PortfolioList
+        && requested_config
+            .as_deref()
+            .is_some_and(|value| !value.trim().is_empty())
+    {
+        // A portfolio roll-up spans projects; it never uses the active config.
+        return Err(AppError::new(
+            "INVALID_ARGUMENT",
+            "portfolio_list does not use a project config",
+        ));
+    }
+    let config_path = if matches!(
+        command,
+        CliCommandId::Init | CliCommandId::LogsAnalyze | CliCommandId::PortfolioList
+    ) {
         // `init` targets a config that is not active yet; `logs analyze` reads
         // one local file and must keep working even when the workspace config
-        // is stale or missing.
+        // is stale or missing; `portfolio list` scans a picked root.
         None
     } else {
         resolve_active_config_opt(state.inner(), requested_config)?
@@ -821,14 +929,17 @@ pub async fn cli_run(
     } else {
         None
     };
-    if command == CliCommandId::SchedulePrint {
-        // `schedule print` renders the artefact for the active project. A
-        // requested path must already be the active one; it is passed to the
-        // engine through args so `--config` appears once in argv.
+    if matches!(
+        command,
+        CliCommandId::SchedulePrint | CliCommandId::ScheduleInstall
+    ) {
+        // Both schedule commands act on the active project. A requested path
+        // must already be the active one; it is passed to the engine through
+        // args so `--config` appears once in argv.
         let active = config_path.as_ref().ok_or_else(|| {
             AppError::new(
                 "CONFIG_PATH_REQUIRED",
-                "schedule_print requires an absolute config path",
+                format!("{} requires an absolute config path", command.id()),
             )
         })?;
         if let Some(requested) = args.config_path.as_deref() {
@@ -867,12 +978,54 @@ pub async fn cli_run(
         let allowed = state.inner().ensure_backup_out_allowed(out)?;
         args.out = Some(allowed.display().to_string());
     }
+    if command == CliCommandId::BackupRestore {
+        // The plan phase must stay read-only: a token is the only thing that
+        // can turn this call into an apply, and build_argv rejects a token
+        // without the explicit opt-in.
+        let file = args.file.as_deref().ok_or_else(|| {
+            AppError::new("INVALID_ARGUMENT", "file is required for backup_restore")
+        })?;
+        let allowed = state.inner().ensure_backup_archive_allowed(file)?;
+        args.file = Some(allowed.display().to_string());
+        let active = config_path.as_ref().ok_or_else(|| {
+            AppError::new(
+                "CONFIG_PATH_REQUIRED",
+                "backup_restore requires an absolute config path",
+            )
+        })?;
+        if let Some(requested) = args.config_path.as_deref() {
+            let requested = paths::validate_config_path(requested)?;
+            if !same_path(&requested, active) {
+                return Err(AppError::new(
+                    "PATH_NOT_ALLOWED",
+                    "the requested config is not the active project config selected in Settings",
+                )
+                .with_details(serde_json::json!({
+                    "requested": requested.display().to_string(),
+                    "active": active.display().to_string(),
+                })));
+            }
+        }
+        args.config_path = Some(active.display().to_string());
+    }
+    if command == CliCommandId::PortfolioList {
+        let root = args.root.as_deref().ok_or_else(|| {
+            AppError::new("INVALID_ARGUMENT", "root is required for portfolio_list")
+        })?;
+        let allowed = state.inner().ensure_portfolio_root_allowed(root)?;
+        args.root = Some(allowed.display().to_string());
+    }
 
-    // `init` and `schedule_print` carry `--config` in argv; every other
-    // command gets it appended by the runner. `logs analyze` has no `--config`
-    // option at all: it reads one local file and never touches the project.
+    // `init`, the schedule commands and `backup_restore` carry `--config` in
+    // argv; every other command gets it appended by the runner. `logs analyze`
+    // and `portfolio list` have no `--config` option at all.
     let engine_config = match command {
-        CliCommandId::Init | CliCommandId::SchedulePrint | CliCommandId::LogsAnalyze => None,
+        CliCommandId::Init
+        | CliCommandId::SchedulePrint
+        | CliCommandId::ScheduleInstall
+        | CliCommandId::BackupRestore
+        | CliCommandId::LogsAnalyze
+        | CliCommandId::PortfolioList => None,
         _ => config_path.as_deref(),
     };
     let location = paths::locate_engine(&app)?;
@@ -1956,6 +2109,104 @@ mod tests {
                 .code(),
             "INVALID_PATH"
         );
+    }
+
+    #[test]
+    fn backup_restore_reads_only_a_dialog_picked_archive() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = app_state(dir.path(), None);
+        let archive = dir.path().join("lv24-seo-backup.zip");
+        fs::write(&archive, "PK\u{3}\u{4}").unwrap();
+
+        // An arbitrary webview path is not enough, even when it exists.
+        assert_eq!(
+            state
+                .ensure_backup_archive_allowed(&archive.display().to_string())
+                .unwrap_err()
+                .code(),
+            "PATH_NOT_APPROVED"
+        );
+
+        // A file the user picked in the native dialog is recorded and accepted.
+        let approved = state.approve_backup_archive(&archive).unwrap();
+        assert_eq!(approved, archive);
+        assert_eq!(
+            state
+                .ensure_backup_archive_allowed(&archive.display().to_string())
+                .unwrap(),
+            archive
+        );
+
+        // Shape checks still apply after approval.
+        let directory = dir.path().join("folder.zip");
+        fs::create_dir(&directory).unwrap();
+        for path in [
+            directory.display().to_string(),
+            dir.path().join("missing.zip").display().to_string(),
+            dir.path().join("backup.tar").display().to_string(),
+            dir.path().join("*.zip").display().to_string(),
+            r"\\server\share\backup.zip".to_string(),
+        ] {
+            assert_eq!(
+                state
+                    .ensure_backup_archive_allowed(&path)
+                    .unwrap_err()
+                    .code(),
+                "INVALID_PATH",
+                "{path:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn portfolio_root_needs_a_folder_picked_in_the_dialog() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = app_state(dir.path(), None);
+        let root = dir.path().join("projects");
+        fs::create_dir(&root).unwrap();
+
+        assert_eq!(
+            state
+                .ensure_portfolio_root_allowed(&root.display().to_string())
+                .unwrap_err()
+                .code(),
+            "PATH_NOT_APPROVED"
+        );
+
+        state.approve_directory(&root).unwrap();
+        assert_eq!(
+            state
+                .ensure_portfolio_root_allowed(&root.display().to_string())
+                .unwrap(),
+            root
+        );
+
+        // The app's own export directory is not a portfolio root just because
+        // the shell owns it: the user still has to pick a folder.
+        assert_eq!(
+            state
+                .ensure_portfolio_root_allowed(&state.paths.export_dir.display().to_string())
+                .unwrap_err()
+                .code(),
+            "PATH_NOT_APPROVED"
+        );
+
+        let file = dir.path().join("seo.toml");
+        fs::write(&file, "version = 1\n").unwrap();
+        for path in [
+            file.display().to_string(),
+            dir.path().join("missing").display().to_string(),
+            r"\\server\share\projects".to_string(),
+        ] {
+            assert_eq!(
+                state
+                    .ensure_portfolio_root_allowed(&path)
+                    .unwrap_err()
+                    .code(),
+                "INVALID_PATH",
+                "{path:?}"
+            );
+        }
     }
 
     #[test]

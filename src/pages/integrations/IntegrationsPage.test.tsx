@@ -55,11 +55,18 @@ describe("IntegrationsPage", () => {
     expect(html).toContain("Engine offline");
   });
 
-  it("adds the local backup panel and states that restore is not implemented", () => {
+  it("adds the local backup panel with a restore flow", () => {
     const html = renderPage();
     expect(html).toContain("Workspace backup");
     expect(html).toContain("Create backup");
     expect(html).toContain("No backup yet");
-    expect(html).toContain("Restore is not implemented");
+    expect(html).toContain("Restore from archive");
+    expect(html).toContain("Review restore");
+  });
+
+  it("offers a host install mode next to the print-only preview", () => {
+    const html = renderPage();
+    expect(html).toContain("Preview artifact");
+    expect(html).toContain("Install on this host");
   });
 });

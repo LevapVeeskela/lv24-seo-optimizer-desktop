@@ -11,6 +11,7 @@ export const ROUTES = {
   crawl: "/crawl",
   logs: "/logs",
   tasks: "/tasks",
+  portfolio: "/portfolio",
   integrations: "/integrations",
   onboarding: "/onboarding",
   diagnostics: "/diagnostics",

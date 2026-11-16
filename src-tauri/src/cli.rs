@@ -11,8 +11,9 @@ use tokio::process::Command;
 
 use crate::error::{AppError, AppResult};
 use crate::paths::{
-    validate_absolute_path, validate_config_path, validate_init_config_path,
-    validate_init_data_dir, validate_log_file_path, EngineLocation,
+    validate_absolute_path, validate_backup_archive_path, validate_config_path,
+    validate_directory_path, validate_init_config_path, validate_init_data_dir,
+    validate_log_file_path, EngineLocation,
 };
 
 /// Upper bounds keep a runaway engine from exhausting webview memory.
@@ -31,6 +32,11 @@ const MAX_TASK_URL_LEN: usize = 2048;
 const MAX_TASK_PROPERTY_LEN: usize = 512;
 const MAX_TASK_PAYLOAD_BYTES: usize = 16 * 1024;
 const MAX_TASKS_LIMIT: u32 = 500;
+/// `portfolio list` returns a bounded roll-up; the shell keeps the same cap.
+const MAX_PORTFOLIO_LIMIT: u32 = 50;
+/// A confirm token is `<expiry>:<hmac>`; keep the charset narrow so nothing
+/// but the token itself can reach argv.
+const MAX_CONFIRM_TOKEN_LEN: usize = 512;
 
 /// How long `stop_tracked_children` waits for killed sidecars to disappear
 /// before the update is refused.
@@ -64,6 +70,12 @@ pub enum CliCommandId {
     TasksUpdate,
     /// Portable local backup zip; writes only the chosen directory.
     BackupCreate,
+    /// Two-phase restore of a backup zip; plan without a token, apply with one.
+    BackupRestore,
+    /// Read-only multi-site roll-up over local project databases.
+    PortfolioList,
+    /// Install the weekly/daily report job in the host scheduler.
+    ScheduleInstall,
     /// Internal commands used by dedicated auth commands; they are deliberately
     /// absent from the generic `cli_run` allow-list.
     AuthSet,
@@ -99,6 +111,9 @@ impl CliCommandId {
             "tasks_add" => Ok(Self::TasksAdd),
             "tasks_update" => Ok(Self::TasksUpdate),
             "backup_create" => Ok(Self::BackupCreate),
+            "backup_restore" => Ok(Self::BackupRestore),
+            "portfolio_list" => Ok(Self::PortfolioList),
+            "schedule_install" => Ok(Self::ScheduleInstall),
             other => Err(AppError::new(
                 "INVALID_COMMAND",
                 format!("command {other:?} is not in the desktop allow-list"),
@@ -108,7 +123,8 @@ impl CliCommandId {
                     "version", "stats", "config_show", "doctor", "properties",
                     "auth_status", "report_weekly", "report_diff", "crawl",
                     "init", "schedule_print", "logs_analyze", "tasks_list",
-                    "tasks_add", "tasks_update", "backup_create"
+                    "tasks_add", "tasks_update", "backup_create", "backup_restore",
+                    "portfolio_list", "schedule_install"
                 ]
             }))),
         }
@@ -132,15 +148,18 @@ impl CliCommandId {
             Self::TasksAdd => "tasks_add",
             Self::TasksUpdate => "tasks_update",
             Self::BackupCreate => "backup_create",
+            Self::BackupRestore => "backup_restore",
+            Self::PortfolioList => "portfolio_list",
+            Self::ScheduleInstall => "schedule_install",
             Self::AuthSet => "auth_set",
             Self::AuthLogout => "auth_delete",
         }
     }
 
     /// Commands that need an existing project config file. `version`, `stats`,
-    /// `doctor`, `properties`, `auth_status`, `init` and `logs_analyze` may run
-    /// without one; `auth_set` and `auth_delete` are reached through their
-    /// dedicated commands.
+    /// `doctor`, `properties`, `auth_status`, `init`, `logs_analyze` and
+    /// `portfolio_list` may run without one; `auth_set` and `auth_delete` are
+    /// reached through their dedicated commands.
     pub fn requires_config(self) -> bool {
         matches!(
             self,
@@ -149,21 +168,26 @@ impl CliCommandId {
                 | Self::ReportDiff
                 | Self::Crawl
                 | Self::SchedulePrint
+                | Self::ScheduleInstall
                 | Self::TasksList
                 | Self::TasksAdd
                 | Self::TasksUpdate
                 | Self::BackupCreate
+                | Self::BackupRestore
         )
     }
 
-    /// How the command changes state. `init`, the task lifecycle and backups
-    /// write local files only; no command in the allow-list spends provider
-    /// quota or changes remote provider state.
+    /// How the command changes state. `init`, the task lifecycle, backups and
+    /// the host scheduler write local state only; no command in the allow-list
+    /// spends provider quota or changes remote provider state.
     pub fn write_kind(self) -> WriteKind {
         match self {
-            Self::Init | Self::TasksAdd | Self::TasksUpdate | Self::BackupCreate => {
-                WriteKind::LocalState
-            }
+            Self::Init
+            | Self::TasksAdd
+            | Self::TasksUpdate
+            | Self::BackupCreate
+            | Self::BackupRestore
+            | Self::ScheduleInstall => WriteKind::LocalState,
             _ => WriteKind::None,
         }
     }
@@ -172,6 +196,8 @@ impl CliCommandId {
         match self {
             Self::Crawl => Duration::from_secs(600),
             Self::AuthSet | Self::AuthLogout => Duration::from_secs(120),
+            // A restore copies a whole database and may replace large files.
+            Self::BackupRestore => Duration::from_secs(300),
             Self::Stats | Self::ReportWeekly | Self::ReportDiff | Self::BackupCreate => {
                 Duration::from_secs(120)
             }
@@ -180,9 +206,12 @@ impl CliCommandId {
             // A cold PyInstaller sidecar can spend well over ten seconds on
             // unpacking and antivirus scanning before it prints a version.
             Self::Version => Duration::from_secs(30),
-            Self::LogsAnalyze | Self::TasksList | Self::TasksAdd | Self::TasksUpdate => {
-                Duration::from_secs(60)
-            }
+            Self::LogsAnalyze
+            | Self::TasksList
+            | Self::TasksAdd
+            | Self::TasksUpdate
+            | Self::PortfolioList
+            | Self::ScheduleInstall => Duration::from_secs(60),
             Self::ConfigShow
             | Self::Doctor
             | Self::Properties
@@ -239,6 +268,13 @@ pub struct CliArgs {
     pub id: Option<i64>,
     /// `backup_create` only: replace a same-second archive.
     pub force: Option<bool>,
+    /// `backup_restore` only: explicit opt-in for the write phase. The plan
+    /// phase must not set it.
+    pub allow_write: Option<bool>,
+    /// `backup_restore` only: `confirm_token` returned by the plan phase.
+    pub confirm: Option<String>,
+    /// `portfolio_list` only: absolute directory picked in the native dialog.
+    pub root: Option<String>,
 }
 
 impl CliArgs {
@@ -281,6 +317,11 @@ impl CliArgs {
             || self.payload.is_some()
             || self.id.is_some()
             || self.force.is_some()
+    }
+
+    /// Write-gate arguments that only `backup_restore` accepts.
+    fn has_restore_args(&self) -> bool {
+        self.allow_write.is_some() || self.confirm.is_some()
     }
 }
 
@@ -534,6 +575,57 @@ pub fn build_argv(command: CliCommandId, args: &CliArgs) -> AppResult<Vec<String
             argv.push("--json".into());
             argv
         }
+        CliCommandId::BackupRestore => {
+            let file = validate_backup_archive_path(args.file.as_deref().unwrap_or(""))?;
+            let config = validate_config_path(args.config_path.as_deref().unwrap_or(""))?;
+            let mut argv = vec![
+                "backup".into(),
+                "restore".into(),
+                "--file".into(),
+                file.display().to_string(),
+                "--config".into(),
+                config.display().to_string(),
+            ];
+            if args.allow_write == Some(true) {
+                argv.push("--allow-write".into());
+            }
+            if let Some(token) = args.confirm.as_deref() {
+                argv.push("--confirm".into());
+                argv.push(validate_confirm_token(token)?);
+            }
+            argv.push("--json".into());
+            argv
+        }
+        CliCommandId::PortfolioList => {
+            let root =
+                validate_directory_path(args.root.as_deref().unwrap_or(""), "portfolio root")?;
+            let mut argv = vec![
+                "portfolio".into(),
+                "list".into(),
+                "--root".into(),
+                root.display().to_string(),
+            ];
+            if let Some(limit) = args.limit {
+                validate_range(limit, 1, MAX_PORTFOLIO_LIMIT, "limit")?;
+                argv.push("--limit".into());
+                argv.push(limit.to_string());
+            }
+            argv.push("--json".into());
+            argv
+        }
+        CliCommandId::ScheduleInstall => {
+            let kind = normalize_schedule_kind(args.kind.as_deref().unwrap_or(""))?;
+            let config = validate_config_path(args.config_path.as_deref().unwrap_or(""))?;
+            let mut argv = vec!["schedule".into(), "install".into(), "--kind".into(), kind];
+            if let Some(cron) = args.cron.as_deref() {
+                argv.push("--cron".into());
+                argv.push(normalize_cron(cron)?);
+            }
+            argv.push("--config".into());
+            argv.push(config.display().to_string());
+            argv.push("--json".into());
+            argv
+        }
     };
     Ok(argv)
 }
@@ -556,6 +648,8 @@ fn validate_args(command: CliCommandId, args: &CliArgs) -> AppResult<()> {
                 || args.out.is_some()
                 || args.has_init_or_schedule_args()
                 || args.has_log_or_task_args()
+                || args.has_restore_args()
+                || args.root.is_some()
             {
                 return reject("base/head/start/maxUrls/provider/out/init/schedule");
             }
@@ -570,6 +664,8 @@ fn validate_args(command: CliCommandId, args: &CliArgs) -> AppResult<()> {
                 || args.provider.is_some()
                 || args.has_init_or_schedule_args()
                 || args.has_log_or_task_args()
+                || args.has_restore_args()
+                || args.root.is_some()
             {
                 return reject("base/head/start/maxUrls/provider/init/schedule");
             }
@@ -588,6 +684,8 @@ fn validate_args(command: CliCommandId, args: &CliArgs) -> AppResult<()> {
                 || args.out.is_some()
                 || args.has_init_or_schedule_args()
                 || args.has_log_or_task_args()
+                || args.has_restore_args()
+                || args.root.is_some()
             {
                 return reject("days/lagDays/start/maxUrls/provider/out/init/schedule");
             }
@@ -607,6 +705,8 @@ fn validate_args(command: CliCommandId, args: &CliArgs) -> AppResult<()> {
                 || args.out.is_some()
                 || args.has_init_or_schedule_args()
                 || args.has_log_or_task_args()
+                || args.has_restore_args()
+                || args.root.is_some()
             {
                 return reject("days/lagDays/base/head/provider/out/init/schedule");
             }
@@ -632,6 +732,8 @@ fn validate_args(command: CliCommandId, args: &CliArgs) -> AppResult<()> {
                 || args.provider.is_some()
                 || args.has_init_or_schedule_args()
                 || args.has_log_or_task_args()
+                || args.has_restore_args()
+                || args.root.is_some()
             {
                 return reject("all arguments");
             }
@@ -646,6 +748,8 @@ fn validate_args(command: CliCommandId, args: &CliArgs) -> AppResult<()> {
                 || args.out.is_some()
                 || args.has_init_or_schedule_args()
                 || args.has_log_or_task_args()
+                || args.has_restore_args()
+                || args.root.is_some()
             {
                 return reject("days/lagDays/base/head/start/maxUrls/out/init/schedule");
             }
@@ -668,6 +772,8 @@ fn validate_args(command: CliCommandId, args: &CliArgs) -> AppResult<()> {
                 || args.cron.is_some()
                 || args.target.is_some()
                 || args.has_log_or_task_args()
+                || args.has_restore_args()
+                || args.root.is_some()
             {
                 return reject("an argument other than property/configPath/dataDir");
             }
@@ -697,6 +803,8 @@ fn validate_args(command: CliCommandId, args: &CliArgs) -> AppResult<()> {
                 || args.property.is_some()
                 || args.data_dir.is_some()
                 || args.has_log_or_task_args()
+                || args.has_restore_args()
+                || args.root.is_some()
             {
                 return reject(
                     "days/lagDays/base/head/start/maxUrls/out/provider/property/dataDir",
@@ -725,6 +833,8 @@ fn validate_args(command: CliCommandId, args: &CliArgs) -> AppResult<()> {
                 || args.payload.is_some()
                 || args.id.is_some()
                 || args.force.is_some()
+                || args.has_restore_args()
+                || args.root.is_some()
             {
                 return reject("an argument other than file/bot");
             }
@@ -744,6 +854,8 @@ fn validate_args(command: CliCommandId, args: &CliArgs) -> AppResult<()> {
                 || args.payload.is_some()
                 || args.id.is_some()
                 || args.force.is_some()
+                || args.has_restore_args()
+                || args.root.is_some()
             {
                 return reject("an argument other than property/kind/state/limit");
             }
@@ -769,6 +881,8 @@ fn validate_args(command: CliCommandId, args: &CliArgs) -> AppResult<()> {
                 || args.limit.is_some()
                 || args.id.is_some()
                 || args.force.is_some()
+                || args.has_restore_args()
+                || args.root.is_some()
             {
                 return reject("an argument other than kind/url/rule/property/payload");
             }
@@ -802,6 +916,8 @@ fn validate_args(command: CliCommandId, args: &CliArgs) -> AppResult<()> {
                 || args.rule.is_some()
                 || args.payload.is_some()
                 || args.force.is_some()
+                || args.has_restore_args()
+                || args.root.is_some()
             {
                 return reject("an argument other than id/state");
             }
@@ -834,6 +950,8 @@ fn validate_args(command: CliCommandId, args: &CliArgs) -> AppResult<()> {
                 || args.rule.is_some()
                 || args.payload.is_some()
                 || args.id.is_some()
+                || args.has_restore_args()
+                || args.root.is_some()
             {
                 return reject("an argument other than out/force");
             }
@@ -847,6 +965,131 @@ fn validate_args(command: CliCommandId, args: &CliArgs) -> AppResult<()> {
                     format!("backup output is not a directory: {}", path.display()),
                 ));
             }
+        }
+        CliCommandId::BackupRestore => {
+            if args.days.is_some()
+                || args.lag_days.is_some()
+                || args.base.is_some()
+                || args.head.is_some()
+                || args.start.is_some()
+                || args.max_urls.is_some()
+                || args.out.is_some()
+                || args.provider.is_some()
+                || args.property.is_some()
+                || args.data_dir.is_some()
+                || args.cron.is_some()
+                || args.target.is_some()
+                || args.bot.is_some()
+                || args.kind.is_some()
+                || args.state.is_some()
+                || args.limit.is_some()
+                || args.url.is_some()
+                || args.rule.is_some()
+                || args.payload.is_some()
+                || args.id.is_some()
+                || args.force.is_some()
+                || args.root.is_some()
+            {
+                return reject("an argument other than file/configPath/allowWrite/confirm");
+            }
+            let file = args.file.as_deref().ok_or_else(|| {
+                AppError::new("INVALID_ARGUMENT", "file is required for backup_restore")
+            })?;
+            validate_backup_archive_path(file)?;
+            let config = args.config_path.as_deref().ok_or_else(|| {
+                AppError::new(
+                    "INVALID_ARGUMENT",
+                    "configPath is required for backup_restore",
+                )
+            })?;
+            validate_config_path(config)?;
+            // The plan is the only phase without a token; a token without the
+            // explicit opt-in would ask the engine to apply without consent.
+            if args.confirm.is_some() && args.allow_write != Some(true) {
+                return Err(AppError::new(
+                    "INVALID_ARGUMENT",
+                    "confirm requires allowWrite=true",
+                ));
+            }
+            if let Some(token) = args.confirm.as_deref() {
+                validate_confirm_token(token)?;
+            }
+        }
+        CliCommandId::PortfolioList => {
+            if args.days.is_some()
+                || args.lag_days.is_some()
+                || args.base.is_some()
+                || args.head.is_some()
+                || args.start.is_some()
+                || args.max_urls.is_some()
+                || args.out.is_some()
+                || args.provider.is_some()
+                || args.property.is_some()
+                || args.data_dir.is_some()
+                || args.config_path.is_some()
+                || args.cron.is_some()
+                || args.target.is_some()
+                || args.file.is_some()
+                || args.bot.is_some()
+                || args.kind.is_some()
+                || args.state.is_some()
+                || args.url.is_some()
+                || args.rule.is_some()
+                || args.payload.is_some()
+                || args.id.is_some()
+                || args.force.is_some()
+                || args.has_restore_args()
+            {
+                return reject("an argument other than root/limit");
+            }
+            let root = args.root.as_deref().ok_or_else(|| {
+                AppError::new("INVALID_ARGUMENT", "root is required for portfolio_list")
+            })?;
+            validate_directory_path(root, "portfolio root")?;
+            if let Some(limit) = args.limit {
+                validate_range(limit, 1, MAX_PORTFOLIO_LIMIT, "limit")?;
+            }
+        }
+        CliCommandId::ScheduleInstall => {
+            if args.days.is_some()
+                || args.lag_days.is_some()
+                || args.base.is_some()
+                || args.head.is_some()
+                || args.start.is_some()
+                || args.max_urls.is_some()
+                || args.out.is_some()
+                || args.provider.is_some()
+                || args.property.is_some()
+                || args.data_dir.is_some()
+                || args.target.is_some()
+                || args.file.is_some()
+                || args.bot.is_some()
+                || args.state.is_some()
+                || args.limit.is_some()
+                || args.url.is_some()
+                || args.rule.is_some()
+                || args.payload.is_some()
+                || args.id.is_some()
+                || args.force.is_some()
+                || args.has_restore_args()
+                || args.root.is_some()
+            {
+                return reject("an argument other than kind/cron/configPath");
+            }
+            let kind = args.kind.as_deref().ok_or_else(|| {
+                AppError::new("INVALID_ARGUMENT", "kind is required for schedule_install")
+            })?;
+            normalize_schedule_kind(kind)?;
+            if let Some(cron) = args.cron.as_deref() {
+                normalize_cron(cron)?;
+            }
+            let config = args.config_path.as_deref().ok_or_else(|| {
+                AppError::new(
+                    "INVALID_ARGUMENT",
+                    "configPath is required for schedule_install",
+                )
+            })?;
+            validate_config_path(config)?;
         }
     }
     Ok(())
@@ -1148,6 +1391,53 @@ fn normalize_schedule_target(raw: &str) -> AppResult<String> {
         )
         .with_details(serde_json::json!({ "allowed": SCHEDULE_TARGETS })))
     }
+}
+
+/// `schedule install` supports exactly the two report kinds the engine ships.
+const SCHEDULE_KINDS: &[&str] = &["weekly", "daily"];
+
+fn normalize_schedule_kind(raw: &str) -> AppResult<String> {
+    let value = raw.trim().to_ascii_lowercase();
+    if SCHEDULE_KINDS.contains(&value.as_str()) {
+        Ok(value)
+    } else {
+        Err(AppError::new(
+            "INVALID_ARGUMENT",
+            format!("schedule kind {raw:?} is not supported"),
+        )
+        .with_details(serde_json::json!({ "allowed": SCHEDULE_KINDS })))
+    }
+}
+
+/// The engine mints `<expiry>:<hmac>`; the shell only checks that the value is
+/// a bounded token and cannot smuggle whitespace, control characters or an
+/// option prefix into argv.
+fn validate_confirm_token(raw: &str) -> AppResult<String> {
+    if raw.is_empty() {
+        return Err(AppError::new("INVALID_ARGUMENT", "confirm token is empty"));
+    }
+    if raw.len() > MAX_CONFIRM_TOKEN_LEN {
+        return Err(AppError::new(
+            "INVALID_ARGUMENT",
+            format!("confirm token is longer than {MAX_CONFIRM_TOKEN_LEN} characters"),
+        ));
+    }
+    if raw.starts_with('-') {
+        return Err(AppError::new(
+            "INVALID_ARGUMENT",
+            "confirm token must not start with '-'",
+        ));
+    }
+    if !raw
+        .chars()
+        .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, ':' | '.' | '_' | '-'))
+    {
+        return Err(AppError::new(
+            "INVALID_ARGUMENT",
+            "confirm token contains characters outside [A-Za-z0-9:._-]",
+        ));
+    }
+    Ok(raw.to_string())
 }
 
 /// The `init` property is a site URL, a `sc-domain:` GSC property, or a bare
@@ -2094,6 +2384,9 @@ mod tests {
             "tasks_add",
             "tasks_update",
             "backup_create",
+            "backup_restore",
+            "portfolio_list",
+            "schedule_install",
         ] {
             assert_eq!(CliCommandId::parse(id).unwrap().id(), id);
         }
@@ -2676,6 +2969,406 @@ mod tests {
                 "INVALID_PATH",
                 "{field}"
             );
+        }
+    }
+
+    #[test]
+    fn backup_restore_argv_plans_without_a_token_and_applies_with_both() {
+        let dir = tempfile::tempdir().unwrap();
+        let archive = dir.path().join("lv24-seo-backup.zip");
+        std::fs::write(&archive, "PK\u{3}\u{4}").unwrap();
+        let config = dir.path().join("seo.toml");
+        let file = archive.display().to_string();
+        let config_text = config.display().to_string();
+
+        // Plan phase: no write opt-in and no token.
+        assert_eq!(
+            build_argv(
+                CliCommandId::BackupRestore,
+                &CliArgs {
+                    file: Some(file.clone()),
+                    config_path: Some(config_text.clone()),
+                    ..CliArgs::default()
+                }
+            )
+            .unwrap(),
+            vec![
+                "backup",
+                "restore",
+                "--file",
+                file.as_str(),
+                "--config",
+                config_text.as_str(),
+                "--json"
+            ]
+        );
+
+        // Apply phase: the explicit opt-in plus the plan token.
+        assert_eq!(
+            build_argv(
+                CliCommandId::BackupRestore,
+                &CliArgs {
+                    file: Some(file.clone()),
+                    config_path: Some(config_text.clone()),
+                    allow_write: Some(true),
+                    confirm: Some("1700000000:abcdef0123".into()),
+                    ..CliArgs::default()
+                }
+            )
+            .unwrap(),
+            vec![
+                "backup",
+                "restore",
+                "--file",
+                file.as_str(),
+                "--config",
+                config_text.as_str(),
+                "--allow-write",
+                "--confirm",
+                "1700000000:abcdef0123",
+                "--json"
+            ]
+        );
+
+        // `allowWrite=false` is the plan phase and adds no flag.
+        assert_eq!(
+            build_argv(
+                CliCommandId::BackupRestore,
+                &CliArgs {
+                    file: Some(file.clone()),
+                    config_path: Some(config_text.clone()),
+                    allow_write: Some(false),
+                    ..CliArgs::default()
+                }
+            )
+            .unwrap(),
+            vec![
+                "backup",
+                "restore",
+                "--file",
+                file.as_str(),
+                "--config",
+                config_text.as_str(),
+                "--json"
+            ]
+        );
+
+        // A token without the opt-in would ask the engine to apply silently.
+        for args in [
+            CliArgs {
+                file: Some(file.clone()),
+                config_path: Some(config_text.clone()),
+                confirm: Some("1700000000:abcdef".into()),
+                ..CliArgs::default()
+            },
+            CliArgs {
+                file: Some(file.clone()),
+                config_path: Some(config_text.clone()),
+                allow_write: Some(false),
+                confirm: Some("1700000000:abcdef".into()),
+                ..CliArgs::default()
+            },
+        ] {
+            assert_eq!(
+                build_argv(CliCommandId::BackupRestore, &args)
+                    .unwrap_err()
+                    .code(),
+                "INVALID_ARGUMENT"
+            );
+        }
+
+        // Token charset stays narrow: no whitespace, control characters or
+        // option-looking values.
+        for token in ["", " ", "1700 000:abc", "1:abc\n", "-confirm"] {
+            assert_eq!(
+                build_argv(
+                    CliCommandId::BackupRestore,
+                    &CliArgs {
+                        file: Some(file.clone()),
+                        config_path: Some(config_text.clone()),
+                        allow_write: Some(true),
+                        confirm: Some(token.into()),
+                        ..CliArgs::default()
+                    }
+                )
+                .unwrap_err()
+                .code(),
+                "INVALID_ARGUMENT",
+                "{token:?}"
+            );
+        }
+
+        // One existing local .zip only.
+        let directory_named_zip = dir.path().join("folder.zip");
+        std::fs::create_dir(&directory_named_zip).unwrap();
+        for archive in [
+            "backup.zip".to_string(),
+            dir.path().join("missing.zip").display().to_string(),
+            dir.path().join("backup.tar").display().to_string(),
+            directory_named_zip.display().to_string(),
+            dir.path().join("*.zip").display().to_string(),
+            r"\\server\share\backup.zip".to_string(),
+        ] {
+            assert_eq!(
+                build_argv(
+                    CliCommandId::BackupRestore,
+                    &CliArgs {
+                        file: Some(archive.clone()),
+                        config_path: Some(config_text.clone()),
+                        ..CliArgs::default()
+                    }
+                )
+                .unwrap_err()
+                .code(),
+                "INVALID_PATH",
+                "{archive:?}"
+            );
+        }
+        assert_eq!(
+            build_argv(
+                CliCommandId::BackupRestore,
+                &CliArgs {
+                    file: Some(file.clone()),
+                    ..CliArgs::default()
+                }
+            )
+            .unwrap_err()
+            .code(),
+            "INVALID_ARGUMENT"
+        );
+
+        assert!(CliCommandId::BackupRestore.requires_config());
+        assert_eq!(
+            CliCommandId::BackupRestore.write_kind(),
+            WriteKind::LocalState
+        );
+    }
+
+    #[test]
+    fn portfolio_list_argv_takes_a_picked_root_and_a_bounded_limit() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().display().to_string();
+
+        assert_eq!(
+            build_argv(
+                CliCommandId::PortfolioList,
+                &CliArgs {
+                    root: Some(root.clone()),
+                    ..CliArgs::default()
+                }
+            )
+            .unwrap(),
+            vec!["portfolio", "list", "--root", root.as_str(), "--json"]
+        );
+        assert_eq!(
+            build_argv(
+                CliCommandId::PortfolioList,
+                &CliArgs {
+                    root: Some(root.clone()),
+                    limit: Some(25),
+                    ..CliArgs::default()
+                }
+            )
+            .unwrap(),
+            vec![
+                "portfolio",
+                "list",
+                "--root",
+                root.as_str(),
+                "--limit",
+                "25",
+                "--json"
+            ]
+        );
+
+        for limit in [0, 51] {
+            assert_eq!(
+                build_argv(
+                    CliCommandId::PortfolioList,
+                    &CliArgs {
+                        root: Some(root.clone()),
+                        limit: Some(limit),
+                        ..CliArgs::default()
+                    }
+                )
+                .unwrap_err()
+                .code(),
+                "INVALID_ARGUMENT",
+                "{limit}"
+            );
+        }
+
+        let file = dir.path().join("seo.toml");
+        std::fs::write(&file, "version = 1\n").unwrap();
+        for root in [
+            "projects".to_string(),
+            dir.path().join("missing").display().to_string(),
+            file.display().to_string(),
+            r"\\server\share\projects".to_string(),
+        ] {
+            assert_eq!(
+                build_argv(
+                    CliCommandId::PortfolioList,
+                    &CliArgs {
+                        root: Some(root.clone()),
+                        ..CliArgs::default()
+                    }
+                )
+                .unwrap_err()
+                .code(),
+                "INVALID_PATH",
+                "{root:?}"
+            );
+        }
+        assert_eq!(
+            build_argv(CliCommandId::PortfolioList, &CliArgs::default())
+                .unwrap_err()
+                .code(),
+            "INVALID_ARGUMENT"
+        );
+
+        // A read-only roll-up: no config, no local write.
+        assert!(!CliCommandId::PortfolioList.requires_config());
+        assert_eq!(CliCommandId::PortfolioList.write_kind(), WriteKind::None);
+    }
+
+    #[test]
+    fn schedule_install_argv_sends_kind_and_an_optional_cron() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = dir.path().join("seo.toml");
+        let config_text = config.display().to_string();
+
+        // The engine owns the default cron for each kind.
+        assert_eq!(
+            build_argv(
+                CliCommandId::ScheduleInstall,
+                &CliArgs {
+                    kind: Some("Weekly".into()),
+                    config_path: Some(config_text.clone()),
+                    ..CliArgs::default()
+                }
+            )
+            .unwrap(),
+            vec![
+                "schedule",
+                "install",
+                "--kind",
+                "weekly",
+                "--config",
+                config_text.as_str(),
+                "--json"
+            ]
+        );
+
+        assert_eq!(
+            build_argv(
+                CliCommandId::ScheduleInstall,
+                &CliArgs {
+                    kind: Some("daily".into()),
+                    cron: Some("  0   7 * * * ".into()),
+                    config_path: Some(config_text.clone()),
+                    ..CliArgs::default()
+                }
+            )
+            .unwrap(),
+            vec![
+                "schedule",
+                "install",
+                "--kind",
+                "daily",
+                "--cron",
+                "0 7 * * *",
+                "--config",
+                config_text.as_str(),
+                "--json"
+            ]
+        );
+
+        for (field, args) in [
+            (
+                "kind",
+                CliArgs {
+                    kind: Some("monthly".into()),
+                    config_path: Some(config_text.clone()),
+                    ..CliArgs::default()
+                },
+            ),
+            (
+                "missing kind",
+                CliArgs {
+                    config_path: Some(config_text.clone()),
+                    ..CliArgs::default()
+                },
+            ),
+            (
+                "cron",
+                CliArgs {
+                    kind: Some("weekly".into()),
+                    cron: Some("0 6 * *".into()),
+                    config_path: Some(config_text.clone()),
+                    ..CliArgs::default()
+                },
+            ),
+            (
+                "missing config",
+                CliArgs {
+                    kind: Some("weekly".into()),
+                    ..CliArgs::default()
+                },
+            ),
+        ] {
+            assert_eq!(
+                build_argv(CliCommandId::ScheduleInstall, &args)
+                    .unwrap_err()
+                    .code(),
+                "INVALID_ARGUMENT",
+                "{field}"
+            );
+        }
+
+        assert!(CliCommandId::ScheduleInstall.requires_config());
+        assert_eq!(
+            CliCommandId::ScheduleInstall.write_kind(),
+            WriteKind::LocalState
+        );
+    }
+
+    #[test]
+    fn restore_portfolio_and_install_arguments_are_rejected_by_other_commands() {
+        let dir = tempfile::tempdir().unwrap();
+        let foreign = [
+            CliArgs {
+                allow_write: Some(true),
+                ..CliArgs::default()
+            },
+            CliArgs {
+                confirm: Some("1700000000:abcdef".into()),
+                ..CliArgs::default()
+            },
+            CliArgs {
+                root: Some(dir.path().display().to_string()),
+                ..CliArgs::default()
+            },
+        ];
+        for command in [
+            CliCommandId::Version,
+            CliCommandId::Stats,
+            CliCommandId::ReportWeekly,
+            CliCommandId::Crawl,
+            CliCommandId::Init,
+            CliCommandId::SchedulePrint,
+            CliCommandId::LogsAnalyze,
+            CliCommandId::TasksList,
+            CliCommandId::BackupCreate,
+        ] {
+            for args in &foreign {
+                assert_eq!(
+                    build_argv(command, args).unwrap_err().code(),
+                    "INVALID_ARGUMENT",
+                    "{}",
+                    command.id()
+                );
+            }
         }
     }
 
@@ -3326,6 +4019,18 @@ mod tests {
             CliCommandId::BackupCreate.timeout(),
             Duration::from_secs(120)
         );
+        assert_eq!(
+            CliCommandId::BackupRestore.timeout(),
+            Duration::from_secs(300)
+        );
+        assert_eq!(
+            CliCommandId::PortfolioList.timeout(),
+            Duration::from_secs(60)
+        );
+        assert_eq!(
+            CliCommandId::ScheduleInstall.timeout(),
+            Duration::from_secs(60)
+        );
     }
 
     fn init_args(dir: &Path) -> CliArgs {
@@ -3646,6 +4351,8 @@ mod tests {
             CliCommandId::TasksAdd,
             CliCommandId::TasksUpdate,
             CliCommandId::BackupCreate,
+            CliCommandId::BackupRestore,
+            CliCommandId::ScheduleInstall,
         ] {
             assert_eq!(
                 command.write_kind(),
@@ -3667,6 +4374,7 @@ mod tests {
             CliCommandId::SchedulePrint,
             CliCommandId::LogsAnalyze,
             CliCommandId::TasksList,
+            CliCommandId::PortfolioList,
             CliCommandId::AuthSet,
             CliCommandId::AuthLogout,
         ] {

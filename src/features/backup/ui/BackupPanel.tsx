@@ -19,12 +19,13 @@ import { Table } from "@/shared/ui/Table";
 import { BackupStore } from "../model/BackupStore";
 import { formatBytes } from "../model/format";
 import { backupLimitations } from "../model/types";
+import { RestoreSection } from "./RestoreSection";
 import "./backup.css";
 
 /**
  * Local backup creator. `backup_create` writes one `.zip` into the folder the
  * user picks; the panel shows the archive path, size and SHA-256 plus the
- * manifest summary, and states plainly that restore is not implemented.
+ * manifest summary. Restore is a separate two-phase flow in `RestoreSection`.
  */
 export const BackupPanel = observer(function BackupPanel() {
   const { t, locale } = useI18n();
@@ -153,11 +154,6 @@ export const BackupPanel = observer(function BackupPanel() {
           {store.creating ? t("backup.creating") : t("backup.create")}
         </Button>
       </div>
-
-      <Notice variant="info">
-        <strong>{t("backup.restoreTitle")}</strong>
-        <span>{t("backup.restoreHint")}</span>
-      </Notice>
 
       {pickError ? (
         <Notice variant="error">
@@ -329,6 +325,13 @@ export const BackupPanel = observer(function BackupPanel() {
           ) : null}
         </div>
       ) : null}
+
+      <RestoreSection
+        store={store}
+        configPath={configPath}
+        blocked={blocked}
+        onRestored={() => void engine.load()}
+      />
     </Card>
   );
 });

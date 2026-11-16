@@ -10,15 +10,38 @@ import {
   type ScheduleTarget,
   type ScheduleView,
 } from "@/entities/integrations";
+import { scheduleInstallView, type ScheduleInstallResult } from "./install";
 
 export const DEFAULT_CRON = "0 6 * * 1";
 
+/** The two report kinds `schedule install` understands. */
+export const SCHEDULE_KINDS = ["weekly", "daily"] as const;
+export type ScheduleKind = (typeof SCHEDULE_KINDS)[number];
+
 export type ScheduleState = "idle" | "loading" | "ready" | "error";
+export type ScheduleInstallState =
+  | "idle"
+  | "installing"
+  | "installed"
+  | "error";
+
+function installError(error: unknown): AppError {
+  const app = toAppError(error, "CLI_FAILED");
+  if (app.code === "CLI_INVALID_JSON" && !app.nextAction) {
+    return {
+      ...app,
+      nextAction:
+        "the installed engine may not support schedule install yet; update it and retry",
+    };
+  }
+  return app;
+}
 
 /**
- * Print-only schedule preview. The store calls `schedule_print` and keeps the
- * rendered artifact in memory; it never installs a cron entry, systemd unit or
- * Windows task.
+ * Scheduler state. `generate` only renders an artefact; `requestInstall` opens
+ * the confirmation dialog and `confirmInstall` is the only method that asks
+ * the engine to write a host job. No install path exists without that
+ * explicit confirmation.
  */
 export class ScheduleStore {
   cron = DEFAULT_CRON;
@@ -29,12 +52,24 @@ export class ScheduleStore {
   meta: Record<string, unknown> = {};
   warnings: string[] = [];
   error: AppError | null = null;
+
+  installKind: ScheduleKind = "weekly";
+  /** Empty means "use the engine default for the selected kind". */
+  installCron = "";
+  installState: ScheduleInstallState = "idle";
+  /** Set only by `requestInstall`; `confirmInstall` refuses without it. */
+  installPending = false;
+  installResult: ScheduleInstallResult | null = null;
+  installWarnings: string[] = [];
+  installError: AppError | null = null;
+
   private generation = 0;
+  private installGeneration = 0;
 
   constructor() {
-    makeAutoObservable<ScheduleStore, "generation">(
+    makeAutoObservable<ScheduleStore, "generation" | "installGeneration">(
       this,
-      { generation: false },
+      { generation: false, installGeneration: false },
       { autoBind: true },
     );
   }
@@ -43,8 +78,23 @@ export class ScheduleStore {
     return this.state === "loading";
   }
 
+  get installing(): boolean {
+    return this.installState === "installing";
+  }
+
   get validation(): CronValidation {
     return validateCron(this.cron);
+  }
+
+  /** Empty override is valid: the engine picks the kind's default cron. */
+  get installCronValue(): string {
+    const trimmed = this.installCron.trim();
+    return trimmed ? trimmed.split(/\s+/).join(" ") : "";
+  }
+
+  get installCronValidation(): CronValidation {
+    const value = this.installCronValue;
+    return value ? validateCron(value) : { valid: true };
   }
 
   /** A concrete target for the engine; the UI shows the resolved value. */
@@ -63,6 +113,20 @@ export class ScheduleStore {
     }
     this.target = value;
     this.invalidate();
+  }
+
+  setInstallKind(value: string): void {
+    const kind = SCHEDULE_KINDS.find((item) => item === value);
+    if (!kind) {
+      return;
+    }
+    this.installKind = kind;
+    this.invalidateInstall();
+  }
+
+  setInstallCron(value: string): void {
+    this.installCron = value;
+    this.invalidateInstall();
   }
 
   async generate(
@@ -102,9 +166,82 @@ export class ScheduleStore {
     return false;
   }
 
+  /** Open the confirmation dialog; never calls the engine. */
+  requestInstall(): boolean {
+    if (!SCHEDULE_KINDS.includes(this.installKind)) {
+      this.installError = {
+        code: "SCHEDULE_KIND_INVALID",
+        message: "Choose the weekly or daily report.",
+        retryable: false,
+      };
+      return false;
+    }
+    if (!this.installCronValidation.valid) {
+      // The inline field error is the answer; do not install a cron the
+      // scheduler would reject.
+      return false;
+    }
+    this.installPending = true;
+    return true;
+  }
+
+  cancelInstall(): void {
+    this.installPending = false;
+  }
+
+  /**
+   * Apply the install after the dialog. A direct call without
+   * `requestInstall` is refused before the engine is spawned.
+   */
+  async confirmInstall(configPath: string | null): Promise<boolean> {
+    if (!this.installPending) {
+      this.installError = {
+        code: "SCHEDULE_NOT_CONFIRMED",
+        message: "Confirm the install in the dialog before writing a host job.",
+        retryable: false,
+      };
+      return false;
+    }
+    this.installPending = false;
+    if (!configPath) {
+      this.installError = {
+        code: "SCHEDULE_CONFIG_MISSING",
+        message: "Open a workspace before installing a schedule.",
+        retryable: false,
+      };
+      this.installState = "error";
+      return false;
+    }
+    const cron = this.installCronValue;
+    const generation = ++this.installGeneration;
+    this.installState = "installing";
+    this.installError = null;
+    const result = await cliRun<unknown>("schedule_install", {
+      args: { kind: this.installKind, ...(cron ? { cron } : {}) },
+      configPath,
+    });
+    if (generation !== this.installGeneration) {
+      return false;
+    }
+    if (result.ok) {
+      const installed = scheduleInstallView(result.data);
+      this.installResult = installed;
+      this.installWarnings = [
+        ...new Set([...result.warnings, ...installed.warnings]),
+      ].filter((item) => item.trim() !== "");
+      this.installState = "installed";
+      return true;
+    }
+    this.installResult = null;
+    this.installWarnings = result.warnings;
+    this.installError = installError(result.error);
+    this.installState = "error";
+    return false;
+  }
+
   /**
    * Drop a result that belongs to a previous workspace. Bumping the generation
-   * also discards a render that is still in flight.
+   * also discards a render or install that is still in flight.
    */
   reset(): void {
     this.generation += 1;
@@ -113,6 +250,7 @@ export class ScheduleStore {
     this.meta = {};
     this.warnings = [];
     this.error = null;
+    this.invalidateInstall();
   }
 
   /** Editing the form makes the previous artifact stale; hide it. */
@@ -123,5 +261,15 @@ export class ScheduleStore {
     this.meta = {};
     this.warnings = [];
     this.error = null;
+  }
+
+  /** Editing the install form drops the previous result and confirmation. */
+  private invalidateInstall(): void {
+    this.installGeneration += 1;
+    this.installState = "idle";
+    this.installPending = false;
+    this.installResult = null;
+    this.installWarnings = [];
+    this.installError = null;
   }
 }

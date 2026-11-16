@@ -6,9 +6,9 @@ import { McpConfigPanel } from "@/features/mcp-config";
 import { SchedulePanel } from "@/features/schedule";
 
 /**
- * Local integrations: copy-ready MCP host snippets, a print-only scheduler
- * artifact and a backup creator. Only the backup panel writes, and only one
- * archive into the folder the user picks.
+ * Local integrations: copy-ready MCP host snippets, a scheduler panel with a
+ * preview and an explicitly confirmed host install, and a backup panel with
+ * create plus a two-phase restore. Every write is local and confirmed first.
  */
 export const IntegrationsPage = function IntegrationsPage() {
   const { t } = useI18n();

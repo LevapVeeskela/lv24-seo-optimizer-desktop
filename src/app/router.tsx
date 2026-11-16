@@ -44,6 +44,11 @@ const TasksPage = lazy(() =>
     default: module.TasksPage,
   })),
 );
+const PortfolioPage = lazy(() =>
+  import("@/pages/portfolio/PortfolioPage").then((module) => ({
+    default: module.PortfolioPage,
+  })),
+);
 const IntegrationsPage = lazy(() =>
   import("@/pages/integrations/IntegrationsPage").then((module) => ({
     default: module.IntegrationsPage,
@@ -89,6 +94,7 @@ export function AppRoutes() {
         <Route path={ROUTES.crawl} element={<CrawlPage />} />
         <Route path={ROUTES.logs} element={<LogsPage />} />
         <Route path={ROUTES.tasks} element={<TasksPage />} />
+        <Route path={ROUTES.portfolio} element={<PortfolioPage />} />
         <Route path={ROUTES.integrations} element={<IntegrationsPage />} />
         <Route path={ROUTES.onboarding} element={<OnboardingPage />} />
         <Route
