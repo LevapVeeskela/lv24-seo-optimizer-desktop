@@ -5,14 +5,19 @@ import { AppHeader } from "@/app/layout/AppHeader";
 import { AppNav } from "@/app/layout/AppNav";
 import { BrandMark } from "@/app/layout/BrandMark";
 import { activateSkipLink } from "@/app/layout/skipLink";
+import { useDiscardGuard } from "@/app/providers/DiscardGuard";
 import { useRootStore } from "@/app/providers/StoreProvider";
+import { useUnsavedDraftGuard } from "@/features/save-config";
 import { useI18n } from "@/shared/i18n";
+import { useFeedback } from "@/shared/ui/Feedback";
 
 export const AppLayout = observer(function AppLayout({
   children,
 }: PropsWithChildren) {
   const { t } = useI18n();
-  const { engine } = useRootStore();
+  const { engine, config } = useRootStore();
+  const { confirmDiscard } = useDiscardGuard();
+  const { notify } = useFeedback();
   const location = useLocation();
   const mainRef = useRef<HTMLElement>(null);
   const firstRender = useRef(true);
@@ -24,6 +29,15 @@ export const AppLayout = observer(function AppLayout({
     }
     mainRef.current?.focus();
   }, [location.pathname]);
+
+  // One close guard for the whole window: the shared ConfigStore draft can be
+  // edited on Settings and still exist after navigating to another screen.
+  useUnsavedDraftGuard({
+    dirty: config.dirty,
+    confirmDiscard: () => confirmDiscard("close"),
+    discard: () => config.discard(),
+    onError: () => notify(t("settings.unsaved.guardUnavailable"), "error"),
+  });
 
   return (
     <div className="app-shell">

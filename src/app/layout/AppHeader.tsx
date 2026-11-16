@@ -1,6 +1,7 @@
 import { observer } from "mobx-react-lite";
 import { useLocation } from "react-router-dom";
 import { useRootStore } from "@/app/providers/StoreProvider";
+import { WorkspaceChip } from "@/app/layout/WorkspaceChip";
 import { UpdateBadge } from "@/features/update";
 import {
   LOCALES,
@@ -15,6 +16,9 @@ const SECTION_KEYS: Record<string, MessageKey> = {
   "/settings": "nav.settings",
   "/config": "nav.config",
   "/recommendations": "nav.recommendations",
+  "/crawl": "nav.crawl",
+  "/integrations": "nav.integrations",
+  "/onboarding": "onboarding.title",
   "/diagnostics": "nav.diagnostics",
 };
 
@@ -38,6 +42,7 @@ export const AppHeader = observer(function AppHeader() {
         <span>{t("app.subtitle")}</span>
       </div>
       <div className="app-header-actions">
+        <WorkspaceChip />
         <span
           className={`status-pill ${online ? "status-running" : "status-stopped"}`}
         >
