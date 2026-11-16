@@ -864,7 +864,7 @@ export const en = {
   "runStatus.reportLabel": "Weekly report",
   "runStatus.running": "Running for {elapsed}",
   "runStatus.lastRun": "Last run {duration} · {time}",
-  "runStatus.noCancel": "0.4.0 runs this call to completion: closing the screen does not cancel it, and there is no cancel button yet.",
+  "runStatus.noCancel": "0.5.0 runs this call to completion: closing the screen does not cancel it, and there is no cancel button yet.",
   "runStatus.measuredHint": "Duration measured by the app; the engine did not report duration_ms.",
   "runStatus.truncated": "Truncated",
   "runStatus.complete": "Not truncated",

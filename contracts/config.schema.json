@@ -1,5 +1,5 @@
 {
-  "$comment": "Generated from lv24-seo 0.6.0 SeoConfig.model_json_schema(). Do not edit by hand.",
+  "$comment": "Generated from lv24-seo 0.7.0 SeoConfig.model_json_schema(). Do not edit by hand.",
   "$defs": {
     "BingConfig": {
       "additionalProperties": false,

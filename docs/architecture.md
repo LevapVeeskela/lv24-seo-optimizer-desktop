@@ -1,8 +1,8 @@
 # Architecture
 
-Status: **implementation contract for `0.4.0` (released 2026-11-16).** The Rust command bridge and
+Status: **implementation contract for `0.5.0` (release candidate).** The Rust command bridge and
 product screens are implemented in this repository. Where this document describes a control, it is
-the requirement that implementation must satisfy. The pinned engine is `lv24-seo 0.6.0`.
+the requirement that implementation must satisfy. The pinned engine is `lv24-seo 0.7.0`.
 
 ## 1. Shape
 
@@ -113,11 +113,15 @@ The command surface is fixed. The generic `cli_run` allow-list is:
 | `tasks_add` | `tasks add --kind <kind> --url <url> --rule <rule> [--property <id>] [--payload <json>] --json` | local write |
 | `tasks_update` | `tasks update <id> --state <state> --json` | local write |
 | `backup_create` | `backup create --out <dir> [--force] --json` | local write |
+| `backup_restore` | `backup restore --file <zip> --config <path> [--allow-write --confirm <token>] --json` | local write (gated) |
+| `portfolio_list` | `portfolio list --root <dir> [--limit <n>] --json` | read |
+| `schedule_install` | `schedule install --kind weekly\|daily [--cron <expr>] --config <path> --json` | host write (gated) |
 
 Dedicated Tauri commands cover the rest: `shell_status`, `config_read`, `config_validate`,
 `config_write`, `config_patch`, `auth_set` (secret over stdin), `auth_delete`, `write_text_file`,
-`settings_get`, `settings_set`, `pick_config`, `pick_directory`, `pick_log_file`, `open_path`,
-`prepare_update`, `update_install`, `update_cancel`. The webview cannot add a command at runtime.
+`settings_get`, `settings_set`, `pick_config`, `pick_directory`, `pick_log_file`,
+`pick_backup_archive`, `open_path`, `prepare_update`, `update_install`, `update_cancel`. The webview
+cannot add a command at runtime.
 
 `pick_config` is the only way to introduce a new workspace path: it opens the native dialog, records
 the canonical path as approved for this process and returns it. `settings_set` accepts a changed
@@ -138,6 +142,14 @@ must target the active config and only renders text.
 the shell will read, and a path under the app data/export directories is also accepted. Everything
 else is `PATH_NOT_APPROVED` before the engine is spawned. The engine opens the file read-only; the
 shell never writes to it.
+
+`pick_backup_archive` is the approval for `backup_restore`: the chosen `.zip` is the only arbitrary
+archive the shell will read, and a path under the app export directory is also accepted. The restore
+is two-phase: the plan call carries neither `allowWrite` nor `confirm`, the apply call carries both
+and the token must come from the plan. `pick_directory` also approves the portfolio root, so
+`portfolio_list` can only scan a folder the user picked. `schedule_install` requires the active
+config and writes a host job; the UI asks for confirmation first, and the shell passes only the
+validated kind, cron and config.
 
 `update_install` and `update_cancel` exist because the webview holds only `updater:allow-check`. The
 Rust side re-checks the endpoint, refuses a version that differs from the announced one, serializes
