@@ -1,7 +1,7 @@
 {
   "name": "lv24-seo-optimizer-desktop",
   "private": true,
-  "version": "0.2.3",
+  "version": "0.3.0",
   "type": "module",
   "description": "LV24 SEO Optimizer desktop control plane",
   "scripts": {

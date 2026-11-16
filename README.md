@@ -7,15 +7,17 @@ scraping.
 
 [![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 [![Status: pre-release](https://img.shields.io/badge/status-pre--release-orange.svg)](#public-status)
-[![Engine: lv24-seo 0.5.3](https://img.shields.io/badge/engine-lv24--seo%200.5.3-informational.svg)](docs/releases/0.2.3.md)
+[![Engine: lv24-seo 0.5.3](https://img.shields.io/badge/engine-lv24--seo%200.5.3-informational.svg)](docs/releases/0.3.0.md)
 
-> **0.2.3 released (2026-11-16).** The latest published line is `0.2.3`. Windows NSIS, macOS `.app`
-> and Linux AppImage can auto-update from `0.2.0` onward; deb, rpm, MSI and the portable ZIP are
-> manual-only. `0.1.0` has no updater and must be upgraded manually once. `0.2.3` bundles
-> `lv24-seo 0.5.3`, which ships the `stats` command described by
-> [`contracts/stats-v1.md`](contracts/stats-v1.md); `MIN_ENGINE_VERSION` stays `0.5.2`. Read
-> [Public status](#public-status) before relying on anything here. Release notes:
-> [`docs/releases/0.2.3.md`](docs/releases/0.2.3.md).
+> **0.3.0 release candidate.** The latest published line is `0.2.3` until `v0.3.0` is tagged. Windows
+> NSIS, macOS `.app` and Linux AppImage can auto-update from `0.2.0` onward; deb, rpm, MSI and the
+> portable ZIP are manual-only. `0.1.0` has no updater and must be upgraded manually once. The
+> candidate bundles `lv24-seo 0.5.3` (unchanged from `0.2.3`), which ships the `stats` command
+> described by [`contracts/stats-v1.md`](contracts/stats-v1.md); `MIN_ENGINE_VERSION` stays `0.5.2`.
+> `0.3.0` adds the project wizard, a crawl screen, report comparison and export, the settings save
+> workflow, integrations snippets, a per-workspace reporting window and honest run status. Read
+> [Public status](#public-status) before relying on anything here. Candidate notes:
+> [`docs/releases/0.3.0.md`](docs/releases/0.3.0.md).
 
 ## Screenshot
 
@@ -32,15 +34,25 @@ not want to remember flags:
 
 - **Project and provider settings** for Google Search Console, Yandex Webmaster, Yandex Metrika,
   Bing/IndexNow, Chrome UX Report and PageSpeed Insights.
+- **Onboarding without the terminal:** a folder → site → review wizard runs `lv24-seo init`, never
+  overwrites an existing `seo.toml`, and remembers recent workspaces in the header chip.
 - **A stats dashboard** built on the bounded `lv24-seo stats --json` envelope:
   current values, previous-period comparison, coverage, data age, truncation and limitations.
+- **A crawl screen** with a URL budget, severity/rule/search filters, bounded rendering and JSON/CSV
+  export.
 - **A report view** for the weekly digest: headline, the sections the engine returns, limitations,
-  warnings and the generated local HTML report, which opens in your default browser.
+  warnings and the generated local HTML report, which opens in your default browser. It also compares
+  the two newest stored snapshots and exports JSON/CSV.
 - **Configuration output** that is safe to copy: effective redacted JSON, read-only Source TOML with
   secret-looking values redacted, saved-vs-draft diff, validation errors, doctor diagnostics and
   environment-override names.
-- **A recommendations-to-agent workflow**: review findings, copy a bounded Markdown prompt or export
-  it as `.md`, hand it to a coding agent, then re-run the report to verify the fix.
+- **A recommendations-to-agent workflow**: review findings, search and sort them, copy a bounded
+  Markdown prompt, bulk-export or queue the visible set, hand it to a coding agent, then re-run the
+  report to verify the fix.
+- **Integrations that only prepare text:** MCP snippets for Claude Desktop, OpenCode, VS Code and
+  Cursor, and a print-only cron/systemd/Windows schedule artifact.
+- **A per-workspace reporting window** (7/28/90 days, 2- or 3-day provider lag) and honest run status:
+  elapsed time, last run, truncation and limitations.
 - **Explicit write gates** for delivery, schedule installation, MCP client installation and any
   provider write action.
 - **Signed in-app updates** for the bundle types that can replace themselves, with a manual release
@@ -52,7 +64,7 @@ The desktop is one surface over the same engine. These are the tools the engine 
 
 | Surface | What you get |
 |---|---|
-| Desktop | Dashboard, weekly report view, config editor/diff/validation, recommendations, agent task queue, signed updates |
+| Desktop | Project wizard, dashboard with properties and reporting window, crawl screen, weekly report and snapshot comparison, config editor/diff/validation, recommendations with search/bulk, integrations snippets, agent task queue, signed updates |
 | CLI | 17 top-level commands (10 groups + 7 commands): `version`, `doctor`, `init`, `properties`, `stats`, `crawl`, `install`, `auth`, `config`, `gsc`, `yandex`, `sitemap`, `indexnow`, `report`, `schedule`, `export`, `mcp` |
 | MCP | 11 tools, 3 resources, 3 prompts; no provider writes by default |
 | Skills | `seo-weekly`, `seo-indexing-triage`, `seo-technical-audit` |
@@ -93,18 +105,19 @@ adapters land. The full inputs, outputs and limits are in the engine's
 ## Install
 
 Download from [Releases](https://github.com/LevapVeeskela/lv24-seo-optimizer-desktop/releases).
-The latest published line is `0.2.3`; full notes, install steps and limitations:
-[`docs/releases/0.2.3.md`](docs/releases/0.2.3.md). `0.2.2` remains available for rollback and as
-the previous in-app update source: [`docs/releases/0.2.2.md`](docs/releases/0.2.2.md).
+The latest published line is `0.2.3`; the `0.3.0` candidate uses the same asset names with `0.3.0`
+in the version segment. Full notes, install steps and limitations:
+[`docs/releases/0.3.0.md`](docs/releases/0.3.0.md) for the candidate and
+[`docs/releases/0.2.3.md`](docs/releases/0.2.3.md) for the published line.
 
 | Platform | Assets | Auto-update |
 |---|---|---|
-| Windows 10/11 x64 | `LV24.SEO.Optimizer_0.2.3_x64-setup.exe` (+ `.exe.sig`), `LV24-SEO-Optimizer_0.2.3_x64-portable.zip` | NSIS only; portable ZIP is manual |
-| Linux x64 | `LV24.SEO.Optimizer_0.2.3_amd64.AppImage` (+ `.AppImage.sig`), `LV24.SEO.Optimizer_0.2.3_amd64.deb`, `LV24.SEO.Optimizer-0.2.3-1.x86_64.rpm` | AppImage only; deb/rpm are manual |
-| macOS 13+ arm64/x64 | `LV24.SEO.Optimizer_0.2.3_aarch64.dmg`, `LV24.SEO.Optimizer_0.2.3_x64.dmg`, `LV24.SEO.Optimizer_0.2.3_aarch64.app.tar.gz` and `LV24.SEO.Optimizer_0.2.3_x64.app.tar.gz` (+ `.sig`) | `.app` only; DMG is the first install |
+| Windows 10/11 x64 | `LV24.SEO.Optimizer_0.3.0_x64-setup.exe` (+ `.exe.sig`), `LV24-SEO-Optimizer_0.3.0_x64-portable.zip` | NSIS only; portable ZIP is manual |
+| Linux x64 | `LV24.SEO.Optimizer_0.3.0_amd64.AppImage` (+ `.AppImage.sig`), `LV24.SEO.Optimizer_0.3.0_amd64.deb`, `LV24.SEO.Optimizer-0.3.0-1.x86_64.rpm` | AppImage only; deb/rpm are manual |
+| macOS 13+ arm64/x64 | `LV24.SEO.Optimizer_0.3.0_aarch64.dmg`, `LV24.SEO.Optimizer_0.3.0_x64.dmg`, `LV24.SEO.Optimizer_0.3.0_aarch64.app.tar.gz` and `LV24.SEO.Optimizer_0.3.0_x64.app.tar.gz` (+ `.sig`) | `.app` only; DMG is the first install |
 
-The `0.2.x` releases also publish `latest.json` and `SHA256SUMS.txt`. Verify the checksum before
-running an installer. `SHA256SUMS.txt` covers every other published asset, including updater
+The `0.2.x` and `0.3.x` releases also publish `latest.json` and `SHA256SUMS.txt`. Verify the checksum
+before running an installer. `SHA256SUMS.txt` covers every other published asset, including updater
 signatures and `latest.json`.
 
 ### Windows
@@ -179,7 +192,7 @@ assets.
 
 ### Upgrading from 0.1.0
 
-`0.1.0` has no updater, endpoint or public key. Install `0.2.3` manually once (NSIS installer or
+`0.1.0` has no updater, endpoint or public key. Install `0.3.0` manually once (NSIS installer or
 portable ZIP). Auto-update works from `0.2.0` onward when the installed bundle is Windows NSIS,
 macOS `.app` or Linux AppImage.
 
@@ -482,15 +495,15 @@ build from source and sign it with your own certificate. See [`docs/release.md`]
 | Contracts (`config.schema.json`, CLI fixtures incl. `stats`) | generated from `lv24-seo 0.5.3`; drift check in CI |
 | CI (web, Rust matrix, contract check) | active on pull requests and `main`; standard runners only |
 | Manual desktop build workflow (NSIS, DMG, AppImage, deb, rpm) | available; owner-triggered; publish requires the updater key |
-| Tauri command bridge (config read/validate/write/patch, CLI runner, secrets, diagnostics) | implemented |
-| React screens (dashboard, settings, configuration, reports, recommendations) | implemented |
+| Tauri command bridge (config read/validate/write/patch, CLI runner incl. `init` and `schedule_print`, directory picker, known configs, secrets, diagnostics) | implemented |
+| React screens (onboarding, dashboard, crawl, settings, configuration, reports, recommendations, integrations) | implemented |
 | Bundled onedir sidecar | all four targets built in CI and by the release workflow; the Windows x64 pin records the reviewed `0.5.3` build, Linux/macOS reviewed pins remain `null` and are covered by rebuild-aware CI checksum reports |
 | Published installers | `0.2.3`: Windows x64, Linux x64, macOS arm64/x64; `0.2.2` remains available for rollback |
 | Install checks | `0.2.2`: macOS 27.2 arm64 DMG installed and launched with engine `0.5.2`; deb and AppImage (FUSE mount and extract-and-run fallback) on Ubuntu 24.04 and rpm on Fedora 45 installed and launched with engine `0.5.2`; Linux updater signatures verified against the embedded key |
 | Auto-update | Windows NSIS, macOS `.app`, Linux AppImage; `0.2.0 → 0.2.1`, `0.2.1 → 0.2.2` and `0.2.2 → 0.2.3` verified end-to-end on Windows NSIS; deb/rpm/MSI/portable ZIP are manual |
 | `lv24-seo stats --json` engine command | shipped since `lv24-seo 0.5.2`; bundled `0.5.3`; fixture committed |
 
-`0.1.0` remains available as a Windows-only preview. It has no updater; install `0.2.3` manually
+`0.1.0` remains available as a Windows-only preview. It has no updater; install `0.3.0` manually
 once. Follow the [issues](https://github.com/LevapVeeskela/lv24-seo-optimizer-desktop/issues) for
 progress, or read the implementation plan in the engine repository:
 [`docs/plans/2026-11-14-seo-desktop.md`](https://github.com/LevapVeeskela/lv24-seo-optimizer/blob/main/docs/plans/2026-11-14-seo-desktop.md).
