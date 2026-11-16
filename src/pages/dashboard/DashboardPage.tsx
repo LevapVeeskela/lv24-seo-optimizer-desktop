@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { observer } from "mobx-react-lite";
 import { Link, useNavigate } from "react-router-dom";
 import { useRootStore } from "@/app/providers/StoreProvider";
@@ -19,6 +19,13 @@ import { configMissing } from "@/entities/engine/model/types";
 import { CoverageStrip } from "@/entities/stats/ui/CoverageStrip";
 import { ServiceCard } from "@/entities/stats/ui/ServiceCard";
 import { STATS_PROVIDERS } from "@/entities/stats/model/types";
+import {
+  activePeriod,
+  sameWindowParams,
+  useWindowSettings,
+} from "@/entities/window";
+import { RunStatus } from "@/shared/ui/RunStatus";
+import { WindowPicker } from "@/shared/ui/WindowPicker";
 import { PropertiesPanel } from "./PropertiesPanel";
 
 export const DashboardPage = observer(function DashboardPage() {
@@ -28,7 +35,16 @@ export const DashboardPage = observer(function DashboardPage() {
   const navigate = useNavigate();
   const { notify } = useFeedback();
   const [confirmOpen, setConfirmOpen] = useState(false);
+  // Config path whose window was already applied automatically. A picker
+  // change must not fire provider calls on every click; it only marks the
+  // window as stale until the user refreshes.
+  const appliedWindowPath = useRef<string | null>(null);
   const configPath = engine.status?.configPath ?? null;
+  const windowSettings = useWindowSettings(configPath);
+  const period = activePeriod(windowSettings.days, windowSettings.lagDays);
+  const windowStale =
+    stats.lastParams !== null &&
+    !sameWindowParams(stats.lastParams, windowSettings.params);
   // A moved/deleted workspace must not look healthy: every stats/report call
   // would fail with a generic error instead of asking for the new path.
   const workspaceMissing = configMissing(engine.status);
@@ -38,21 +54,44 @@ export const DashboardPage = observer(function DashboardPage() {
   useEffect(() => {
     // Without a workspace configuration `stats` is a guaranteed failure.
     if (
-      !engine.loading &&
-      !engine.offline &&
-      configPath &&
-      !workspaceMissing &&
-      stats.state === "idle"
+      engine.loading ||
+      engine.offline ||
+      !configPath ||
+      workspaceMissing ||
+      stats.loading ||
+      appliedWindowPath.current === configPath
     ) {
-      void stats.refresh();
+      return;
     }
-  }, [engine.loading, engine.offline, configPath, workspaceMissing, stats]);
+    // Apply the saved window once per workspace. `idle` means nothing loaded
+    // yet; a different `lastParams` means bootstrap used the engine default
+    // before this workspace's saved window was known.
+    appliedWindowPath.current = configPath;
+    if (
+      stats.state === "idle" ||
+      !sameWindowParams(stats.lastParams, windowSettings.params)
+    ) {
+      void stats.refresh(windowSettings.params);
+    }
+  }, [
+    engine.loading,
+    engine.offline,
+    configPath,
+    workspaceMissing,
+    stats,
+    stats.loading,
+    stats.state,
+    stats.lastParams,
+    windowSettings,
+    windowSettings.days,
+    windowSettings.lagDays,
+  ]);
 
   const reconnect = async () => {
     await engine.load();
     // Read the fresh status: the shell may have reported a config path.
     if (!engine.offline && engine.status?.configPath) {
-      await stats.refresh();
+      await stats.refresh(windowSettings.params);
     }
   };
 
@@ -75,7 +114,7 @@ export const DashboardPage = observer(function DashboardPage() {
       }
       notify(t("settings.configSelected"), "success");
       if (!configMissing(engine.status)) {
-        await stats.refresh();
+        await stats.refresh(windowSettings.params);
       }
     } catch (error) {
       notify(toAppError(error, "PICK_CONFIG").message, "error");
@@ -86,7 +125,7 @@ export const DashboardPage = observer(function DashboardPage() {
     if (blocked) {
       return;
     }
-    const ok = await reports.buildWeekly();
+    const ok = await reports.buildWeekly(windowSettings.params);
     if (ok) {
       notify(t("reports.built"));
       navigate("/reports");
@@ -102,6 +141,11 @@ export const DashboardPage = observer(function DashboardPage() {
     if (!blocked) {
       setConfirmOpen(true);
     }
+  };
+
+  const resetWindow = () => {
+    windowSettings.reset();
+    notify(t("window.resetDone"));
   };
 
   const data = stats.data;
@@ -124,7 +168,7 @@ export const DashboardPage = observer(function DashboardPage() {
           <Button
             variant="secondary"
             loading={stats.loading}
-            onClick={() => void stats.refresh()}
+            onClick={() => void stats.refresh(windowSettings.params)}
             disabled={blocked}
           >
             {stats.loading
@@ -180,13 +224,45 @@ export const DashboardPage = observer(function DashboardPage() {
         </Notice>
       ) : null}
 
+      <Card>
+        <div className="card-header">
+          <div>
+            <h2>{t("window.title")}</h2>
+            <p className="muted small">{t("window.hint")}</p>
+          </div>
+        </div>
+        <WindowPicker
+          days={windowSettings.days}
+          lagDays={windowSettings.lagDays}
+          period={period}
+          disabled={engine.loading || !configPath || workspaceMissing}
+          stale={windowStale}
+          onDaysChange={(days) => windowSettings.setDays(days)}
+          onLagChange={(lagDays) => windowSettings.setLagDays(lagDays)}
+          onReset={resetWindow}
+        />
+      </Card>
+
+      <RunStatus
+        label={t("runStatus.statsLabel")}
+        running={stats.loading}
+        startedAt={stats.startedAt}
+        lastRun={stats.lastRun}
+      />
+      <RunStatus
+        label={t("runStatus.reportLabel")}
+        running={reports.loading}
+        startedAt={reports.startedAt}
+        lastRun={reports.lastRun}
+      />
+
       {stats.error && !workspaceMissing ? (
         <Notice
           variant="error"
           action={
             <Button
               variant="secondary"
-              onClick={() => void stats.refresh()}
+              onClick={() => void stats.refresh(windowSettings.params)}
               disabled={blocked}
             >
               {t("common.retry")}
@@ -228,7 +304,7 @@ export const DashboardPage = observer(function DashboardPage() {
             title={t("dashboard.emptyTitle")}
             hint={t("dashboard.emptyHint")}
             action={
-              <Button variant="primary" onClick={() => void stats.refresh()}>
+              <Button variant="primary" onClick={() => void stats.refresh(windowSettings.params)}>
                 {t("actions.refreshStats")}
               </Button>
             }

@@ -188,4 +188,63 @@ describe("ReportsStore", () => {
     expect(store.diff).toBeNull();
     expect(store.diffState).toBe("idle");
   });
+
+  it("passes the selected window to the weekly report", async () => {
+    runMock.mockResolvedValueOnce(envelope(REPORT));
+    const store = new ReportsStore();
+    expect(await store.buildWeekly({ days: 28, lagDays: 3 })).toBe(true);
+    expect(runMock).toHaveBeenCalledWith("report_weekly", {
+      args: { days: 28, lagDays: 3 },
+    });
+    expect(store.lastParams).toEqual({ days: 28, lagDays: 3 });
+  });
+
+  it("records engine duration, truncation and limitations for the last run", async () => {
+    runMock.mockResolvedValueOnce({
+      ok: true,
+      data: { ...REPORT, limitations: ["no Bing rows"] },
+      meta: {
+        duration_ms: 5600,
+        truncated: true,
+        limitations: ["GSC lag"],
+      },
+      warnings: [],
+    });
+    const store = new ReportsStore({ now: () => 1000 });
+    expect(await store.buildWeekly({ days: 90, lagDays: 2 })).toBe(true);
+
+    expect(store.startedAt).toBeNull();
+    expect(store.lastRun?.durationMs).toBe(5600);
+    expect(store.lastRun?.durationSource).toBe("engine");
+    expect(store.lastRun?.truncated).toBe(true);
+    expect(store.lastRun?.limitations).toEqual(["no Bing rows", "GSC lag"]);
+  });
+
+  it("measures wall time and keeps a failed run visible", async () => {
+    let clock = 2000;
+    runMock.mockImplementationOnce(async () => {
+      clock = 9000;
+      return {
+        ok: false as const,
+        error: { code: "UPSTREAM_UNAVAILABLE", message: "provider timeout" },
+        meta: {},
+        warnings: [],
+      };
+    });
+    const store = new ReportsStore({ now: () => clock });
+    expect(await store.buildWeekly()).toBe(false);
+    expect(store.lastRun?.durationMs).toBe(7000);
+    expect(store.lastRun?.durationSource).toBe("measured");
+    expect(store.lastRun?.ok).toBe(false);
+  });
+
+  it("clears the run summary on reset", async () => {
+    runMock.mockResolvedValueOnce(envelope(REPORT));
+    const store = new ReportsStore();
+    expect(await store.buildWeekly()).toBe(true);
+    store.reset();
+    expect(store.startedAt).toBeNull();
+    expect(store.lastRun).toBeNull();
+    expect(store.lastParams).toBeNull();
+  });
 });
