@@ -1,0 +1,40 @@
+.report-digest-items {
+  display: grid;
+  gap: var(--space-3);
+  margin: var(--space-3) 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.report-digest-item {
+  padding: var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--inset);
+}
+
+.report-digest-item .card-header {
+  margin-bottom: var(--space-2);
+}
+
+.report-digest-item h4 {
+  margin: 0 0 var(--space-1);
+}
+
+.report-digest-item p {
+  margin: var(--space-1) 0;
+}
+
+.report-digest-evidence {
+  margin: var(--space-1) 0 0;
+  padding-left: var(--space-4);
+}
+
+.report-digest-evidence li {
+  margin-bottom: var(--space-1);
+  overflow-wrap: anywhere;
+}
+
+.report-digest-limitations {
+  margin-top: var(--space-3);
+}

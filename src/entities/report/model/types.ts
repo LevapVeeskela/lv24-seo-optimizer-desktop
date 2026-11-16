@@ -13,6 +13,13 @@ export interface ReportSection {
   summary: string;
   rows: ReportRow[];
   notes: string[];
+  /** Optional discriminator added by the 0.4.0 attributed change digest. */
+  kind?: string;
+  /** Bounded-response metadata carried by the digest section. */
+  total?: number | null;
+  truncated?: boolean | null;
+  data_age?: string | null;
+  limitations?: string[];
 }
 
 export interface WeeklyReport {
