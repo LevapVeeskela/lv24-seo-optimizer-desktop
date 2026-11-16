@@ -1,8 +1,9 @@
 # Security model
 
-Status: **security contract for `0.6.0` (release candidate).** The Rust bridge and screens are
-implemented in this repository. This page states the controls the implementation must enforce and
-the residual risks accepted for the pre-1.0 line; where a control is future work, the text says so.
+Status: **security contract for `0.6.0` (latest published line, 2026-11-16).** The Rust bridge and
+screens are implemented in this repository. This page states the controls the implementation must
+enforce and the residual risks accepted for the pre-1.0 line; where a control is future work, the text
+says so.
 `0.6.0` adds exact-process cancellation for the six long local jobs (`run_cancel`) and makes
 `schedule install` append `--allow-write` only after the confirmation dialog, matching engine
 `0.8.0`. `0.5.0` added a native archive picker whose result is the only arbitrary backup path

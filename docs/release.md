@@ -10,17 +10,16 @@ its checksums, its updater signatures or its engine version does not ship.
 
 ## 1. Release state
 
-`0.2.0` was the first multi-platform release; `0.5.0` is the latest published release (2026-11-16)
-and `0.6.0` is the current release candidate. `0.5.0`, `0.4.0`, `0.3.0` and `0.2.3` are kept for
-rollback:
+`0.2.0` was the first multi-platform release; `0.6.0` is the latest published release (2026-11-16).
+`0.5.0`, `0.4.0`, `0.3.0` and `0.2.3` are kept for rollback:
 
 - **Windows x64:** unsigned NSIS installer, signed updater `.exe`, portable ZIP.
 - **Linux x64:** AppImage (signed updater), deb and rpm (manual-only).
 - **macOS arm64/x64:** DMG plus signed `.app.tar.gz` updater archives.
 - **Common:** `latest.json` and `SHA256SUMS.txt`.
 
-Release notes: [`docs/releases/0.6.0.md`](releases/0.6.0.md) for the current candidate,
-[`docs/releases/0.5.0.md`](releases/0.5.0.md) for the published line and
+Release notes: [`docs/releases/0.6.0.md`](releases/0.6.0.md) for the current release,
+[`docs/releases/0.5.0.md`](releases/0.5.0.md) for the previous line and
 [`docs/releases/0.4.0.md`](releases/0.4.0.md) for the one before that.
 
 Auto-update is enabled for Windows NSIS, macOS `.app` and Linux AppImage. deb, rpm, MSI and the
@@ -559,11 +558,11 @@ The release job:
 5. Verify the release page: asset names, checksums (including `*-portable.zip.sha256`), all four
    platforms, `latest.json` and notes.
 6. Verify the in-app update on a machine with the previous release installed. `0.2.0 → 0.2.1`
-   through `0.4.0 → 0.5.0` are verified end-to-end on Windows NSIS, including the Rust-side version
-   re-check and a running sidecar stopped before the installer. `0.5.0 → 0.6.0` is the next in-app
-   update to verify on Windows NSIS, macOS `.app` and Linux AppImage. Cancellation during download and
-   `UPDATE_ENGINE_BUSY` when cleanup is blocked are covered by unit tests. Do not advertise
-   auto-update for deb/rpm/MSI/portable.
+   through `0.5.0 → 0.6.0` are verified end-to-end on Windows NSIS, including the Rust-side version
+   re-check and a running sidecar stopped before the installer. The macOS `.app` and Linux AppImage
+   update paths were not re-run for `0.6.0`; verify them on the next release. Cancellation during
+   download and `UPDATE_ENGINE_BUSY` when cleanup is blocked are covered by unit tests. Do not
+   advertise auto-update for deb/rpm/MSI/portable.
 7. Announce with the unsigned-build instructions, the manual-only cases and the checksum file.
 
 ### Post-release
@@ -621,7 +620,7 @@ are unsigned. SmartScreen/Gatekeeper may warn. Verify SHA256SUMS.txt.
 
 ### Auto-update
 Windows NSIS, macOS .app and Linux AppImage update in place after confirmation.
-deb/rpm/MSI/portable ZIP are manual-only. 0.1.0 must install 0.6.0 manually once.
+deb/rpm/MSI/portable ZIP are manual-only. 0.1.0 must install the current release manually once.
 Updater manifest: https://github.com/LevapVeeskela/lv24-seo-optimizer-desktop/releases/latest/download/latest.json
 
 ### Verification
