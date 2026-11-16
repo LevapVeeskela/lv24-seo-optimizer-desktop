@@ -15,11 +15,13 @@ import { Notice } from "@/shared/ui/Notice";
 import { useFeedback } from "@/shared/ui/Feedback";
 import { openPath } from "@/entities/config";
 import { ReportSectionView } from "@/entities/report/ui/ReportSectionView";
+import { ReportExportPanel } from "@/features/export";
 import {
   reportHtmlPath,
   reportLimitations,
   reportSections,
 } from "@/entities/report/model/types";
+import { ReportDiffCard } from "./ReportDiffCard";
 
 export const ReportsPage = observer(function ReportsPage() {
   const { t, locale } = useI18n();
@@ -46,11 +48,25 @@ export const ReportsPage = observer(function ReportsPage() {
     setOpenError(null);
   }, [htmlPath]);
 
+  useEffect(() => {
+    // `report_diff` reads the local snapshot store only, so the comparison is
+    // available right after a restart, without rebuilding (which would move
+    // the head snapshot).
+    if (!blocked && reports.diffState === "idle") {
+      void reports.loadDiff();
+    }
+  }, [blocked, reports, reports.diffState]);
+
   const buildWeekly = async () => {
     if (blocked) {
       return;
     }
     const ok = await reports.buildWeekly();
+    if (ok) {
+      // The fresh snapshot is the head side of the comparison; reload it so
+      // the card never compares against a superseded report.
+      void reports.loadDiff();
+    }
     notify(
       ok
         ? t("reports.built")
@@ -59,6 +75,16 @@ export const ReportsPage = observer(function ReportsPage() {
           : t("reports.buildFailed"),
       ok ? "success" : "error",
     );
+  };
+
+  const compare = async () => {
+    if (blocked) {
+      return;
+    }
+    const ok = await reports.loadDiff();
+    if (!ok && reports.diffError) {
+      notify(appErrorText(reports.diffError), "error");
+    }
   };
 
   const reconnect = async () => {
@@ -86,6 +112,18 @@ export const ReportsPage = observer(function ReportsPage() {
 
   const period = report?.period ?? meta.period;
   const property = report?.property_id ?? meta.property_id;
+
+  const diffCard = (
+    <ReportDiffCard
+      state={reports.diffState}
+      diff={reports.diff}
+      unavailable={reports.diffUnavailable}
+      error={reports.diffError}
+      warnings={reports.diffWarnings}
+      disabled={blocked}
+      onCompare={() => void compare()}
+    />
+  );
 
   return (
     <section className="page">
@@ -190,6 +228,8 @@ export const ReportsPage = observer(function ReportsPage() {
         </Card>
       ) : null}
 
+      {!report && !reports.loading && !blocked ? diffCard : null}
+
       {report ? (
         <>
           <Card className="report-summary">
@@ -244,6 +284,8 @@ export const ReportsPage = observer(function ReportsPage() {
             </div>
           </Card>
 
+          {diffCard}
+
           {sections.length ? (
             sections.map((section, index) => (
               <ReportSectionView
@@ -278,6 +320,12 @@ export const ReportsPage = observer(function ReportsPage() {
               </ul>
             </Card>
           ) : null}
+
+          <ReportExportPanel
+            report={report}
+            meta={meta}
+            exportDir={engine.status?.paths?.exportDir ?? null}
+          />
         </>
       ) : null}
 
