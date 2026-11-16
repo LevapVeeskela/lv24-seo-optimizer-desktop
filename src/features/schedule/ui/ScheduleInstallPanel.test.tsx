@@ -32,6 +32,8 @@ describe("ScheduleInstallPanel", () => {
       "This writes a weekly job to this computer&#x27;s scheduler for C:\\ws\\seo.toml.",
     );
     expect(html).toContain("The engine uses its default time");
+    expect(html).toContain("Nothing is written until you press Install");
+    expect(html).toContain("--allow-write");
   });
 
   it("shows the installed files and warnings", () => {

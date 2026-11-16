@@ -288,8 +288,8 @@ pub struct CliArgs {
     pub id: Option<i64>,
     /// `backup_create` only: replace a same-second archive.
     pub force: Option<bool>,
-    /// `backup_restore` only: explicit opt-in for the write phase. The plan
-    /// phase must not set it.
+    /// `backup_restore` apply phase and `schedule_install` write opt-in. The
+    /// plan/preview phases must not set it.
     pub allow_write: Option<bool>,
     /// `backup_restore` only: `confirm_token` returned by the plan phase.
     pub confirm: Option<String>,
@@ -643,6 +643,10 @@ pub fn build_argv(command: CliCommandId, args: &CliArgs) -> AppResult<Vec<String
             }
             argv.push("--config".into());
             argv.push(config.display().to_string());
+            // The engine plans by default and touches the host scheduler only
+            // with this opt-in. `validate_args` requires it, and the only UI
+            // path that sets it is the confirmation dialog.
+            argv.push("--allow-write".into());
             argv.push("--json".into());
             argv
         }
@@ -1091,10 +1095,10 @@ fn validate_args(command: CliCommandId, args: &CliArgs) -> AppResult<()> {
                 || args.payload.is_some()
                 || args.id.is_some()
                 || args.force.is_some()
-                || args.has_restore_args()
+                || args.confirm.is_some()
                 || args.root.is_some()
             {
-                return reject("an argument other than kind/cron/configPath");
+                return reject("an argument other than kind/cron/configPath/allowWrite");
             }
             let kind = args.kind.as_deref().ok_or_else(|| {
                 AppError::new("INVALID_ARGUMENT", "kind is required for schedule_install")
@@ -1110,6 +1114,18 @@ fn validate_args(command: CliCommandId, args: &CliArgs) -> AppResult<()> {
                 )
             })?;
             validate_config_path(config)?;
+            // The engine plans by default. A host write happens only when the
+            // user confirmed the dialog and the webview set this opt-in.
+            if args.allow_write != Some(true) {
+                return Err(AppError::new(
+                    "CONFIRM_REQUIRED",
+                    "schedule_install writes a host job; pass allowWrite=true only after the user confirms",
+                )
+                .with_details(serde_json::json!({
+                    "command": "schedule_install",
+                    "requires": "allowWrite",
+                })));
+            }
         }
     }
     Ok(())
@@ -3570,18 +3586,20 @@ mod tests {
     }
 
     #[test]
-    fn schedule_install_argv_sends_kind_and_an_optional_cron() {
+    fn schedule_install_argv_sends_the_confirmed_write_opt_in() {
         let dir = tempfile::tempdir().unwrap();
         let config = dir.path().join("seo.toml");
         let config_text = config.display().to_string();
 
-        // The engine owns the default cron for each kind.
+        // The engine owns the default cron for each kind and plans by default;
+        // `--allow-write` is the confirmed opt-in that writes the host job.
         assert_eq!(
             build_argv(
                 CliCommandId::ScheduleInstall,
                 &CliArgs {
                     kind: Some("Weekly".into()),
                     config_path: Some(config_text.clone()),
+                    allow_write: Some(true),
                     ..CliArgs::default()
                 }
             )
@@ -3593,6 +3611,7 @@ mod tests {
                 "weekly",
                 "--config",
                 config_text.as_str(),
+                "--allow-write",
                 "--json"
             ]
         );
@@ -3604,6 +3623,7 @@ mod tests {
                     kind: Some("daily".into()),
                     cron: Some("  0   7 * * * ".into()),
                     config_path: Some(config_text.clone()),
+                    allow_write: Some(true),
                     ..CliArgs::default()
                 }
             )
@@ -3617,6 +3637,7 @@ mod tests {
                 "0 7 * * *",
                 "--config",
                 config_text.as_str(),
+                "--allow-write",
                 "--json"
             ]
         );
@@ -3627,6 +3648,7 @@ mod tests {
                 CliArgs {
                     kind: Some("monthly".into()),
                     config_path: Some(config_text.clone()),
+                    allow_write: Some(true),
                     ..CliArgs::default()
                 },
             ),
@@ -3634,6 +3656,7 @@ mod tests {
                 "missing kind",
                 CliArgs {
                     config_path: Some(config_text.clone()),
+                    allow_write: Some(true),
                     ..CliArgs::default()
                 },
             ),
@@ -3643,6 +3666,7 @@ mod tests {
                     kind: Some("weekly".into()),
                     cron: Some("0 6 * *".into()),
                     config_path: Some(config_text.clone()),
+                    allow_write: Some(true),
                     ..CliArgs::default()
                 },
             ),
@@ -3650,6 +3674,17 @@ mod tests {
                 "missing config",
                 CliArgs {
                     kind: Some("weekly".into()),
+                    allow_write: Some(true),
+                    ..CliArgs::default()
+                },
+            ),
+            (
+                "confirm token",
+                CliArgs {
+                    kind: Some("weekly".into()),
+                    config_path: Some(config_text.clone()),
+                    allow_write: Some(true),
+                    confirm: Some("1700000000:abcdef".into()),
                     ..CliArgs::default()
                 },
             ),
@@ -3662,6 +3697,51 @@ mod tests {
                 "{field}"
             );
         }
+
+        // The plan-only path must never reach the host scheduler: without the
+        // confirmed opt-in the shell refuses before spawning the engine.
+        for allow_write in [None, Some(false)] {
+            assert_eq!(
+                build_argv(
+                    CliCommandId::ScheduleInstall,
+                    &CliArgs {
+                        kind: Some("weekly".into()),
+                        config_path: Some(config_text.clone()),
+                        allow_write,
+                        ..CliArgs::default()
+                    }
+                )
+                .unwrap_err()
+                .code(),
+                "CONFIRM_REQUIRED"
+            );
+        }
+
+        // The preview stays read-only and never carries the write flag.
+        let preview = build_argv(
+            CliCommandId::SchedulePrint,
+            &CliArgs {
+                cron: Some("0 6 * * 1".into()),
+                target: Some("windows".into()),
+                ..CliArgs::default()
+            },
+        )
+        .unwrap();
+        assert!(!preview.iter().any(|arg| arg == "--allow-write"));
+        assert_eq!(
+            build_argv(
+                CliCommandId::SchedulePrint,
+                &CliArgs {
+                    cron: Some("0 6 * * 1".into()),
+                    target: Some("windows".into()),
+                    allow_write: Some(true),
+                    ..CliArgs::default()
+                }
+            )
+            .unwrap_err()
+            .code(),
+            "INVALID_ARGUMENT"
+        );
 
         assert!(CliCommandId::ScheduleInstall.requires_config());
         assert_eq!(

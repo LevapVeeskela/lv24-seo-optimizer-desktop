@@ -117,7 +117,7 @@ The command surface is fixed. The generic `cli_run` allow-list is:
 | `backup_create` | `backup create --out <dir> [--force] --json` | local write |
 | `backup_restore` | `backup restore --file <zip> --config <path> [--allow-write --confirm <token>] --json` | local write (gated) |
 | `portfolio_list` | `portfolio list --root <dir> [--limit <n>] --json` | read |
-| `schedule_install` | `schedule install --kind weekly\|daily [--cron <expr>] --config <path> --json` | host write (gated) |
+| `schedule_install` | `schedule install --kind weekly\|daily [--cron <expr>] --config <path> --allow-write --json` | host write (gated) |
 
 Dedicated Tauri commands cover the rest: `shell_status`, `config_read`, `config_validate`,
 `config_write`, `config_patch`, `auth_set` (secret over stdin), `auth_delete`, `write_text_file`,
@@ -157,8 +157,9 @@ archive the shell will read, and a path under the app export directory is also a
 is two-phase: the plan call carries neither `allowWrite` nor `confirm`, the apply call carries both
 and the token must come from the plan. `pick_directory` also approves the portfolio root, so
 `portfolio_list` can only scan a folder the user picked. `schedule_install` requires the active
-config and writes a host job; the UI asks for confirmation first, and the shell passes only the
-validated kind, cron and config.
+config and a confirmed `allowWrite=true`; the UI asks for confirmation first, and the shell appends
+`--allow-write` only then. Without that opt-in the call is refused with `CONFIRM_REQUIRED` before
+the engine is spawned, so a plan-only engine default cannot be bypassed by the webview.
 
 `update_install` and `update_cancel` exist because the webview holds only `updater:allow-check`. The
 Rust side re-checks the endpoint, refuses a version that differs from the announced one, serializes

@@ -89,8 +89,8 @@ export interface CliArgs {
   /** `backup_create` only: replace a same-second archive. */
   force?: boolean;
   /**
-   * `backup_restore` only: explicit opt-in for the apply phase. The plan phase
-   * must omit it; the UI never sends it before the confirmation dialog.
+   * `backup_restore` apply phase and `schedule_install` write opt-in. The plan
+   * and preview phases must omit it; `schedule_install` is refused without it.
    */
   allowWrite?: boolean;
   /** `backup_restore` only: `confirmToken` returned by the plan phase. */

@@ -224,7 +224,12 @@ export class ScheduleStore {
     const generation = ++this.installGeneration;
     this.installState = "installing";
     this.installError = null;
-    const args = { kind: this.installKind, ...(cron ? { cron } : {}) };
+    const args = {
+      kind: this.installKind,
+      ...(cron ? { cron } : {}),
+      // The engine plans by default; this is the confirmed host-write opt-in.
+      allowWrite: true,
+    };
     const result = this.runs
       ? await trackRun(this.runs, {
           kind: "scheduleInstall",
