@@ -54,4 +54,12 @@ describe("IntegrationsPage", () => {
     expect(html).toContain("Engine status is unavailable");
     expect(html).toContain("Engine offline");
   });
+
+  it("adds the local backup panel and states that restore is not implemented", () => {
+    const html = renderPage();
+    expect(html).toContain("Workspace backup");
+    expect(html).toContain("Create backup");
+    expect(html).toContain("No backup yet");
+    expect(html).toContain("Restore is not implemented");
+  });
 });

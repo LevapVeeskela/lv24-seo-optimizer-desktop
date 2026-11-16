@@ -1,0 +1,87 @@
+.logs-facts {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: var(--space-3);
+}
+
+.logs-fact {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  padding: var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--inset);
+}
+
+.logs-fact strong {
+  font-size: var(--text-title);
+  line-height: 1.2;
+}
+
+.logs-source {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2) var(--space-4);
+  margin: var(--space-4) 0 0;
+}
+
+.logs-file-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.logs-file-row .input {
+  flex: 1 1 260px;
+  min-width: 0;
+}
+
+.logs-filters {
+  align-items: flex-end;
+  margin-bottom: var(--space-4);
+}
+
+.logs-filters .field {
+  flex: 1 1 180px;
+  max-width: 280px;
+}
+
+.logs-filters .form-actions {
+  margin-left: auto;
+}
+
+.logs-table .logs-col-date {
+  width: 130px;
+}
+
+.logs-table .logs-col-bot {
+  width: 150px;
+}
+
+.logs-table .logs-col-status {
+  width: 110px;
+}
+
+.logs-waste-table th,
+.logs-waste-table td {
+  text-align: right;
+}
+
+.logs-waste-table th:first-child,
+.logs-waste-table td:first-child {
+  text-align: left;
+}
+
+@media (max-width: 780px) {
+  .logs-filters .field {
+    max-width: none;
+  }
+
+  .logs-filters .form-actions {
+    margin-left: 0;
+    justify-content: space-between;
+    width: 100%;
+  }
+}

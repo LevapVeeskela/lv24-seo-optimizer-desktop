@@ -1,12 +1,14 @@
 import { useI18n } from "@/shared/i18n";
 import { Badge } from "@/shared/ui/Badge";
 import { Notice } from "@/shared/ui/Notice";
+import { BackupPanel } from "@/features/backup";
 import { McpConfigPanel } from "@/features/mcp-config";
 import { SchedulePanel } from "@/features/schedule";
 
 /**
- * Read-only integrations: copy-ready MCP host snippets and a print-only
- * scheduler artifact. The page writes nothing and installs nothing.
+ * Local integrations: copy-ready MCP host snippets, a print-only scheduler
+ * artifact and a backup creator. Only the backup panel writes, and only one
+ * archive into the folder the user picks.
  */
 export const IntegrationsPage = function IntegrationsPage() {
   const { t } = useI18n();
@@ -28,6 +30,7 @@ export const IntegrationsPage = function IntegrationsPage() {
 
       <McpConfigPanel />
       <SchedulePanel />
+      <BackupPanel />
     </section>
   );
 };

@@ -1,5 +1,6 @@
-# Logs
-logs
+# Logs (runtime output at the repo root only; source folders such as
+# src/pages/logs must stay tracked)
+/logs
 *.log
 npm-debug.log*
 
