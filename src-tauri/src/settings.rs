@@ -65,7 +65,16 @@ pub struct Settings {
     /// Desktop UI language only; report.locale is a project setting.
     pub ui_locale: String,
     pub window_bounds: WindowBounds,
+    /// Config files the user picked in the native dialog or created with
+    /// `init`. Absolute, normalized, secret-free paths. Persisted so recent
+    /// workspaces can be activated again after a restart; the shell still
+    /// refuses any path the webview names that is not in this list.
+    pub known_configs: Vec<String>,
 }
+
+/// Recent-workspace cap. Older entries are dropped so the settings file cannot
+/// grow without bound.
+pub const MAX_KNOWN_CONFIGS: usize = 20;
 
 impl Default for Settings {
     fn default() -> Self {
@@ -73,6 +82,7 @@ impl Default for Settings {
             config_path: None,
             ui_locale: "en".to_string(),
             window_bounds: WindowBounds::default(),
+            known_configs: Vec::new(),
         }
     }
 }
@@ -90,6 +100,7 @@ impl Settings {
         }
         .to_string();
         self.window_bounds = self.window_bounds.sanitized();
+        self.known_configs = sanitize_known_configs(self.known_configs);
         self
     }
 
@@ -103,6 +114,17 @@ impl Settings {
         }
         if let Some(raw) = text_field(value, &["uiLocale", "ui_locale"]) {
             settings.ui_locale = raw.to_string();
+        }
+        if let Some(entries) = ["knownConfigs", "known_configs"]
+            .iter()
+            .find_map(|key| value.get(*key))
+            .and_then(Value::as_array)
+        {
+            settings.known_configs = entries
+                .iter()
+                .filter_map(Value::as_str)
+                .map(str::to_string)
+                .collect();
         }
         if let Some(bounds) = ["windowBounds", "window_bounds"]
             .iter()
@@ -136,6 +158,55 @@ impl Settings {
             validate_config_path(raw)?;
         }
         Ok(())
+    }
+}
+
+/// Keep only structurally valid `.toml` paths: absolute, local (no UNC/device
+/// namespace), no `..`, unique. A known path whose file or folder has since
+/// disappeared stays in the list so `settings_set` can answer
+/// `CONFIG_NOT_FOUND` instead of pretending the path was never known.
+fn sanitize_known_configs(values: Vec<String>) -> Vec<String> {
+    let mut known: Vec<String> = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    for raw in values {
+        let trimmed = raw.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        if crate::paths::ensure_local_path(trimmed, "known config").is_err() {
+            continue;
+        }
+        let Ok(path) = crate::paths::validate_absolute_path(trimmed, "known config") else {
+            continue;
+        };
+        let is_toml = path
+            .extension()
+            .and_then(|value| value.to_str())
+            .map(|value| value.eq_ignore_ascii_case("toml"))
+            .unwrap_or(false);
+        if !is_toml {
+            continue;
+        }
+        let entry = path.display().to_string();
+        if seen.insert(config_key(&entry)) {
+            known.push(entry);
+        }
+        if known.len() >= MAX_KNOWN_CONFIGS {
+            break;
+        }
+    }
+    known
+}
+
+/// Identity for known-path comparisons. Windows paths are case-insensitive.
+fn config_key(path: &str) -> String {
+    #[cfg(windows)]
+    {
+        path.to_lowercase()
+    }
+    #[cfg(not(windows))]
+    {
+        path.to_string()
     }
 }
 
@@ -275,6 +346,35 @@ impl SettingsStore {
         if *guard == settings {
             return Ok(settings);
         }
+        self.persist(&settings)?;
+        *guard = settings.clone();
+        Ok(settings)
+    }
+
+    /// Persist a config path the user picked in the dialog or `init` created.
+    /// Never changes the active config; newest entries come first and the list
+    /// is capped. Re-adding a known path is a no-op (no file write). The whole
+    /// read-modify-write runs under one lock so a concurrent `set` cannot be
+    /// reverted by a stale snapshot.
+    pub fn remember_config(&self, path: &Path) -> AppResult<Settings> {
+        let validated = validate_config_path(&path.display().to_string())?;
+        let entry = validated.display().to_string();
+        let key = config_key(&entry);
+        let mut guard = self
+            .settings
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let mut settings = guard.clone();
+        if settings
+            .known_configs
+            .iter()
+            .any(|known| config_key(known) == key)
+        {
+            return Ok(settings);
+        }
+        settings.known_configs.insert(0, entry);
+        settings.known_configs.truncate(MAX_KNOWN_CONFIGS);
+        let settings = settings.sanitized();
         self.persist(&settings)?;
         *guard = settings.clone();
         Ok(settings)
@@ -578,6 +678,7 @@ mod tests {
                 height: 99_999,
                 ..WindowBounds::default()
             },
+            known_configs: Vec::new(),
         }
         .sanitized();
         assert_eq!(settings.config_path, None);
@@ -626,6 +727,10 @@ mod tests {
             config_path: Some(std::env::temp_dir().join("seo.toml").display().to_string()),
             ui_locale: "ru".to_string(),
             window_bounds: WindowBounds::default(),
+            known_configs: vec![std::env::temp_dir()
+                .join("known.toml")
+                .display()
+                .to_string()],
         };
         let patch = SettingsPatch {
             window_bounds: Some(WindowBounds {
@@ -637,7 +742,96 @@ mod tests {
         };
         let updated = patch.apply_to(base.clone());
         assert_eq!(updated.config_path, base.config_path);
+        assert_eq!(updated.known_configs, base.known_configs);
         assert_eq!(updated.ui_locale, "ru");
         assert_eq!(updated.window_bounds.width, 1440);
+    }
+
+    #[test]
+    fn known_configs_are_persisted_deduplicated_and_capped() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(SETTINGS_FILE);
+        let store = SettingsStore::load(path.clone()).unwrap();
+        let first = dir.path().join("first.toml");
+        fs::write(&first, "version = 1\n").unwrap();
+        let second = dir.path().join("second.toml");
+        fs::write(&second, "version = 1\n").unwrap();
+
+        store.remember_config(&first).unwrap();
+        // The same file spelled with `.` must not create a second entry.
+        let alias = dir.path().join(".").join("first.toml");
+        store.remember_config(&alias).unwrap();
+        store.remember_config(&second).unwrap();
+
+        let settings = store.get();
+        assert_eq!(
+            settings.known_configs,
+            vec![second.display().to_string(), first.display().to_string()]
+        );
+        assert_eq!(settings.config_path, None);
+
+        // A restart reads the same list from disk.
+        let reloaded = SettingsStore::load(path.clone()).unwrap();
+        assert_eq!(reloaded.get().known_configs, settings.known_configs);
+        // Persistence format: camelCase array next to configPath/uiLocale.
+        let raw = fs::read_to_string(&path).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&raw).unwrap();
+        assert_eq!(parsed["knownConfigs"].as_array().map(Vec::len), Some(2));
+        assert!(parsed.get("known_configs").is_none());
+
+        // The cap keeps the newest entries.
+        for index in 0..(MAX_KNOWN_CONFIGS + 5) {
+            let extra = dir.path().join(format!("extra-{index}.toml"));
+            fs::write(&extra, "version = 1\n").unwrap();
+            store.remember_config(&extra).unwrap();
+        }
+        assert_eq!(store.get().known_configs.len(), MAX_KNOWN_CONFIGS);
+        assert_eq!(
+            store.get().known_configs[0],
+            dir.path()
+                .join(format!("extra-{}.toml", MAX_KNOWN_CONFIGS + 4))
+                .display()
+                .to_string()
+        );
+    }
+
+    #[test]
+    fn known_configs_reject_relative_network_and_non_toml_entries() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = dir.path().join("seo.toml");
+        let settings = Settings {
+            known_configs: vec![
+                config.display().to_string(),
+                config.display().to_string(),
+                "relative/seo.toml".to_string(),
+                dir.path().join("notes.txt").display().to_string(),
+                r"\\server\share\seo.toml".to_string(),
+                "  ".to_string(),
+            ],
+            ..Settings::default()
+        }
+        .sanitized();
+        assert_eq!(settings.known_configs, vec![config.display().to_string()]);
+    }
+
+    #[test]
+    fn a_known_config_whose_file_disappeared_stays_known() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(SETTINGS_FILE);
+        let store = SettingsStore::load(path.clone()).unwrap();
+        let project = dir.path().join("project");
+        fs::create_dir(&project).unwrap();
+        let config = project.join("seo.toml");
+        fs::write(&config, "version = 1\n").unwrap();
+        store.remember_config(&config).unwrap();
+
+        // Only the file is deleted: the entry stays known (settings_set will
+        // report CONFIG_NOT_FOUND), not silently forgotten.
+        fs::remove_file(&config).unwrap();
+        let reloaded = SettingsStore::load(path).unwrap();
+        assert_eq!(
+            reloaded.get().known_configs,
+            vec![config.display().to_string()]
+        );
     }
 }

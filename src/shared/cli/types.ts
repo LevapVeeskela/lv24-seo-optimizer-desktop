@@ -9,6 +9,8 @@ export const CLI_COMMAND_IDS = [
   "report_weekly",
   "report_diff",
   "crawl",
+  "init",
+  "schedule_print",
 ] as const;
 
 export type CliCommandId = (typeof CLI_COMMAND_IDS)[number];
@@ -38,6 +40,20 @@ export interface CliArgs {
   head?: string;
   start?: string;
   maxUrls?: number;
+  /** `init` only: site URL, `sc-domain:` property, or a bare host. */
+  property?: string;
+  /**
+   * `init` (creates it) and `schedule_print` (must equal the active config):
+   * absolute path to the project `seo.toml`. For `init` the top-level
+   * `CliRunOptions.configPath` is accepted as an alias.
+   */
+  configPath?: string;
+  /** `init` only: absolute data directory; its parent must exist. */
+  dataDir?: string;
+  /** `schedule_print` only: five-field cron expression. */
+  cron?: string;
+  /** `schedule_print` only: scheduler dialect. */
+  target?: "cron" | "systemd" | "windows";
 }
 
 export interface CliRunOptions {
