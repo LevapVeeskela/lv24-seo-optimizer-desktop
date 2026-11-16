@@ -625,6 +625,53 @@ pub fn validate_log_file_path(raw: &str, label: &str) -> AppResult<PathBuf> {
     Ok(path)
 }
 
+/// Validate the archive chosen for `backup restore`. The contract is one
+/// absolute local `.zip` regular file that came from the native dialog; a
+/// glob, a network share, a Windows device or a directory is rejected before
+/// the engine could read it.
+pub fn validate_backup_archive_path(raw: &str) -> AppResult<PathBuf> {
+    ensure_local_path(raw, "backup archive")?;
+    if raw.chars().any(|ch| matches!(ch, '*' | '?' | '[')) {
+        return Err(AppError::new(
+            "INVALID_PATH",
+            "backup archive must name exactly one file, not a glob",
+        ));
+    }
+    let path = validate_absolute_path(raw, "backup archive")?;
+    let extension = path
+        .extension()
+        .and_then(|value| value.to_str())
+        .unwrap_or("");
+    if !extension.eq_ignore_ascii_case("zip") {
+        return Err(AppError::new(
+            "INVALID_PATH",
+            format!("backup archive must end with .zip: {}", path.display()),
+        ));
+    }
+    let metadata = fs::metadata(&path).map_err(|err| {
+        AppError::new(
+            "INVALID_PATH",
+            format!(
+                "backup archive is not accessible: {} ({err})",
+                path.display()
+            ),
+        )
+    })?;
+    if metadata.is_dir() {
+        return Err(AppError::new(
+            "INVALID_PATH",
+            format!("backup archive is a directory: {}", path.display()),
+        ));
+    }
+    if !metadata.is_file() {
+        return Err(AppError::new(
+            "INVALID_PATH",
+            format!("backup archive is not a regular file: {}", path.display()),
+        ));
+    }
+    Ok(path)
+}
+
 /// Validate an existing local directory (the native folder dialog result).
 pub fn validate_directory_path(raw: &str, label: &str) -> AppResult<PathBuf> {
     ensure_local_path(raw, label)?;

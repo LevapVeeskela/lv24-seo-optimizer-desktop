@@ -41,15 +41,18 @@ describe("BackupPanel", () => {
     expect(html).toContain("No folder selected");
   });
 
-  it("states that restore is not implemented", () => {
+  it("renders the two-phase restore flow", () => {
     const html = renderPanel();
-    expect(html).toContain("Restore is not implemented");
-    expect(html).toContain("0.4.0 only creates archives");
+    expect(html).toContain("Restore from archive");
+    expect(html).toContain("Choose archive");
+    expect(html).toContain("Review restore");
+    expect(html).toContain("No restore planned");
+    expect(html).toContain("Restore this backup?");
   });
 
   it("keeps the panel but explains an offline engine", () => {
     const html = renderPanel(true);
     expect(html).toContain("Engine offline");
-    expect(html).toContain("Restore is not implemented");
+    expect(html).toContain("Restore from archive");
   });
 });
