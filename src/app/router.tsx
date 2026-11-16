@@ -34,6 +34,16 @@ const CrawlPage = lazy(() =>
     default: module.CrawlPage,
   })),
 );
+const LogsPage = lazy(() =>
+  import("@/pages/logs/LogsPage").then((module) => ({
+    default: module.LogsPage,
+  })),
+);
+const TasksPage = lazy(() =>
+  import("@/pages/tasks/TasksPage").then((module) => ({
+    default: module.TasksPage,
+  })),
+);
 const IntegrationsPage = lazy(() =>
   import("@/pages/integrations/IntegrationsPage").then((module) => ({
     default: module.IntegrationsPage,
@@ -77,6 +87,8 @@ export function AppRoutes() {
         <Route path={ROUTES.config} element={<ConfigPage />} />
         <Route path={ROUTES.recommendations} element={<RecommendationsPage />} />
         <Route path={ROUTES.crawl} element={<CrawlPage />} />
+        <Route path={ROUTES.logs} element={<LogsPage />} />
+        <Route path={ROUTES.tasks} element={<TasksPage />} />
         <Route path={ROUTES.integrations} element={<IntegrationsPage />} />
         <Route path={ROUTES.onboarding} element={<OnboardingPage />} />
         <Route

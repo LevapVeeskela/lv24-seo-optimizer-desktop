@@ -18,7 +18,9 @@ use crate::error::{AppError, AppResult, ErrorInfo};
 use crate::paths;
 use crate::settings::{Settings, SettingsPatch, SettingsStore};
 
-pub const MIN_ENGINE_VERSION: &str = "0.5.2";
+/// 0.4.0 uses `logs analyze`, `tasks` and `backup create`; none of them exist
+/// in engine 0.5.2, so an older sidecar must be reported as incompatible.
+pub const MIN_ENGINE_VERSION: &str = "0.6.0";
 
 /// Progress event emitted by the Rust updater while it downloads a release.
 pub const UPDATE_PROGRESS_EVENT: &str = "update://progress";
@@ -39,6 +41,9 @@ pub struct AppState {
     /// Folders the user picked in the native directory dialog. `init` may only
     /// create a config in one of these or next to the current config.
     approved_directories: Mutex<HashSet<PathBuf>>,
+    /// Access logs the user picked in the native file dialog. `logs_analyze`
+    /// reads only one of these or a file under the app data/export roots.
+    approved_log_files: Mutex<HashSet<PathBuf>>,
     update: UpdateGate,
 }
 
@@ -49,6 +54,7 @@ impl AppState {
             settings: Arc::new(settings),
             approved_configs: Mutex::new(HashSet::new()),
             approved_directories: Mutex::new(HashSet::new()),
+            approved_log_files: Mutex::new(HashSet::new()),
             update: UpdateGate::default(),
         }
     }
@@ -61,6 +67,12 @@ impl AppState {
 
     fn approved_directories(&self) -> MutexGuard<'_, HashSet<PathBuf>> {
         self.approved_directories
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    fn approved_log_files(&self) -> MutexGuard<'_, HashSet<PathBuf>> {
+        self.approved_log_files
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
@@ -139,6 +151,74 @@ impl AppState {
             Ok(canonical) => approved.iter().any(|path| same_path(path, &canonical)),
             Err(_) => approved.iter().any(|path| same_path(path, directory)),
         }
+    }
+
+    /// Record an access log chosen in the native file dialog. The canonical
+    /// form is stored for comparisons; the webview gets the normalized path it
+    /// picked so the engine receives a plain absolute path.
+    pub fn approve_log_file(&self, path: &Path) -> AppResult<PathBuf> {
+        let validated = paths::validate_log_file_path(&path.display().to_string(), "log file")?;
+        let canonical = fs::canonicalize(&validated).map_err(|err| {
+            AppError::new(
+                "INVALID_PATH",
+                format!("cannot resolve {}: {err}", validated.display()),
+            )
+        })?;
+        self.approved_log_files().insert(canonical);
+        Ok(validated)
+    }
+
+    fn is_log_file_approved(&self, candidate: &Path) -> bool {
+        let approved = self.approved_log_files();
+        match fs::canonicalize(candidate) {
+            Ok(canonical) => approved.iter().any(|path| same_path(path, &canonical)),
+            Err(_) => approved.iter().any(|path| same_path(path, candidate)),
+        }
+    }
+
+    /// `logs analyze` reads exactly one local file. It must either come from
+    /// `pick_log_file` in this process or live under the app's own data/export
+    /// directories; an arbitrary webview string is rejected before the engine
+    /// is spawned.
+    fn ensure_log_file_allowed(&self, raw: &str) -> AppResult<PathBuf> {
+        let validated = paths::validate_log_file_path(raw, "log file")?;
+        let roots = [self.paths.data_dir.clone(), self.paths.export_dir.clone()];
+        if paths::ensure_within_roots(&validated, &roots).is_ok() {
+            return Ok(validated);
+        }
+        if self.is_log_file_approved(&validated) {
+            return Ok(validated);
+        }
+        Err(AppError::new(
+            "PATH_NOT_APPROVED",
+            "choose the access log with the native file dialog",
+        )
+        .with_details(serde_json::json!({
+            "path": validated.display().to_string(),
+            "roots": roots.iter().map(|root| root.display().to_string()).collect::<Vec<_>>(),
+        })))
+    }
+
+    /// `backup create` writes one zip. The destination must be the app export
+    /// directory (or a child of it) or a folder picked in the native directory
+    /// dialog; an arbitrary existing folder is not enough.
+    fn ensure_backup_out_allowed(&self, raw: &str) -> AppResult<PathBuf> {
+        let directory = paths::validate_directory_path(raw, "backup output")?;
+        let roots = [self.paths.export_dir.clone()];
+        if paths::ensure_dir_within_roots(&directory, &roots).is_ok() {
+            return Ok(directory);
+        }
+        if self.is_directory_approved(&directory) {
+            return Ok(directory);
+        }
+        Err(AppError::new(
+            "PATH_NOT_APPROVED",
+            "choose the backup folder with the native directory dialog",
+        )
+        .with_details(serde_json::json!({
+            "path": directory.display().to_string(),
+            "exportDir": self.paths.export_dir.display().to_string(),
+        })))
     }
 
     /// `init` writes local files. Its config may only be created in a folder
@@ -576,6 +656,33 @@ pub async fn pick_directory(
     Ok(Some(approved.display().to_string()))
 }
 
+/// Open the native file dialog for one access log and remember the canonical
+/// file. `logs_analyze` only reads a file approved this way or one under the
+/// app data/export roots, so the webview cannot turn the engine into an
+/// arbitrary file reader.
+#[tauri::command]
+pub async fn pick_log_file(
+    app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<Option<String>, AppError> {
+    let picked = app
+        .dialog()
+        .file()
+        .set_title("Access log")
+        .blocking_pick_file();
+    let Some(file) = picked else {
+        return Ok(None);
+    };
+    let path = file.into_path().map_err(|err| {
+        AppError::new(
+            "INVALID_PATH",
+            format!("cannot resolve the picked log file: {err}"),
+        )
+    })?;
+    let approved = state.approve_log_file(&path)?;
+    Ok(Some(approved.display().to_string()))
+}
+
 /// Startup handshake. It never fails because the engine is missing: the
 /// missing/broken engine is returned as status data.
 #[tauri::command]
@@ -673,7 +780,10 @@ pub async fn cli_run(
         }
     }
 
-    let config_path = if command == CliCommandId::Init {
+    let config_path = if matches!(command, CliCommandId::Init | CliCommandId::LogsAnalyze) {
+        // `init` targets a config that is not active yet; `logs analyze` reads
+        // one local file and must keep working even when the workspace config
+        // is stale or missing.
         None
     } else {
         resolve_active_config_opt(state.inner(), requested_config)?
@@ -743,11 +853,26 @@ pub async fn cli_run(
                 .to_string(),
         );
     }
+    if command == CliCommandId::LogsAnalyze {
+        let file = args.file.as_deref().ok_or_else(|| {
+            AppError::new("INVALID_ARGUMENT", "file is required for logs_analyze")
+        })?;
+        let allowed = state.inner().ensure_log_file_allowed(file)?;
+        args.file = Some(allowed.display().to_string());
+    }
+    if command == CliCommandId::BackupCreate {
+        let out = args.out.as_deref().ok_or_else(|| {
+            AppError::new("INVALID_ARGUMENT", "out is required for backup_create")
+        })?;
+        let allowed = state.inner().ensure_backup_out_allowed(out)?;
+        args.out = Some(allowed.display().to_string());
+    }
 
     // `init` and `schedule_print` carry `--config` in argv; every other
-    // command gets it appended by the runner.
+    // command gets it appended by the runner. `logs analyze` has no `--config`
+    // option at all: it reads one local file and never touches the project.
     let engine_config = match command {
-        CliCommandId::Init | CliCommandId::SchedulePrint => None,
+        CliCommandId::Init | CliCommandId::SchedulePrint | CliCommandId::LogsAnalyze => None,
         _ => config_path.as_deref(),
     };
     let location = paths::locate_engine(&app)?;
@@ -1720,6 +1845,120 @@ mod tests {
     }
 
     #[test]
+    fn logs_analyze_reads_only_an_approved_or_app_owned_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = app_state(dir.path(), None);
+        let outside = dir.path().join("outside.log");
+        fs::write(&outside, "{}\n").unwrap();
+
+        // An arbitrary webview path is not enough, even when it exists.
+        assert_eq!(
+            state
+                .ensure_log_file_allowed(&outside.display().to_string())
+                .unwrap_err()
+                .code(),
+            "PATH_NOT_APPROVED"
+        );
+
+        // A file the user picked in the native dialog is recorded and accepted.
+        let approved = state.approve_log_file(&outside).unwrap();
+        assert_eq!(approved, outside);
+        assert!(state.is_log_file_approved(&outside));
+        assert_eq!(
+            state
+                .ensure_log_file_allowed(&outside.display().to_string())
+                .unwrap(),
+            outside
+        );
+
+        // The app's own data and export directories need no dialog.
+        for root in [&state.paths.data_dir, &state.paths.export_dir] {
+            let file = root.join("access.log");
+            fs::write(&file, "{}\n").unwrap();
+            assert_eq!(
+                state
+                    .ensure_log_file_allowed(&file.display().to_string())
+                    .unwrap(),
+                file
+            );
+        }
+
+        // Shape checks still apply after approval.
+        let nested = dir.path().join("nested");
+        fs::create_dir(&nested).unwrap();
+        for path in [
+            nested.display().to_string(),
+            dir.path().join("missing.log").display().to_string(),
+            dir.path().join("*.log").display().to_string(),
+            r"\\server\share\access.log".to_string(),
+            r"\\.\PhysicalDrive0".to_string(),
+        ] {
+            assert_eq!(
+                state.ensure_log_file_allowed(&path).unwrap_err().code(),
+                "INVALID_PATH",
+                "{path:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn backup_output_needs_the_export_root_or_a_picked_folder() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = app_state(dir.path(), None);
+        let outside = dir.path().join("outside-backups");
+        fs::create_dir(&outside).unwrap();
+
+        assert_eq!(
+            state
+                .ensure_backup_out_allowed(&outside.display().to_string())
+                .unwrap_err()
+                .code(),
+            "PATH_NOT_APPROVED"
+        );
+
+        // A folder picked in the native directory dialog is accepted.
+        state.approve_directory(&outside).unwrap();
+        assert_eq!(
+            state
+                .ensure_backup_out_allowed(&outside.display().to_string())
+                .unwrap(),
+            outside
+        );
+
+        // The export directory and its children are always accepted.
+        let child = state.paths.export_dir.join("backups");
+        fs::create_dir(&child).unwrap();
+        for path in [&state.paths.export_dir, &child] {
+            assert_eq!(
+                state
+                    .ensure_backup_out_allowed(&path.display().to_string())
+                    .unwrap(),
+                path.clone()
+            );
+        }
+
+        // A file or a missing directory is rejected before approval matters.
+        let file = state.paths.export_dir.join("archive.zip");
+        fs::write(&file, "x").unwrap();
+        assert_eq!(
+            state
+                .ensure_backup_out_allowed(&file.display().to_string())
+                .unwrap_err()
+                .code(),
+            "INVALID_PATH"
+        );
+        assert_eq!(
+            state
+                .ensure_backup_out_allowed(
+                    &state.paths.export_dir.join("missing").display().to_string()
+                )
+                .unwrap_err()
+                .code(),
+            "INVALID_PATH"
+        );
+    }
+
+    #[test]
     fn only_a_dialog_picked_config_is_approved() {
         let dir = tempfile::tempdir().unwrap();
         let active = dir.path().join("seo.toml");
@@ -1863,6 +2102,10 @@ mod tests {
 
     #[test]
     fn engine_version_comparison_is_numeric() {
+        assert_eq!(MIN_ENGINE_VERSION, "0.6.0");
+        assert!(version_at_least(MIN_ENGINE_VERSION, MIN_ENGINE_VERSION));
+        assert!(version_at_least("0.6.1", MIN_ENGINE_VERSION));
+        assert!(!version_at_least("0.5.2", MIN_ENGINE_VERSION));
         assert!(version_at_least("0.4.0", "0.4.0"));
         assert!(version_at_least("0.4.1", "0.4.0"));
         assert!(version_at_least("0.10.0", "0.4.0"));

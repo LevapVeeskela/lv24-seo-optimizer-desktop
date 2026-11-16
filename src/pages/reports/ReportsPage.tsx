@@ -28,7 +28,9 @@ import {
   reportLimitations,
   reportSections,
 } from "@/entities/report/model/types";
+import { isDigestSection, reportDigestSection } from "@/entities/report/model/digest";
 import { ReportDiffCard } from "./ReportDiffCard";
+import { ReportDigestCard } from "./ReportDigestCard";
 
 export const ReportsPage = observer(function ReportsPage() {
   const { t, locale } = useI18n();
@@ -48,7 +50,12 @@ export const ReportsPage = observer(function ReportsPage() {
   const report = reports.report;
   const meta = reports.meta;
   const htmlPath = reportHtmlPath(meta);
-  const sections = reportSections(report);
+  const digestSection = reportDigestSection(report);
+  // The digest has its own compact card; it is not an "unknown section".
+  const sections = reportSections(report).filter((section) => {
+    const candidate: unknown = section;
+    return !isDigestSection(candidate);
+  });
   const limitations = reportLimitations(report, meta);
   const warnings = [
     ...new Set([...(report?.warnings ?? []), ...reports.warnings]),
@@ -328,6 +335,8 @@ export const ReportsPage = observer(function ReportsPage() {
           </Card>
 
           {diffCard}
+
+          <ReportDigestCard section={digestSection} />
 
           {sections.length ? (
             sections.map((section, index) => (

@@ -10,6 +10,11 @@ describe("routes and navigation", () => {
     expect(ROUTES.onboarding).toBe("/onboarding");
   });
 
+  it("declares the logs and tasks routes", () => {
+    expect(ROUTES.logs).toBe("/logs");
+    expect(ROUTES.tasks).toBe("/tasks");
+  });
+
   it("links every nav item to a declared route and a translated label", () => {
     const paths = Object.values(ROUTES) as string[];
     for (const item of NAV_ITEMS) {
@@ -22,6 +27,14 @@ describe("routes and navigation", () => {
     const paths = NAV_ITEMS.map((item) => item.to);
     expect(paths).toContain(ROUTES.crawl);
     expect(paths).toContain(ROUTES.integrations);
+  });
+
+  it("adds logs and tasks to the primary navigation", () => {
+    const paths = NAV_ITEMS.map((item) => item.to);
+    expect(paths).toContain(ROUTES.logs);
+    expect(paths).toContain(ROUTES.tasks);
+    expect(en["nav.logs"].trim()).not.toBe("");
+    expect(en["nav.tasks"].trim()).not.toBe("");
   });
 
   it("keeps onboarding out of the primary navigation", () => {

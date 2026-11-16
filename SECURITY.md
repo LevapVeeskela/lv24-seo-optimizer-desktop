@@ -147,7 +147,7 @@ Read [`docs/security.md`](docs/security.md) for the full model. The essentials:
   registered when it spawned them; nothing is matched by image name, so another installed copy or a
   terminal run is untouched. If a tracked sidecar cannot be stopped, the install is blocked with
   `UPDATE_ENGINE_BUSY` rather than starting an installer that would fail on a locked file.
-- `0.1.0` has no updater. Install `0.3.0` manually once; auto-update works from `0.2.0` onward.
+- `0.1.0` has no updater. Install `0.4.0` manually once; auto-update works from `0.2.0` onward.
 - A signature failure blocks the artifact and points to the release page. It is not treated as an
   offline error and the same artifact is not retried.
 

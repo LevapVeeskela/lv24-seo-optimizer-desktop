@@ -9,6 +9,8 @@ export const ROUTES = {
   config: "/config",
   recommendations: "/recommendations",
   crawl: "/crawl",
+  logs: "/logs",
+  tasks: "/tasks",
   integrations: "/integrations",
   onboarding: "/onboarding",
   diagnostics: "/diagnostics",

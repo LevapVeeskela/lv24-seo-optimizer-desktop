@@ -11,6 +11,11 @@ export const CLI_COMMAND_IDS = [
   "crawl",
   "init",
   "schedule_print",
+  "logs_analyze",
+  "tasks_list",
+  "tasks_add",
+  "tasks_update",
+  "backup_create",
 ] as const;
 
 export type CliCommandId = (typeof CLI_COMMAND_IDS)[number];
@@ -40,6 +45,8 @@ export interface CliArgs {
   head?: string;
   start?: string;
   maxUrls?: number;
+  /** `report_weekly` output directory / `backup_create` destination. */
+  out?: string;
   /** `init` only: site URL, `sc-domain:` property, or a bare host. */
   property?: string;
   /**
@@ -54,6 +61,29 @@ export interface CliArgs {
   cron?: string;
   /** `schedule_print` only: scheduler dialect. */
   target?: "cron" | "systemd" | "windows";
+  /**
+   * `logs_analyze` only: absolute regular access log returned by
+   * `pick_log_file` (or located under the app data/export directories).
+   */
+  file?: string;
+  /** `logs_analyze` only: bot filter; empty or omitted means all bots. */
+  bot?: "googlebot" | "yandexbot" | "bingbot" | "other" | "";
+  /** `tasks_list` filter / `tasks_add` task kind. */
+  kind?: string;
+  /** `tasks_list` filter / `tasks_update` target state. */
+  state?: "open" | "in_progress" | "verified" | "dismissed";
+  /** `tasks_list` only: 1..500 rows. */
+  limit?: number;
+  /** `tasks_add` only: absolute or site-relative URL. */
+  url?: string;
+  /** `tasks_add` only: rule/finding id that produced the task. */
+  rule?: string;
+  /** `tasks_add` only: evidence object, JSON-encoded (16 KiB cap). */
+  payload?: Record<string, unknown>;
+  /** `tasks_update` only: positive task id. */
+  id?: number;
+  /** `backup_create` only: replace a same-second archive. */
+  force?: boolean;
 }
 
 export interface CliRunOptions {

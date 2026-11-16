@@ -12,7 +12,7 @@ use tokio::process::Command;
 use crate::error::{AppError, AppResult};
 use crate::paths::{
     validate_absolute_path, validate_config_path, validate_init_config_path,
-    validate_init_data_dir, EngineLocation,
+    validate_init_data_dir, validate_log_file_path, EngineLocation,
 };
 
 /// Upper bounds keep a runaway engine from exhausting webview memory.
@@ -21,6 +21,16 @@ const MAX_STDERR: usize = 128 * 1024;
 
 const DEFAULT_DAYS: u32 = 7;
 const DEFAULT_LAG_DAYS: u32 = 2;
+
+/// Insight commands (logs/tasks) share one bounded input contract.
+const LOG_BOTS: &[&str] = &["googlebot", "yandexbot", "bingbot", "other"];
+const TASK_STATES: &[&str] = &["open", "in_progress", "verified", "dismissed"];
+const MAX_TASK_KIND_LEN: usize = 64;
+const MAX_TASK_RULE_LEN: usize = 256;
+const MAX_TASK_URL_LEN: usize = 2048;
+const MAX_TASK_PROPERTY_LEN: usize = 512;
+const MAX_TASK_PAYLOAD_BYTES: usize = 16 * 1024;
+const MAX_TASKS_LIMIT: u32 = 500;
 
 /// How long `stop_tracked_children` waits for killed sidecars to disappear
 /// before the update is refused.
@@ -46,6 +56,14 @@ pub enum CliCommandId {
     Init,
     /// Render a scheduler artefact (cron/systemd/windows); never installs it.
     SchedulePrint,
+    /// Analyze one approved local access log; read-only.
+    LogsAnalyze,
+    /// Local finding/task lifecycle (schema v3).
+    TasksList,
+    TasksAdd,
+    TasksUpdate,
+    /// Portable local backup zip; writes only the chosen directory.
+    BackupCreate,
     /// Internal commands used by dedicated auth commands; they are deliberately
     /// absent from the generic `cli_run` allow-list.
     AuthSet,
@@ -76,6 +94,11 @@ impl CliCommandId {
             "crawl" => Ok(Self::Crawl),
             "init" => Ok(Self::Init),
             "schedule_print" => Ok(Self::SchedulePrint),
+            "logs_analyze" => Ok(Self::LogsAnalyze),
+            "tasks_list" => Ok(Self::TasksList),
+            "tasks_add" => Ok(Self::TasksAdd),
+            "tasks_update" => Ok(Self::TasksUpdate),
+            "backup_create" => Ok(Self::BackupCreate),
             other => Err(AppError::new(
                 "INVALID_COMMAND",
                 format!("command {other:?} is not in the desktop allow-list"),
@@ -84,7 +107,8 @@ impl CliCommandId {
                 "allowed": [
                     "version", "stats", "config_show", "doctor", "properties",
                     "auth_status", "report_weekly", "report_diff", "crawl",
-                    "init", "schedule_print"
+                    "init", "schedule_print", "logs_analyze", "tasks_list",
+                    "tasks_add", "tasks_update", "backup_create"
                 ]
             }))),
         }
@@ -103,15 +127,20 @@ impl CliCommandId {
             Self::Crawl => "crawl",
             Self::Init => "init",
             Self::SchedulePrint => "schedule_print",
+            Self::LogsAnalyze => "logs_analyze",
+            Self::TasksList => "tasks_list",
+            Self::TasksAdd => "tasks_add",
+            Self::TasksUpdate => "tasks_update",
+            Self::BackupCreate => "backup_create",
             Self::AuthSet => "auth_set",
             Self::AuthLogout => "auth_delete",
         }
     }
 
     /// Commands that need an existing project config file. `version`, `stats`,
-    /// `doctor`, `properties`, `auth_status` and `init` may run without one;
-    /// `auth_set` and `auth_delete` are reached through their dedicated
-    /// commands.
+    /// `doctor`, `properties`, `auth_status`, `init` and `logs_analyze` may run
+    /// without one; `auth_set` and `auth_delete` are reached through their
+    /// dedicated commands.
     pub fn requires_config(self) -> bool {
         matches!(
             self,
@@ -120,14 +149,21 @@ impl CliCommandId {
                 | Self::ReportDiff
                 | Self::Crawl
                 | Self::SchedulePrint
+                | Self::TasksList
+                | Self::TasksAdd
+                | Self::TasksUpdate
+                | Self::BackupCreate
         )
     }
 
-    /// How the command changes state. `init` creates local files and never
-    /// calls a provider, so the UI must not present it as a provider write.
+    /// How the command changes state. `init`, the task lifecycle and backups
+    /// write local files only; no command in the allow-list spends provider
+    /// quota or changes remote provider state.
     pub fn write_kind(self) -> WriteKind {
         match self {
-            Self::Init => WriteKind::LocalState,
+            Self::Init | Self::TasksAdd | Self::TasksUpdate | Self::BackupCreate => {
+                WriteKind::LocalState
+            }
             _ => WriteKind::None,
         }
     }
@@ -136,12 +172,17 @@ impl CliCommandId {
         match self {
             Self::Crawl => Duration::from_secs(600),
             Self::AuthSet | Self::AuthLogout => Duration::from_secs(120),
-            Self::Stats | Self::ReportWeekly | Self::ReportDiff => Duration::from_secs(120),
+            Self::Stats | Self::ReportWeekly | Self::ReportDiff | Self::BackupCreate => {
+                Duration::from_secs(120)
+            }
             // Onboarding may create a directory tree on a slow disk.
             Self::Init => Duration::from_secs(60),
             // A cold PyInstaller sidecar can spend well over ten seconds on
             // unpacking and antivirus scanning before it prints a version.
             Self::Version => Duration::from_secs(30),
+            Self::LogsAnalyze | Self::TasksList | Self::TasksAdd | Self::TasksUpdate => {
+                Duration::from_secs(60)
+            }
             Self::ConfigShow
             | Self::Doctor
             | Self::Properties
@@ -151,7 +192,7 @@ impl CliCommandId {
     }
 }
 
-#[derive(Clone, Debug, Default, Deserialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, Deserialize, PartialEq)]
 #[serde(default, rename_all = "camelCase", deny_unknown_fields)]
 pub struct CliArgs {
     pub days: Option<u32>,
@@ -176,6 +217,28 @@ pub struct CliArgs {
     pub cron: Option<String>,
     /// `schedule_print` only: `cron`, `systemd` or `windows`.
     pub target: Option<String>,
+    /// `logs_analyze` only: absolute regular access log, approved by the native
+    /// dialog or located under the app data/export directories.
+    pub file: Option<String>,
+    /// `logs_analyze` only: `googlebot`, `yandexbot`, `bingbot`, `other` or
+    /// empty (no bot filter).
+    pub bot: Option<String>,
+    /// `tasks_list`/`tasks_add` only: task kind filter or the kind to create.
+    pub kind: Option<String>,
+    /// `tasks_list`/`tasks_update` only: lifecycle state.
+    pub state: Option<String>,
+    /// `tasks_list` only: 1..=500 rows.
+    pub limit: Option<u32>,
+    /// `tasks_add` only: affected URL (absolute or site-relative).
+    pub url: Option<String>,
+    /// `tasks_add` only: rule/finding id that produced the task.
+    pub rule: Option<String>,
+    /// `tasks_add` only: evidence object, encoded as compact JSON (16 KiB cap).
+    pub payload: Option<Value>,
+    /// `tasks_update` only: positive task id.
+    pub id: Option<i64>,
+    /// `backup_create` only: replace a same-second archive.
+    pub force: Option<bool>,
 }
 
 impl CliArgs {
@@ -187,6 +250,37 @@ impl CliArgs {
             || self.data_dir.is_some()
             || self.cron.is_some()
             || self.target.is_some()
+    }
+
+    fn has_schedule_args(&self) -> bool {
+        self.config_path.is_some()
+            || self.data_dir.is_some()
+            || self.cron.is_some()
+            || self.target.is_some()
+    }
+
+    fn has_report_args(&self) -> bool {
+        self.days.is_some()
+            || self.lag_days.is_some()
+            || self.base.is_some()
+            || self.head.is_some()
+            || self.start.is_some()
+            || self.max_urls.is_some()
+            || self.out.is_some()
+            || self.provider.is_some()
+    }
+
+    fn has_log_or_task_args(&self) -> bool {
+        self.file.is_some()
+            || self.bot.is_some()
+            || self.kind.is_some()
+            || self.state.is_some()
+            || self.limit.is_some()
+            || self.url.is_some()
+            || self.rule.is_some()
+            || self.payload.is_some()
+            || self.id.is_some()
+            || self.force.is_some()
     }
 }
 
@@ -344,6 +438,102 @@ pub fn build_argv(command: CliCommandId, args: &CliArgs) -> AppResult<Vec<String
             argv.push("--json".into());
             argv
         }
+        CliCommandId::LogsAnalyze => {
+            let file = validate_log_file_path(args.file.as_deref().unwrap_or(""), "log file")?;
+            let mut argv = vec![
+                "logs".into(),
+                "analyze".into(),
+                "--file".into(),
+                file.display().to_string(),
+            ];
+            if let Some(bot) = normalize_log_bot(args.bot.as_deref())? {
+                argv.push("--bot".into());
+                argv.push(bot);
+            }
+            argv.push("--json".into());
+            argv
+        }
+        CliCommandId::TasksList => {
+            let mut argv = vec!["tasks".into(), "list".into()];
+            if let Some(property) = args.property.as_deref() {
+                argv.push("--property".into());
+                argv.push(validate_task_property(property)?);
+            }
+            if let Some(kind) = args.kind.as_deref() {
+                argv.push("--kind".into());
+                argv.push(validate_task_kind(kind)?);
+            }
+            if let Some(state) = args.state.as_deref() {
+                argv.push("--state".into());
+                argv.push(normalize_task_state(state)?);
+            }
+            if let Some(limit) = args.limit {
+                validate_range(limit, 1, MAX_TASKS_LIMIT, "limit")?;
+                argv.push("--limit".into());
+                argv.push(limit.to_string());
+            }
+            argv.push("--json".into());
+            argv
+        }
+        CliCommandId::TasksAdd => {
+            let kind = validate_task_kind(args.kind.as_deref().unwrap_or(""))?;
+            let url = validate_task_url(args.url.as_deref().unwrap_or(""))?;
+            let rule = validate_task_rule(args.rule.as_deref().unwrap_or(""))?;
+            let mut argv = vec![
+                "tasks".into(),
+                "add".into(),
+                "--kind".into(),
+                kind,
+                "--url".into(),
+                url,
+                "--rule".into(),
+                rule,
+            ];
+            if let Some(property) = args.property.as_deref() {
+                argv.push("--property".into());
+                argv.push(validate_task_property(property)?);
+            }
+            if let Some(payload) = args.payload.as_ref() {
+                argv.push("--payload".into());
+                argv.push(encode_task_payload(payload)?);
+            }
+            argv.push("--json".into());
+            argv
+        }
+        CliCommandId::TasksUpdate => {
+            let id = args.id.filter(|value| *value > 0).ok_or_else(|| {
+                AppError::new("INVALID_ARGUMENT", "id must be a positive integer")
+            })?;
+            let state = normalize_task_state(args.state.as_deref().unwrap_or(""))?;
+            vec![
+                "tasks".into(),
+                "update".into(),
+                id.to_string(),
+                "--state".into(),
+                state,
+                "--json".into(),
+            ]
+        }
+        CliCommandId::BackupCreate => {
+            let out = validate_absolute_path(args.out.as_deref().unwrap_or(""), "backup output")?;
+            if !out.is_dir() {
+                return Err(AppError::new(
+                    "INVALID_PATH",
+                    format!("backup output is not a directory: {}", out.display()),
+                ));
+            }
+            let mut argv = vec![
+                "backup".into(),
+                "create".into(),
+                "--out".into(),
+                out.display().to_string(),
+            ];
+            if args.force == Some(true) {
+                argv.push("--force".into());
+            }
+            argv.push("--json".into());
+            argv
+        }
     };
     Ok(argv)
 }
@@ -365,6 +555,7 @@ fn validate_args(command: CliCommandId, args: &CliArgs) -> AppResult<()> {
                 || args.provider.is_some()
                 || args.out.is_some()
                 || args.has_init_or_schedule_args()
+                || args.has_log_or_task_args()
             {
                 return reject("base/head/start/maxUrls/provider/out/init/schedule");
             }
@@ -378,6 +569,7 @@ fn validate_args(command: CliCommandId, args: &CliArgs) -> AppResult<()> {
                 || args.max_urls.is_some()
                 || args.provider.is_some()
                 || args.has_init_or_schedule_args()
+                || args.has_log_or_task_args()
             {
                 return reject("base/head/start/maxUrls/provider/init/schedule");
             }
@@ -395,6 +587,7 @@ fn validate_args(command: CliCommandId, args: &CliArgs) -> AppResult<()> {
                 || args.provider.is_some()
                 || args.out.is_some()
                 || args.has_init_or_schedule_args()
+                || args.has_log_or_task_args()
             {
                 return reject("days/lagDays/start/maxUrls/provider/out/init/schedule");
             }
@@ -413,6 +606,7 @@ fn validate_args(command: CliCommandId, args: &CliArgs) -> AppResult<()> {
                 || args.provider.is_some()
                 || args.out.is_some()
                 || args.has_init_or_schedule_args()
+                || args.has_log_or_task_args()
             {
                 return reject("days/lagDays/base/head/provider/out/init/schedule");
             }
@@ -437,6 +631,7 @@ fn validate_args(command: CliCommandId, args: &CliArgs) -> AppResult<()> {
                 || args.out.is_some()
                 || args.provider.is_some()
                 || args.has_init_or_schedule_args()
+                || args.has_log_or_task_args()
             {
                 return reject("all arguments");
             }
@@ -450,6 +645,7 @@ fn validate_args(command: CliCommandId, args: &CliArgs) -> AppResult<()> {
                 || args.max_urls.is_some()
                 || args.out.is_some()
                 || args.has_init_or_schedule_args()
+                || args.has_log_or_task_args()
             {
                 return reject("days/lagDays/base/head/start/maxUrls/out/init/schedule");
             }
@@ -471,6 +667,7 @@ fn validate_args(command: CliCommandId, args: &CliArgs) -> AppResult<()> {
                 || args.provider.is_some()
                 || args.cron.is_some()
                 || args.target.is_some()
+                || args.has_log_or_task_args()
             {
                 return reject("an argument other than property/configPath/dataDir");
             }
@@ -499,6 +696,7 @@ fn validate_args(command: CliCommandId, args: &CliArgs) -> AppResult<()> {
                 || args.provider.is_some()
                 || args.property.is_some()
                 || args.data_dir.is_some()
+                || args.has_log_or_task_args()
             {
                 return reject(
                     "days/lagDays/base/head/start/maxUrls/out/provider/property/dataDir",
@@ -514,6 +712,140 @@ fn validate_args(command: CliCommandId, args: &CliArgs) -> AppResult<()> {
             normalize_schedule_target(target)?;
             if let Some(config) = args.config_path.as_deref() {
                 validate_config_path(config)?;
+            }
+        }
+        CliCommandId::LogsAnalyze => {
+            if args.has_report_args()
+                || args.has_init_or_schedule_args()
+                || args.kind.is_some()
+                || args.state.is_some()
+                || args.limit.is_some()
+                || args.url.is_some()
+                || args.rule.is_some()
+                || args.payload.is_some()
+                || args.id.is_some()
+                || args.force.is_some()
+            {
+                return reject("an argument other than file/bot");
+            }
+            let file = args.file.as_deref().ok_or_else(|| {
+                AppError::new("INVALID_ARGUMENT", "file is required for logs_analyze")
+            })?;
+            validate_log_file_path(file, "log file")?;
+            normalize_log_bot(args.bot.as_deref())?;
+        }
+        CliCommandId::TasksList => {
+            if args.has_report_args()
+                || args.has_schedule_args()
+                || args.file.is_some()
+                || args.bot.is_some()
+                || args.url.is_some()
+                || args.rule.is_some()
+                || args.payload.is_some()
+                || args.id.is_some()
+                || args.force.is_some()
+            {
+                return reject("an argument other than property/kind/state/limit");
+            }
+            if let Some(property) = args.property.as_deref() {
+                validate_task_property(property)?;
+            }
+            if let Some(kind) = args.kind.as_deref() {
+                validate_task_kind(kind)?;
+            }
+            if let Some(state) = args.state.as_deref() {
+                normalize_task_state(state)?;
+            }
+            if let Some(limit) = args.limit {
+                validate_range(limit, 1, MAX_TASKS_LIMIT, "limit")?;
+            }
+        }
+        CliCommandId::TasksAdd => {
+            if args.has_report_args()
+                || args.has_schedule_args()
+                || args.file.is_some()
+                || args.bot.is_some()
+                || args.state.is_some()
+                || args.limit.is_some()
+                || args.id.is_some()
+                || args.force.is_some()
+            {
+                return reject("an argument other than kind/url/rule/property/payload");
+            }
+            let kind = args.kind.as_deref().ok_or_else(|| {
+                AppError::new("INVALID_ARGUMENT", "kind is required for tasks_add")
+            })?;
+            validate_task_kind(kind)?;
+            let url = args.url.as_deref().ok_or_else(|| {
+                AppError::new("INVALID_ARGUMENT", "url is required for tasks_add")
+            })?;
+            validate_task_url(url)?;
+            let rule = args.rule.as_deref().ok_or_else(|| {
+                AppError::new("INVALID_ARGUMENT", "rule is required for tasks_add")
+            })?;
+            validate_task_rule(rule)?;
+            if let Some(property) = args.property.as_deref() {
+                validate_task_property(property)?;
+            }
+            if let Some(payload) = args.payload.as_ref() {
+                encode_task_payload(payload)?;
+            }
+        }
+        CliCommandId::TasksUpdate => {
+            if args.has_report_args()
+                || args.has_init_or_schedule_args()
+                || args.file.is_some()
+                || args.bot.is_some()
+                || args.kind.is_some()
+                || args.limit.is_some()
+                || args.url.is_some()
+                || args.rule.is_some()
+                || args.payload.is_some()
+                || args.force.is_some()
+            {
+                return reject("an argument other than id/state");
+            }
+            if args.id.is_none_or(|value| value <= 0) {
+                return Err(AppError::new(
+                    "INVALID_ARGUMENT",
+                    "id must be a positive integer",
+                ));
+            }
+            let state = args.state.as_deref().ok_or_else(|| {
+                AppError::new("INVALID_ARGUMENT", "state is required for tasks_update")
+            })?;
+            normalize_task_state(state)?;
+        }
+        CliCommandId::BackupCreate => {
+            if args.days.is_some()
+                || args.lag_days.is_some()
+                || args.base.is_some()
+                || args.head.is_some()
+                || args.start.is_some()
+                || args.max_urls.is_some()
+                || args.provider.is_some()
+                || args.has_init_or_schedule_args()
+                || args.file.is_some()
+                || args.bot.is_some()
+                || args.kind.is_some()
+                || args.state.is_some()
+                || args.limit.is_some()
+                || args.url.is_some()
+                || args.rule.is_some()
+                || args.payload.is_some()
+                || args.id.is_some()
+            {
+                return reject("an argument other than out/force");
+            }
+            let out = args.out.as_deref().ok_or_else(|| {
+                AppError::new("INVALID_ARGUMENT", "out is required for backup_create")
+            })?;
+            let path = validate_absolute_path(out, "backup output")?;
+            if !path.is_dir() {
+                return Err(AppError::new(
+                    "INVALID_PATH",
+                    format!("backup output is not a directory: {}", path.display()),
+                ));
             }
         }
     }
@@ -574,11 +906,15 @@ fn is_iso_date(value: &str) -> bool {
 }
 
 fn validate_url(value: &str) -> AppResult<&str> {
+    validate_http_url(value, "start URL")
+}
+
+fn validate_http_url<'a>(value: &'a str, label: &str) -> AppResult<&'a str> {
     let trimmed = value.trim();
-    if trimmed.len() > 2048 {
+    if trimmed.len() > MAX_TASK_URL_LEN {
         return Err(AppError::new(
             "INVALID_ARGUMENT",
-            "start URL is longer than 2048 characters",
+            format!("{label} is longer than {MAX_TASK_URL_LEN} characters"),
         ));
     }
     if trimmed
@@ -587,7 +923,7 @@ fn validate_url(value: &str) -> AppResult<&str> {
     {
         return Err(AppError::new(
             "INVALID_ARGUMENT",
-            "start URL must not contain whitespace or control characters",
+            format!("{label} must not contain whitespace or control characters"),
         ));
     }
     let rest = trimmed
@@ -596,7 +932,7 @@ fn validate_url(value: &str) -> AppResult<&str> {
         .ok_or_else(|| {
             AppError::new(
                 "INVALID_ARGUMENT",
-                format!("start URL must use http or https, got {trimmed:?}"),
+                format!("{label} must use http or https, got {trimmed:?}"),
             )
         })?;
     let authority = rest.split('/').next().unwrap_or("");
@@ -609,10 +945,159 @@ fn validate_url(value: &str) -> AppResult<&str> {
     {
         return Err(AppError::new(
             "INVALID_ARGUMENT",
-            format!("start URL has an invalid host: {trimmed:?}"),
+            format!("{label} has an invalid host: {trimmed:?}"),
         ));
     }
     Ok(trimmed)
+}
+
+fn normalize_log_bot(raw: Option<&str>) -> AppResult<Option<String>> {
+    let Some(raw) = raw else {
+        return Ok(None);
+    };
+    let value = raw.trim().to_ascii_lowercase();
+    if value.is_empty() {
+        return Ok(None);
+    }
+    if LOG_BOTS.contains(&value.as_str()) {
+        Ok(Some(value))
+    } else {
+        Err(AppError::new(
+            "INVALID_ARGUMENT",
+            format!("bot {raw:?} is not supported for logs_analyze"),
+        )
+        .with_details(serde_json::json!({ "allowed": LOG_BOTS })))
+    }
+}
+
+fn normalize_task_state(raw: &str) -> AppResult<String> {
+    let value = raw.trim().to_ascii_lowercase();
+    if TASK_STATES.contains(&value.as_str()) {
+        Ok(value)
+    } else {
+        Err(AppError::new(
+            "INVALID_ARGUMENT",
+            format!("state {raw:?} is not a task lifecycle state"),
+        )
+        .with_details(serde_json::json!({ "allowed": TASK_STATES })))
+    }
+}
+
+fn validate_task_kind(raw: &str) -> AppResult<String> {
+    let value = raw.trim();
+    if value.is_empty() {
+        return Err(AppError::new("INVALID_ARGUMENT", "kind is empty"));
+    }
+    if value.len() > MAX_TASK_KIND_LEN {
+        return Err(AppError::new(
+            "INVALID_ARGUMENT",
+            format!("kind is longer than {MAX_TASK_KIND_LEN} characters"),
+        ));
+    }
+    if value.chars().any(char::is_control) {
+        return Err(AppError::new(
+            "INVALID_ARGUMENT",
+            "kind must not contain control characters",
+        ));
+    }
+    Ok(value.to_string())
+}
+
+fn validate_task_rule(raw: &str) -> AppResult<String> {
+    let value = raw.trim();
+    if value.is_empty() {
+        return Err(AppError::new("INVALID_ARGUMENT", "rule is empty"));
+    }
+    if value.len() > MAX_TASK_RULE_LEN {
+        return Err(AppError::new(
+            "INVALID_ARGUMENT",
+            format!("rule is longer than {MAX_TASK_RULE_LEN} characters"),
+        ));
+    }
+    if value.chars().any(char::is_control) {
+        return Err(AppError::new(
+            "INVALID_ARGUMENT",
+            "rule must not contain control characters",
+        ));
+    }
+    Ok(value.to_string())
+}
+
+/// `tasks add --url` accepts an absolute http(s) URL or a site-relative path,
+/// which is how crawl findings are recorded.
+fn validate_task_url(raw: &str) -> AppResult<String> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Err(AppError::new("INVALID_ARGUMENT", "url is empty"));
+    }
+    if trimmed.len() > MAX_TASK_URL_LEN {
+        return Err(AppError::new(
+            "INVALID_ARGUMENT",
+            format!("url is longer than {MAX_TASK_URL_LEN} characters"),
+        ));
+    }
+    if trimmed
+        .chars()
+        .any(|ch| ch.is_control() || ch.is_whitespace())
+    {
+        return Err(AppError::new(
+            "INVALID_ARGUMENT",
+            "url must not contain whitespace or control characters",
+        ));
+    }
+    if trimmed.starts_with('/') && !trimmed.starts_with("//") {
+        return Ok(trimmed.to_string());
+    }
+    validate_http_url(trimmed, "task URL").map(str::to_string)
+}
+
+fn validate_task_property(raw: &str) -> AppResult<String> {
+    let value = raw.trim();
+    if value.is_empty() {
+        return Err(AppError::new("INVALID_ARGUMENT", "property is empty"));
+    }
+    if value.len() > MAX_TASK_PROPERTY_LEN {
+        return Err(AppError::new(
+            "INVALID_ARGUMENT",
+            format!("property is longer than {MAX_TASK_PROPERTY_LEN} characters"),
+        ));
+    }
+    if value
+        .chars()
+        .any(|ch| ch.is_control() || ch.is_whitespace())
+    {
+        return Err(AppError::new(
+            "INVALID_ARGUMENT",
+            "property must not contain whitespace or control characters",
+        ));
+    }
+    Ok(value.to_string())
+}
+
+/// The engine parses `--payload` as a JSON object and rejects credential-shaped
+/// keys itself. The shell bounds the encoded size so a runaway webview cannot
+/// push an arbitrarily large argv.
+fn encode_task_payload(value: &Value) -> AppResult<String> {
+    if !value.is_object() {
+        return Err(AppError::new(
+            "INVALID_ARGUMENT",
+            "payload must be a JSON object",
+        ));
+    }
+    let encoded = serde_json::to_string(value).map_err(|err| {
+        AppError::new(
+            "INVALID_ARGUMENT",
+            format!("payload cannot be encoded as JSON: {err}"),
+        )
+    })?;
+    if encoded.len() > MAX_TASK_PAYLOAD_BYTES {
+        return Err(AppError::new(
+            "INVALID_ARGUMENT",
+            format!("payload is larger than {MAX_TASK_PAYLOAD_BYTES} bytes"),
+        )
+        .with_details(serde_json::json!({ "maxBytes": MAX_TASK_PAYLOAD_BYTES })));
+    }
+    Ok(encoded)
 }
 
 /// Five-field cron expressions are the only shape all three scheduler targets
@@ -1604,6 +2089,11 @@ mod tests {
             "crawl",
             "init",
             "schedule_print",
+            "logs_analyze",
+            "tasks_list",
+            "tasks_add",
+            "tasks_update",
+            "backup_create",
         ] {
             assert_eq!(CliCommandId::parse(id).unwrap().id(), id);
         }
@@ -1721,6 +2211,508 @@ mod tests {
         )
         .unwrap_err();
         assert_eq!(error.code(), "INVALID_ARGUMENT");
+    }
+
+    fn write_log(dir: &Path) -> String {
+        let file = dir.join("access.log");
+        std::fs::write(&file, "{\"request\":\"/\"}\n").unwrap();
+        file.display().to_string()
+    }
+
+    #[test]
+    fn logs_analyze_argv_carries_one_file_and_an_optional_bot() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = write_log(dir.path());
+        let argv = build_argv(
+            CliCommandId::LogsAnalyze,
+            &CliArgs {
+                file: Some(file.clone()),
+                bot: Some("GoogleBot".into()),
+                ..CliArgs::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            argv,
+            vec![
+                "logs",
+                "analyze",
+                "--file",
+                file.as_str(),
+                "--bot",
+                "googlebot",
+                "--json"
+            ]
+        );
+
+        // Empty bot means "all bots": no flag at all.
+        for bot in [None, Some(String::new())] {
+            let argv = build_argv(
+                CliCommandId::LogsAnalyze,
+                &CliArgs {
+                    file: Some(file.clone()),
+                    bot,
+                    ..CliArgs::default()
+                },
+            )
+            .unwrap();
+            assert_eq!(
+                argv,
+                vec!["logs", "analyze", "--file", file.as_str(), "--json"]
+            );
+        }
+
+        assert_eq!(
+            build_argv(
+                CliCommandId::LogsAnalyze,
+                &CliArgs {
+                    file: Some(file.clone()),
+                    bot: Some("ahrefsbot".into()),
+                    ..CliArgs::default()
+                }
+            )
+            .unwrap_err()
+            .code(),
+            "INVALID_ARGUMENT"
+        );
+        assert!(!CliCommandId::LogsAnalyze.requires_config());
+        assert_eq!(CliCommandId::LogsAnalyze.write_kind(), WriteKind::None);
+    }
+
+    #[test]
+    fn logs_analyze_rejects_unsafe_paths() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let nested = root.join("nested");
+        std::fs::create_dir(&nested).unwrap();
+        for file in [
+            "access.log".to_string(),
+            root.join("*.log").display().to_string(),
+            root.join("missing.log").display().to_string(),
+            nested.display().to_string(),
+            r"\\server\share\access.log".to_string(),
+            r"\\.\PhysicalDrive0".to_string(),
+            r"\\?\C:\tmp\access.log".to_string(),
+        ] {
+            assert_eq!(
+                build_argv(
+                    CliCommandId::LogsAnalyze,
+                    &CliArgs {
+                        file: Some(file.clone()),
+                        ..CliArgs::default()
+                    }
+                )
+                .unwrap_err()
+                .code(),
+                "INVALID_PATH",
+                "{file:?}"
+            );
+        }
+        assert_eq!(
+            build_argv(CliCommandId::LogsAnalyze, &CliArgs::default())
+                .unwrap_err()
+                .code(),
+            "INVALID_ARGUMENT"
+        );
+    }
+
+    #[test]
+    fn tasks_list_argv_is_filtered_and_bounded() {
+        let argv = build_argv(
+            CliCommandId::TasksList,
+            &CliArgs {
+                property: Some("sc-domain:example.com".into()),
+                kind: Some("decay".into()),
+                state: Some("in_progress".into()),
+                limit: Some(50),
+                ..CliArgs::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            argv,
+            vec![
+                "tasks",
+                "list",
+                "--property",
+                "sc-domain:example.com",
+                "--kind",
+                "decay",
+                "--state",
+                "in_progress",
+                "--limit",
+                "50",
+                "--json"
+            ]
+        );
+        assert_eq!(
+            build_argv(CliCommandId::TasksList, &CliArgs::default()).unwrap(),
+            vec!["tasks", "list", "--json"]
+        );
+        for (field, args) in [
+            (
+                "limit 0",
+                CliArgs {
+                    limit: Some(0),
+                    ..CliArgs::default()
+                },
+            ),
+            (
+                "limit 501",
+                CliArgs {
+                    limit: Some(501),
+                    ..CliArgs::default()
+                },
+            ),
+            (
+                "state",
+                CliArgs {
+                    state: Some("done".into()),
+                    ..CliArgs::default()
+                },
+            ),
+            (
+                "kind",
+                CliArgs {
+                    kind: Some("x".repeat(65)),
+                    ..CliArgs::default()
+                },
+            ),
+            (
+                "property",
+                CliArgs {
+                    property: Some("a b".into()),
+                    ..CliArgs::default()
+                },
+            ),
+        ] {
+            assert_eq!(
+                build_argv(CliCommandId::TasksList, &args)
+                    .unwrap_err()
+                    .code(),
+                "INVALID_ARGUMENT",
+                "{field}"
+            );
+        }
+        assert!(CliCommandId::TasksList.requires_config());
+        assert_eq!(CliCommandId::TasksList.write_kind(), WriteKind::None);
+    }
+
+    #[test]
+    fn tasks_add_argv_encodes_a_bounded_payload_object() {
+        let argv = build_argv(
+            CliCommandId::TasksAdd,
+            &CliArgs {
+                kind: Some("decay".into()),
+                url: Some("https://example.com/blog/post".into()),
+                rule: Some("content-decay".into()),
+                property: Some("sc-domain:example.com".into()),
+                payload: Some(serde_json::json!({"months_stale": 16})),
+                ..CliArgs::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            argv,
+            vec![
+                "tasks",
+                "add",
+                "--kind",
+                "decay",
+                "--url",
+                "https://example.com/blog/post",
+                "--rule",
+                "content-decay",
+                "--property",
+                "sc-domain:example.com",
+                "--payload",
+                "{\"months_stale\":16}",
+                "--json"
+            ]
+        );
+
+        // Site-relative findings are accepted; optional fields are omitted.
+        let argv = build_argv(
+            CliCommandId::TasksAdd,
+            &CliArgs {
+                kind: Some("finding".into()),
+                url: Some("/blog/post".into()),
+                rule: Some("soft-404".into()),
+                ..CliArgs::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            argv,
+            vec![
+                "tasks",
+                "add",
+                "--kind",
+                "finding",
+                "--url",
+                "/blog/post",
+                "--rule",
+                "soft-404",
+                "--json"
+            ]
+        );
+        assert_eq!(CliCommandId::TasksAdd.write_kind(), WriteKind::LocalState);
+
+        for (field, args) in [
+            (
+                "relative url",
+                CliArgs {
+                    url: Some("blog/post".into()),
+                    ..CliArgs::default()
+                },
+            ),
+            (
+                "file url",
+                CliArgs {
+                    url: Some("file:///etc/passwd".into()),
+                    ..CliArgs::default()
+                },
+            ),
+            (
+                "protocol-relative",
+                CliArgs {
+                    url: Some("//example.com/x".into()),
+                    ..CliArgs::default()
+                },
+            ),
+            (
+                "kind",
+                CliArgs {
+                    kind: Some("bad\tkind".into()),
+                    ..CliArgs::default()
+                },
+            ),
+            (
+                "rule",
+                CliArgs {
+                    rule: Some("r".repeat(257)),
+                    ..CliArgs::default()
+                },
+            ),
+            (
+                "payload array",
+                CliArgs {
+                    payload: Some(serde_json::json!([1, 2])),
+                    ..CliArgs::default()
+                },
+            ),
+        ] {
+            let mut args = args;
+            args.kind = args.kind.or_else(|| Some("decay".into()));
+            args.url = args.url.or_else(|| Some("https://example.com/".into()));
+            args.rule = args.rule.or_else(|| Some("content-decay".into()));
+            assert_eq!(
+                build_argv(CliCommandId::TasksAdd, &args)
+                    .unwrap_err()
+                    .code(),
+                "INVALID_ARGUMENT",
+                "{field}"
+            );
+        }
+
+        let oversized = serde_json::json!({ "blob": "x".repeat(17 * 1024) });
+        assert_eq!(
+            build_argv(
+                CliCommandId::TasksAdd,
+                &CliArgs {
+                    kind: Some("decay".into()),
+                    url: Some("/blog/post".into()),
+                    rule: Some("content-decay".into()),
+                    payload: Some(oversized),
+                    ..CliArgs::default()
+                }
+            )
+            .unwrap_err()
+            .code(),
+            "INVALID_ARGUMENT"
+        );
+    }
+
+    #[test]
+    fn tasks_update_argv_requires_a_positive_id_and_a_known_state() {
+        let argv = build_argv(
+            CliCommandId::TasksUpdate,
+            &CliArgs {
+                id: Some(42),
+                state: Some("verified".into()),
+                ..CliArgs::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            argv,
+            vec!["tasks", "update", "42", "--state", "verified", "--json"]
+        );
+        assert_eq!(
+            CliCommandId::TasksUpdate.write_kind(),
+            WriteKind::LocalState
+        );
+
+        for (field, args) in [
+            (
+                "zero",
+                CliArgs {
+                    id: Some(0),
+                    state: Some("open".into()),
+                    ..CliArgs::default()
+                },
+            ),
+            (
+                "negative",
+                CliArgs {
+                    id: Some(-1),
+                    state: Some("open".into()),
+                    ..CliArgs::default()
+                },
+            ),
+            (
+                "missing id",
+                CliArgs {
+                    state: Some("open".into()),
+                    ..CliArgs::default()
+                },
+            ),
+            (
+                "state",
+                CliArgs {
+                    id: Some(1),
+                    state: Some("closed".into()),
+                    ..CliArgs::default()
+                },
+            ),
+            (
+                "missing state",
+                CliArgs {
+                    id: Some(1),
+                    ..CliArgs::default()
+                },
+            ),
+        ] {
+            assert_eq!(
+                build_argv(CliCommandId::TasksUpdate, &args)
+                    .unwrap_err()
+                    .code(),
+                "INVALID_ARGUMENT",
+                "{field}"
+            );
+        }
+    }
+
+    #[test]
+    fn backup_create_argv_takes_one_existing_directory() {
+        let dir = tempfile::tempdir().unwrap();
+        let out = dir.path().display().to_string();
+        assert_eq!(
+            build_argv(
+                CliCommandId::BackupCreate,
+                &CliArgs {
+                    out: Some(out.clone()),
+                    ..CliArgs::default()
+                }
+            )
+            .unwrap(),
+            vec!["backup", "create", "--out", out.as_str(), "--json"]
+        );
+        assert_eq!(
+            build_argv(
+                CliCommandId::BackupCreate,
+                &CliArgs {
+                    out: Some(out.clone()),
+                    force: Some(true),
+                    ..CliArgs::default()
+                }
+            )
+            .unwrap(),
+            vec![
+                "backup",
+                "create",
+                "--out",
+                out.as_str(),
+                "--force",
+                "--json"
+            ]
+        );
+        // `force: false` is the default and adds no flag.
+        assert_eq!(
+            build_argv(
+                CliCommandId::BackupCreate,
+                &CliArgs {
+                    out: Some(out.clone()),
+                    force: Some(false),
+                    ..CliArgs::default()
+                }
+            )
+            .unwrap(),
+            vec!["backup", "create", "--out", out.as_str(), "--json"]
+        );
+        assert_eq!(
+            CliCommandId::BackupCreate.write_kind(),
+            WriteKind::LocalState
+        );
+
+        let file = dir.path().join("archive.zip");
+        std::fs::write(&file, "x").unwrap();
+        for (field, out) in [
+            ("relative", "backups".to_string()),
+            ("missing", dir.path().join("missing").display().to_string()),
+            ("file", file.display().to_string()),
+            ("unc", r"\\server\share\backups".to_string()),
+        ] {
+            assert_eq!(
+                build_argv(
+                    CliCommandId::BackupCreate,
+                    &CliArgs {
+                        out: Some(out),
+                        ..CliArgs::default()
+                    }
+                )
+                .unwrap_err()
+                .code(),
+                "INVALID_PATH",
+                "{field}"
+            );
+        }
+    }
+
+    #[test]
+    fn insight_arguments_are_rejected_by_existing_commands() {
+        for command in [
+            CliCommandId::Stats,
+            CliCommandId::Doctor,
+            CliCommandId::Init,
+        ] {
+            let error = build_argv(
+                command,
+                &CliArgs {
+                    file: Some(
+                        std::env::temp_dir()
+                            .join("access.log")
+                            .display()
+                            .to_string(),
+                    ),
+                    ..CliArgs::default()
+                },
+            )
+            .unwrap_err();
+            assert_eq!(error.code(), "INVALID_ARGUMENT", "{}", command.id());
+        }
+        assert_eq!(
+            build_argv(
+                CliCommandId::Stats,
+                &CliArgs {
+                    id: Some(1),
+                    ..CliArgs::default()
+                }
+            )
+            .unwrap_err()
+            .code(),
+            "INVALID_ARGUMENT"
+        );
     }
 
     #[test]
@@ -2326,6 +3318,14 @@ mod tests {
             CliCommandId::SchedulePrint.timeout(),
             Duration::from_secs(30)
         );
+        assert_eq!(CliCommandId::LogsAnalyze.timeout(), Duration::from_secs(60));
+        assert_eq!(CliCommandId::TasksList.timeout(), Duration::from_secs(60));
+        assert_eq!(CliCommandId::TasksAdd.timeout(), Duration::from_secs(60));
+        assert_eq!(CliCommandId::TasksUpdate.timeout(), Duration::from_secs(60));
+        assert_eq!(
+            CliCommandId::BackupCreate.timeout(),
+            Duration::from_secs(120)
+        );
     }
 
     fn init_args(dir: &Path) -> CliArgs {
@@ -2640,8 +3640,20 @@ mod tests {
     }
 
     #[test]
-    fn only_init_is_a_local_state_write() {
-        assert_eq!(CliCommandId::Init.write_kind(), WriteKind::LocalState);
+    fn only_local_state_commands_write() {
+        for command in [
+            CliCommandId::Init,
+            CliCommandId::TasksAdd,
+            CliCommandId::TasksUpdate,
+            CliCommandId::BackupCreate,
+        ] {
+            assert_eq!(
+                command.write_kind(),
+                WriteKind::LocalState,
+                "{}",
+                command.id()
+            );
+        }
         for command in [
             CliCommandId::Version,
             CliCommandId::Stats,
@@ -2653,6 +3665,8 @@ mod tests {
             CliCommandId::ReportDiff,
             CliCommandId::Crawl,
             CliCommandId::SchedulePrint,
+            CliCommandId::LogsAnalyze,
+            CliCommandId::TasksList,
             CliCommandId::AuthSet,
             CliCommandId::AuthLogout,
         ] {

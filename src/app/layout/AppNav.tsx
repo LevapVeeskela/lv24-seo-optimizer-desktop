@@ -9,6 +9,8 @@ type IconName =
   | "config"
   | "recommendations"
   | "crawl"
+  | "logs"
+  | "tasks"
   | "integrations"
   | "diagnostics";
 
@@ -22,6 +24,8 @@ export const NAV_ITEMS: readonly NavItem[] = [
   { to: ROUTES.dashboard, key: "nav.dashboard", icon: "dashboard" },
   { to: ROUTES.reports, key: "nav.reports", icon: "reports" },
   { to: ROUTES.crawl, key: "nav.crawl", icon: "crawl" },
+  { to: ROUTES.logs, key: "nav.logs", icon: "logs" },
+  { to: ROUTES.tasks, key: "nav.tasks", icon: "tasks" },
   { to: ROUTES.integrations, key: "nav.integrations", icon: "integrations" },
   { to: ROUTES.settings, key: "nav.settings", icon: "settings" },
   { to: ROUTES.config, key: "nav.config", icon: "config" },
@@ -64,6 +68,19 @@ function NavIcon({ name }: { name: IconName }) {
       return (
         <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
           <path d="M9 3v4M15 3v4M7 7h10v4a5 5 0 0 1-10 0zM12 16v5" {...common} />
+        </svg>
+      );
+    case "logs":
+      return (
+        <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+          <path d="M5 4h14M5 9h14M5 14h9M5 19h6" {...common} />
+        </svg>
+      );
+    case "tasks":
+      return (
+        <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+          <rect x="4" y="4" width="16" height="16" rx="2.5" {...common} />
+          <path d="m8.5 12 2.5 2.5 4.5-5" {...common} />
         </svg>
       );
     case "settings":
