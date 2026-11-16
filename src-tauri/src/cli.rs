@@ -1745,7 +1745,9 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::await_holding_lock)] // the guard is the point: one forking test at a time
     async fn a_recycled_pid_with_a_foreign_image_is_not_killed() {
+        let _serial = process_test_guard();
         let registry = ChildRegistry::default();
         let mut unrelated = synthetic_child();
         let pid = unrelated.id().unwrap();
@@ -1769,31 +1771,54 @@ mod tests {
         drop(guard);
     }
 
+    /// Serializes the tests that create an engine-named executable, fork it and
+    /// signal it by PID. A concurrent fork can inherit a copy's write handle
+    /// (ETXTBSY) and a parallel kill test can observe a recycled PID.
+    static PROCESS_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    fn process_test_guard() -> std::sync::MutexGuard<'static, ()> {
+        PROCESS_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    /// A temp dir on the same filesystem as `/bin/sleep`, so the executable can
+    /// be hard-linked instead of copied.
+    fn engine_test_dir() -> tempfile::TempDir {
+        #[cfg(unix)]
+        {
+            if let Ok(dir) = tempfile::Builder::new()
+                .prefix("lv24-engine-")
+                .tempdir_in("/var/tmp")
+            {
+                return dir;
+            }
+        }
+        tempfile::tempdir().unwrap()
+    }
+
     /// A real executable whose image name matches the engine's, so the identity
-    /// check accepts it and the kill path is exercised.
-    fn engine_named_child(dir: &Path) -> tokio::process::Child {
+    /// check accepts it and the kill path is exercised. `None` means the test
+    /// cannot be set up on this filesystem (the caller skips instead of falling
+    /// back to a copy that races with parallel forks).
+    fn engine_named_child(dir: &Path) -> Option<tokio::process::Child> {
         let exe = dir.join(crate::paths::engine_exe_name());
         let mut command = {
             #[cfg(windows)]
             {
                 let root =
                     std::env::var("SystemRoot").unwrap_or_else(|_| "C:\\Windows".to_string());
-                std::fs::copy(Path::new(&root).join("System32").join("ping.exe"), &exe).unwrap();
+                std::fs::copy(Path::new(&root).join("System32").join("ping.exe"), &exe).ok()?;
                 let mut command = Command::new(&exe);
                 command.args(["-n", "30", "127.0.0.1"]);
                 command
             }
             #[cfg(unix)]
             {
-                // Hard-link the system binary instead of copying it: a fresh
-                // copy has an open write handle, and a concurrent fork in
-                // another test inherits it, so `exec` fails with ETXTBSY
-                // ("text file busy"). A link never writes the inode.
-                if std::fs::hard_link("/bin/sleep", &exe).is_err() {
-                    std::fs::copy("/bin/sleep", &exe).unwrap();
-                    use std::os::unix::fs::PermissionsExt;
-                    std::fs::set_permissions(&exe, std::fs::Permissions::from_mode(0o755)).unwrap();
-                }
+                // Hard-link, never copy: a fresh copy has an open write handle,
+                // and a concurrent fork inherits it, so `exec` fails with
+                // ETXTBSY ("text file busy").
+                std::fs::hard_link("/bin/sleep", &exe).ok()?;
                 let mut command = Command::new(&exe);
                 command.arg("30");
                 // Production spawns the engine as a process-group leader
@@ -1809,14 +1834,23 @@ mod tests {
             .stderr(Stdio::null())
             .kill_on_drop(true)
             .spawn()
-            .unwrap()
+            .ok()
     }
 
     #[tokio::test]
+    #[allow(clippy::await_holding_lock)] // the guard is the point: one forking test at a time
     async fn an_engine_named_tracked_child_is_stopped() {
-        let dir = tempfile::tempdir().unwrap();
+        let _serial = process_test_guard();
+        let dir = engine_test_dir();
         let registry = ChildRegistry::default();
-        let mut tracked = engine_named_child(dir.path());
+        let Some(mut tracked) = engine_named_child(dir.path()) else {
+            eprintln!(
+                "skipping an_engine_named_tracked_child_is_stopped: cannot hard-link /bin/sleep \
+                 into {} (cross-device temp dir)",
+                dir.path().display()
+            );
+            return;
+        };
         let pid = tracked.id().unwrap();
         // `spawn` returns before the child has necessarily exec'd: until then
         // `/proc/<pid>/exe` (and the image name) still points at the test
@@ -1857,7 +1891,9 @@ mod tests {
 
     #[cfg(unix)]
     #[tokio::test]
+    #[allow(clippy::await_holding_lock)] // the guard is the point: one forking test at a time
     async fn a_timeout_kills_the_grandchild_too() {
+        let _serial = process_test_guard();
         let mut command = Command::new("sh");
         command
             .args(["-c", "sleep 30 & echo $!; wait"])
@@ -1884,10 +1920,30 @@ mod tests {
 
         kill_child_tree(&mut child).await;
 
-        assert!(
-            !process_alive(grandchild).await,
-            "the interpreter started by the bootloader must not survive a timeout"
-        );
+        // SIGKILL delivery is asynchronous and the grandchild may still be a
+        // zombie while init reaps it: poll instead of a single check.
+        let deadline = Instant::now() + Duration::from_secs(2);
+        loop {
+            if !process_alive(grandchild).await {
+                return;
+            }
+            if Instant::now() >= deadline {
+                // PID reuse guard: only fail when the live process is still the
+                // `sleep` we started, not an unrelated process that took the PID.
+                let image = process_image_name(grandchild).await.unwrap_or_default();
+                let name = Path::new(&image)
+                    .file_name()
+                    .and_then(|value| value.to_str())
+                    .unwrap_or("");
+                assert!(
+                    !name.eq_ignore_ascii_case("sleep"),
+                    "the interpreter started by the bootloader must not survive a timeout \
+                     (pid {grandchild}, image {image})"
+                );
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
     }
 
     #[test]
