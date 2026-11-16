@@ -837,7 +837,7 @@ export const zh: Messages = {
   "runStatus.reportLabel": "每周报告",
   "runStatus.running": "已运行 {elapsed}",
   "runStatus.lastRun": "上次运行 {duration} · {time}",
-  "runStatus.noCancel": "0.3.0 会执行到结束：关闭界面不会取消，目前也没有取消按钮。",
+  "runStatus.noCancel": "0.4.0 会执行到结束：关闭界面不会取消，目前也没有取消按钮。",
   "runStatus.measuredHint": "时长由应用测量；引擎未提供 duration_ms。",
   "runStatus.truncated": "已截断",
   "runStatus.complete": "未截断",

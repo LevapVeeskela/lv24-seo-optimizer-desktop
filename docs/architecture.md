@@ -1,8 +1,8 @@
 # Architecture
 
-Status: **implementation contract for `0.3.0` (released 2026-11-16).** The Rust command bridge and
+Status: **implementation contract for `0.4.0` (release candidate).** The Rust command bridge and
 product screens are implemented in this repository. Where this document describes a control, it is
-the requirement that implementation must satisfy. The pinned engine is `lv24-seo 0.5.3`.
+the requirement that implementation must satisfy. The pinned engine is `lv24-seo 0.6.0`.
 
 ## 1. Shape
 
@@ -108,11 +108,16 @@ The command surface is fixed. The generic `cli_run` allow-list is:
 | `crawl` | `crawl ... --json` | local write |
 | `init` | `init <property> --config <path> --data-dir <path> --json` | local write |
 | `schedule_print` | `schedule print --cron <expr> --target <cron\|systemd\|windows> --config <path> --json` | read |
+| `logs_analyze` | `logs analyze --file <path> [--bot <class>] --json` | read |
+| `tasks_list` | `tasks list [--property <id>] [--kind <kind>] [--state <state>] [--limit <n>] --json` | read |
+| `tasks_add` | `tasks add --kind <kind> --url <url> --rule <rule> [--property <id>] [--payload <json>] --json` | local write |
+| `tasks_update` | `tasks update <id> --state <state> --json` | local write |
+| `backup_create` | `backup create --out <dir> [--force] --json` | local write |
 
 Dedicated Tauri commands cover the rest: `shell_status`, `config_read`, `config_validate`,
 `config_write`, `config_patch`, `auth_set` (secret over stdin), `auth_delete`, `write_text_file`,
-`settings_get`, `settings_set`, `pick_config`, `pick_directory`, `open_path`, `prepare_update`,
-`update_install`, `update_cancel`. The webview cannot add a command at runtime.
+`settings_get`, `settings_set`, `pick_config`, `pick_directory`, `pick_log_file`, `open_path`,
+`prepare_update`, `update_install`, `update_cancel`. The webview cannot add a command at runtime.
 
 `pick_config` is the only way to introduce a new workspace path: it opens the native dialog, records
 the canonical path as approved for this process and returns it. `settings_set` accepts a changed
@@ -123,9 +128,16 @@ be re-activated after a restart without the dialog; it is a convenience, not a b
 longer calls `@tauri-apps/plugin-dialog` for this, so it cannot name a file the dialog did not produce.
 
 `pick_directory` is the matching approval for `init`: the folder chosen in the native dialog is the
-only place `init` may create `seo.toml` and `data/` (or the parent of the active config). `init` and
+only place `init` may create `seo.toml` and `data/` (or the parent of the active config). The same
+approval covers `backup_create`: its output must be the app export directory (or a child of it) or a
+folder picked in the dialog, so an arbitrary existing folder is not enough. `init` and
 `schedule_print` validate their arguments in the shell before the engine sees them; `schedule_print`
 must target the active config and only renders text.
+
+`pick_log_file` is the approval for `logs_analyze`: the chosen file is the only arbitrary log path
+the shell will read, and a path under the app data/export directories is also accepted. Everything
+else is `PATH_NOT_APPROVED` before the engine is spawned. The engine opens the file read-only; the
+shell never writes to it.
 
 `update_install` and `update_cancel` exist because the webview holds only `updater:allow-check`. The
 Rust side re-checks the endpoint, refuses a version that differs from the announced one, serializes

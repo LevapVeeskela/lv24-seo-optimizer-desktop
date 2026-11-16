@@ -837,7 +837,7 @@ export const ru: Messages = {
   "runStatus.reportLabel": "Недельный отчёт",
   "runStatus.running": "Выполняется {elapsed}",
   "runStatus.lastRun": "Последний запуск {duration} · {time}",
-  "runStatus.noCancel": "В 0.3.0 вызов выполняется до конца: закрытие экрана его не отменяет, кнопки отмены пока нет.",
+  "runStatus.noCancel": "В 0.4.0 вызов выполняется до конца: закрытие экрана его не отменяет, кнопки отмены пока нет.",
   "runStatus.measuredHint": "Длительность измерена приложением: движок не передал duration_ms.",
   "runStatus.truncated": "Усечено",
   "runStatus.complete": "Без усечения",
