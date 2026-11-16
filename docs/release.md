@@ -10,26 +10,29 @@ its checksums, its updater signatures or its engine version does not ship.
 
 ## 1. Release state
 
-`0.2.0` was the first multi-platform release; `0.2.2` is the current patch release:
+`0.2.0` was the first multi-platform release; `0.2.2` is the latest published patch release and
+`0.2.3` is the release candidate:
 
 - **Windows x64:** unsigned NSIS installer, signed updater `.exe`, portable ZIP.
 - **Linux x64:** AppImage (signed updater), deb and rpm (manual-only).
 - **macOS arm64/x64:** DMG plus signed `.app.tar.gz` updater archives.
 - **Common:** `latest.json` and `SHA256SUMS.txt`.
 
-Release notes: [`docs/releases/0.2.2.md`](releases/0.2.2.md).
+Release notes: [`docs/releases/0.2.3.md`](releases/0.2.3.md) for the candidate,
+[`docs/releases/0.2.2.md`](releases/0.2.2.md) for the published line.
 
 Auto-update is enabled for Windows NSIS, macOS `.app` and Linux AppImage. deb, rpm, MSI and the
 portable ZIP are manual-only; the UI disables in-app installation for those bundle types and links
-to the release page. `0.1.0` has no updater, so `0.1.0` users must install `0.2.2` manually once.
+to the release page. `0.1.0` has no updater, so `0.1.0` users must install `0.2.3` manually once.
 
-Release preconditions (as met for the `0.2.2` run; update the version pins for the next release):
+Release preconditions (as met for the `0.2.3` run; update the version pins for the next release):
 
-- `package.json`, `src-tauri/tauri.conf.json` and `src-tauri/Cargo.toml` all say `0.2.2`.
-- `scripts/cli-checksums.json` says `0.5.2` and the workflow runs with `engine_version=0.5.2`.
+- `package.json`, `src-tauri/tauri.conf.json` and `src-tauri/Cargo.toml` all say `0.2.3`.
+- `scripts/cli-checksums.json` says `0.5.3` and the workflow runs with `engine_version=0.5.3`.
   The release gate rejects a mismatch.
-- `MIN_ENGINE_VERSION` in `src-tauri/src/commands.rs` is `0.5.2`. The `0.2.2` bundle is `0.5.2`;
-  an older engine is reported as incompatible. Verify the gate and the pin agree before publishing.
+- `MIN_ENGINE_VERSION` in `src-tauri/src/commands.rs` is `0.5.2`. The `0.2.3` bundle is `0.5.3`;
+  the minimum stays one patch behind the pin so a `0.5.2` engine is still accepted. An older engine
+  is reported as incompatible. Verify the gate and the pin agree before publishing.
 - CI (web, Rust matrix, contract drift) is green on the exact release commit. The contracts were
   regenerated from the pinned engine and match `scripts/cli-checksums.json`.
 - The `desktop-release` environment exists with the owner as required reviewer.
@@ -58,7 +61,7 @@ match the pin before uploading.
 
 ### Engine compatibility
 
-- A release build bundles the exact pinned engine version. `0.2.2` bundles `lv24-seo 0.5.2`.
+- A release build bundles the exact pinned engine version. `0.2.3` bundles `lv24-seo 0.5.3`.
 - The shell accepts an engine whose version is at least `MIN_ENGINE_VERSION` and marks an older one
   incompatible with a notice. It does not silently migrate commands to an older engine. The current
   source gates at `0.5.2`.
@@ -74,14 +77,14 @@ Trigger: **Actions → Desktop build → Run workflow**. It has no push, pull-re
 
 | Input | Type | Default | Meaning |
 |---|---|---|---|
-| `engine_version` | string | `0.5.2` for this release | exact `lv24-seo` version bundled in the sidecar |
+| `engine_version` | string | `0.5.3` for this release | exact `lv24-seo` version bundled in the sidecar |
 | `signed` | boolean | `false` | request OS signing/notarization; requires paid certificates that this project does not buy |
 | `publish` | boolean | `false` | create a GitHub release after every matrix build passes |
 | `tag` | string | empty | `vX.Y.Z` release tag; required when `publish=true` |
 
 The `engine_version` input must equal `scripts/cli-checksums.json`; the release gate rejects the
 manifest mismatch. The workflow input default and the pin name the same version and are bumped
-together in the release commit (`0.5.2` for the `0.2.2` line). A different value is allowed for a
+together in the release commit (`0.5.3` for the `0.2.3` line). A different value is allowed for a
 rebuild only when `scripts/cli-checksums.json` is updated in the same commit.
 
 ### Matrix
@@ -132,7 +135,7 @@ call, starts slowly, is AV-prone and cannot be signed correctly on macOS.
 ```bash
 # Build on the matching host; PyInstaller does not cross-compile.
 python scripts/build-sidecar.py \
-  --engine-version 0.5.2 \
+  --engine-version 0.5.3 \
   --target x86_64-pc-windows-msvc \
   --out src-tauri/engine
 ```
@@ -159,7 +162,7 @@ adjacent.
 node scripts/verify-sidecar.mjs \
   --root src-tauri/engine \
   --target x86_64-pc-windows-msvc \
-  --engine-version 0.5.2
+  --engine-version 0.5.3
 ```
 
 The strict verifier checks:
@@ -179,7 +182,7 @@ job runs the verifier with `--no-hash` (alias `--allow-rebuild`):
 node scripts/verify-sidecar.mjs \
   --root src-tauri/engine \
   --target x86_64-pc-windows-msvc \
-  --engine-version 0.5.2 \
+  --engine-version 0.5.3 \
   --no-hash \
   --report release/sidecar-checksums-x86_64-pc-windows-msvc.json
 ```
@@ -203,7 +206,7 @@ release build**:
 {
   "schemaVersion": 1,
   "engine": "lv24-seo",
-  "version": "0.5.2",
+  "version": "0.5.3",
   "python": "3.12",
   "pydantic": "2.14.3",
   "typer": "0.29.0",
@@ -233,11 +236,12 @@ release build**:
 }
 ```
 
-The values above illustrate the shape; the committed file is authoritative. For `0.5.2` every target
-is `null` until the `0.5.2` sidecar is rebuilt and reviewed on a matching host; a pin from an older
-engine does not carry over because the executable changes with the engine. `null` means “not pinned
-yet”. After a verified local build, compute the hash and commit the 64-hex value plus size in a
-focused PR (`node scripts/verify-sidecar.mjs ... --write` writes the pin after a verified build).
+The values above illustrate the shape; the committed file is authoritative. The Windows entry records
+the reviewed `0.5.3` build. The Linux and macOS targets are `null` until the `0.5.3` sidecar is
+rebuilt and reviewed on a matching host; a pin from an older engine does not carry over because the
+executable changes with the engine. `null` means “not pinned yet”. After a verified local build,
+compute the hash and commit the 64-hex value plus size in a focused PR
+(`node scripts/verify-sidecar.mjs ... --write` writes the pin after a verified build).
 
 ### Why CI does not compare against the pin
 
@@ -285,7 +289,7 @@ fails `npm test` when an artifact is added to one consumer but not the others.
 
 Asset names are normalized before checksums: GitHub replaces spaces with dots. The staging and
 release scripts reject characters GitHub may rewrite and refuse duplicate basenames. The published
-Windows asset is therefore `LV24.SEO.Optimizer_0.2.2_x64-setup.exe`, not the spaced build output.
+Windows asset is therefore `LV24.SEO.Optimizer_0.2.3_x64-setup.exe`, not the spaced build output.
 
 ## 6. Updater signing and `latest.json`
 
@@ -476,18 +480,18 @@ The release job:
 ### Preflight (before running the workflow)
 
 - [ ] CI is green on the pull request that contains the release commit.
-- [ ] `package.json`, `tauri.conf.json`, `Cargo.toml` and the intended tag agree (`0.2.2`).
-- [ ] `scripts/cli-checksums.json` says `0.5.2` and `engine_version=0.5.2` will be supplied.
-- [ ] The `engine_version` workflow input default matches the pin (`0.5.2`); the release gate compares
+- [ ] `package.json`, `tauri.conf.json`, `Cargo.toml` and the intended tag agree (`0.2.3`).
+- [ ] `scripts/cli-checksums.json` says `0.5.3` and `engine_version=0.5.3` will be supplied.
+- [ ] The `engine_version` workflow input default matches the pin (`0.5.3`); the release gate compares
       it with `scripts/cli-checksums.json`.
 - [ ] Contracts were regenerated from the pinned engine and match
       `scripts/cli-checksums.json`.
-- [ ] `MIN_ENGINE_VERSION` is `0.5.2` and matches the pin.
+- [ ] `MIN_ENGINE_VERSION` is `0.5.2` and is not higher than the pin.
 - [ ] The local release build you reviewed matches the pinned SHA-256 and size in
-      `scripts/cli-checksums.json` (strict `verify-sidecar.mjs`), or every target is explicitly
-      `null` because the `0.5.2` sidecar has not been rebuilt yet. CI rebuilds are recorded, not
+      `scripts/cli-checksums.json` (strict `verify-sidecar.mjs`), or that target is explicitly
+      `null` because its `0.5.3` sidecar has not been rebuilt yet. CI rebuilds are recorded, not
       compared.
-- [ ] README, `docs/*`, `docs/releases/0.2.2.md`, changelog/release notes and the unsigned warning
+- [ ] README, `docs/*`, `docs/releases/0.2.3.md`, changelog/release notes and the unsigned warning
       are current.
 - [ ] No secrets, private keys or customer data are in the diff or fixtures.
 - [ ] The GitHub environment `desktop-release` exists with the owner as required reviewer.
@@ -496,7 +500,7 @@ The release job:
 
 ### Build-only run
 
-1. Run **Desktop build** with `publish=false`, `engine_version=0.5.2` and `signed=false`.
+1. Run **Desktop build** with `publish=false`, `engine_version=0.5.3` and `signed=false`.
 2. Wait for all four matrix jobs.
 3. Download each artifact.
 4. On a clean machine/VM per OS, install and launch **offline**:
@@ -508,14 +512,14 @@ The release job:
 5. Confirm the updater panel reports the bundle type correctly: NSIS/AppImage/app can update;
    portable/deb/rpm/MSI show the manual-only hint and link to the release page.
 6. Open `sidecar-checksums-<target>.json` from the artifact: `ok` is true, `hashPolicy` is
-   `rebuild`, `sha256` is a 64-hex digest, `size` is positive and `actualVersion` is `0.5.2`. It
+   `rebuild`, `sha256` is a 64-hex digest, `size` is positive and `actualVersion` is `0.5.3`. It
    will not equal the reviewed pin; that is expected.
 
 ### Publish run
 
 1. Update `scripts/cli-checksums.json` in a PR if the reviewed local build or engine pin changed;
    merge it.
-2. Run **Desktop build** with `publish=true`, the final `tag` (`v0.2.2`), `engine_version=0.5.2`
+2. Run **Desktop build** with `publish=true`, the final `tag` (`v0.2.3`), `engine_version=0.5.3`
    and `signed=false` (unless certificates are actually configured).
 3. Approve the `desktop-release` environment as the repository owner. The release job also requires
    the actor to be the repository owner; a non-owner run is skipped.
@@ -523,10 +527,11 @@ The release job:
    `SHA256SUMS.txt`, then undrafts it.
 5. Verify the release page: asset names, checksums (including `*-portable.zip.sha256`), all four
    platforms, `latest.json` and notes.
-6. Verify the in-app update on a machine with the previous release installed. The only end-to-end
-   run verified so far is `0.2.0 → 0.2.1`; `0.2.1 → 0.2.2` must be verified in this run, including
-   that a running sidecar is stopped before the installer and that a blocked cleanup shows
-   `UPDATE_ENGINE_BUSY`. Do not advertise auto-update for deb/rpm/MSI/portable.
+6. Verify the in-app update on a machine with the previous release installed. `0.2.0 → 0.2.1` and
+   `0.2.1 → 0.2.2` are verified end-to-end; `0.2.2 → 0.2.3` must be verified in this run, including
+   the Rust-side version re-check, cancellation during download, a running sidecar stopped before the
+   installer and `UPDATE_ENGINE_BUSY` when cleanup is blocked. Do not advertise auto-update for
+   deb/rpm/MSI/portable.
 7. Announce with the unsigned-build instructions, the manual-only cases and the checksum file.
 
 ### Post-release
@@ -584,7 +589,7 @@ are unsigned. SmartScreen/Gatekeeper may warn. Verify SHA256SUMS.txt.
 
 ### Auto-update
 Windows NSIS, macOS .app and Linux AppImage update in place after confirmation.
-deb/rpm/MSI/portable ZIP are manual-only. 0.1.0 must install 0.2.2 manually once.
+deb/rpm/MSI/portable ZIP are manual-only. 0.1.0 must install 0.2.3 manually once.
 Updater manifest: https://github.com/LevapVeeskela/lv24-seo-optimizer-desktop/releases/latest/download/latest.json
 
 ### Verification

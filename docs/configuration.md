@@ -1,11 +1,11 @@
 # Configuration
 
-Status: **desktop configuration contract for `0.2.2`.** The settings screens implement this
-contract; the engine-side `seo.toml` semantics below are those of the pinned `lv24-seo 0.5.2`. When
-the desktop and the engine disagree, the engine is authoritative and the desktop must show its
-validation error instead of silently “fixing” the file. The desktop's `ConfigModel` mirrors the
-subset of `lv24_seo.core.config.SeoConfig` used by the forms for `0.5.2`; the engine still validates
-the whole file.
+Status: **desktop configuration contract for `0.2.3` (release candidate).** The settings screens
+implement this contract; the engine-side `seo.toml` semantics below are those of the pinned
+`lv24-seo 0.5.3`. When the desktop and the engine disagree, the engine is authoritative and the
+desktop must show its validation error instead of silently “fixing” the file. The desktop's
+`ConfigModel` mirrors the subset of `lv24_seo.core.config.SeoConfig` used by the forms for `0.5.3`;
+the engine still validates the whole file.
 
 ## 1. What owns what
 
