@@ -63,6 +63,42 @@ Release preconditions (as used for `0.7.0`; update the version pins for the next
   `npm run typecheck`, `npm run build`, `npm run test:release`, `cargo fmt --check` and
   `cargo clippy --all-targets -- -D warnings`.
 
+### Bing URL submission and status views (unreleased)
+
+This wave adds the desktop surface for the engine `0.10.0` Bing commands. It is not part of the
+published `0.7.0` notes below, and the `0.7.0` line keeps its `0.9.0` pin until the next release
+updates the pin and the checksums.
+
+- `bing_submit` builds
+  `bing submit --config <path> [--url <abs> ...] [--from-sitemap] [--sitemap-url <abs>] --allow-write [--confirm <token>] --json`.
+  The plan carries the opt-in without a token; the apply adds the reviewed token. `--sitemap-url`
+  requires `--from-sitemap`, and at least one explicit URL or the sitemap source is required. Only
+  `provider: bing` is accepted, and it is never emitted because the command group already names Bing.
+- `bing_sitemaps`, `bing_issues` and `bing_quota` are read-only and accept only `--config` and
+  `--json`. The shell rejects a write flag, token, sitemap URL or per-URL argument before the engine
+  starts.
+- The submission result means Bing **accepted** the URLs. It does not mean they were indexed, and the
+  engine exposes no per-URL status. The UI labels the count as accepted and says so explicitly.
+- Quota is shown as remaining, never as used or total. Daily and monthly buckets are separate; the
+  monthly remaining (1,400 for lv24.by) can run out before the daily remaining (100), and Bing does
+  not document the monthly reset.
+- `GetFeeds` rows show URL, free-form status, last crawl and URL count. The panel states that Bing
+  does not return a per-URL error reason or crawl status. `GetFeedDetails` only expands sitemap-index
+  children and has no separate screen.
+- `GetCrawlIssues` rows show URL, HTTP code, the decoded issue bitmask (1=301, 2=302, 4=4xx, 8=5xx,
+  16=robots, 32=malware, 64=important robots, 128=DNS, 256=timeout) and in-links. No severity or date
+  field is invented.
+- A missing key/site and a Bing HTTP 400 `ErrorCode` are shown with the engine message and code; the
+  UI never turns either into a fake success.
+- Verification: `cargo test --all-targets` (argv for all four commands, dry/apply, from-sitemap,
+  repeated URLs, invalid URL), `npm test` (plan/apply and read-only load/error states),
+  `npm run typecheck`, `npm run build`, `npm run test:release`, `cargo fmt --check` and
+  `cargo clippy --all-targets -- -D warnings`.
+
+Limitations: the new commands need engine `0.10.0`; an older engine returns `CLI_INVALID_JSON` and
+the panel says an update is needed. Writes are not cancellable and have no rollback. The read-only
+views are bounded by the engine response and do not retry automatically.
+
 ### Bing indexing actions (`0.7.0`)
 
 `0.7.0` ships the desktop surface for two engine `0.9.0` commands and one external opener:

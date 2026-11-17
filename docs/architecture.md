@@ -122,6 +122,10 @@ The command surface is fixed. The generic `cli_run` allow-list is:
 | `schedule_install` | `schedule install --kind weekly\|daily [--cron <expr>] --config <path> --allow-write --json` | host write (gated) |
 | `sitemap_submit` | `sitemap submit --provider bing --config <path> [--url <abs>] --allow-write [--confirm <token>] --json` | provider write (gated) |
 | `indexnow_submit` | `indexnow submit --from-sitemap --config <path> [--sitemap-url <abs>] --allow-write [--confirm <token>] --json` | provider write (gated) |
+| `bing_submit` | `bing submit --config <path> [--url <abs> ...] [--from-sitemap] [--sitemap-url <abs>] --allow-write [--confirm <token>] --json` | provider write (gated) |
+| `bing_sitemaps` | `bing sitemaps --config <path> --json` | read |
+| `bing_issues` | `bing issues --config <path> --json` | read |
+| `bing_quota` | `bing quota --config <path> --json` | read |
 
 Dedicated Tauri commands cover the rest: `shell_status`, `config_read`, `config_validate`,
 `config_write`, `config_patch`, `auth_set` (secret over stdin), `auth_delete`, `write_text_file`,
@@ -173,6 +177,22 @@ mints the reviewed token. `--url` / `--sitemap-url` are optional, so the engine 
 `--config` to the active workspace because the engine opens its write ledger next to that config.
 `sitemap_submit` accepts only `--provider bing`; `indexnow_submit` takes no provider and no per-URL
 list.
+
+`bing_submit` is the native Bing URL submission command with the same plan/apply gate. It accepts a
+repeated `--url` list, `--from-sitemap`, and an optional `--sitemap-url`; `--sitemap-url` is rejected
+without `--from-sitemap`, and at least one URL or the sitemap source is required. The optional
+`provider` field is accepted only as `bing` and is never emitted because the command group already
+names Bing. Plan counts and the apply result are shown honestly: the URL count and batches come from
+the engine, and success means Bing **accepted** the URLs, not that they were indexed. The engine
+reports no per-URL status, so the UI never invents one.
+
+`bing_sitemaps`, `bing_issues` and `bing_quota` are read-only. They take only `--config` and `--json`;
+the shell rejects `--allow-write`, a confirm token, a sitemap URL or any per-URL argument. The panel
+shows `GetFeeds` rows (URL, free-form status, last crawl, URL count), `GetCrawlIssues` rows (URL, HTTP
+code, decoded issue bitmask, in-links) and `GetUrlSubmissionQuota` remaining daily/monthly values. The
+quota is always labeled as remaining, never as used or total. `GetFeedDetails` is not a separate
+screen: it only expands sitemap-index children, and the panel states that Bing does not return a
+per-URL error reason or crawl status.
 
 The engine also requires a non-empty `LV24_SEO_WRITE_SECRET`. The desktop generates 32 random bytes
 from the OS CSPRNG once at startup, stores the 64-character hex value in `AppState` in memory only and
@@ -274,9 +294,10 @@ file. Values are never displayed.
 ## 7. Long-running calls and failure model
 
 Engine calls are synchronous from the UI's perspective. Each command has a fixed timeout: `crawl`
-600 seconds; `stats`, `report weekly`, `report diff` and the two indexing commands 120 seconds;
-`version`, `config show`, `doctor`, `properties` and `auth status` 30 seconds; `auth set`/`auth delete`
-120 seconds. A timeout kills the exact child process and returns a typed error.
+600 seconds; `stats`, `report weekly`, `report diff`, `sitemap_submit`, `indexnow_submit` and
+`bing_submit` 120 seconds; `bing_sitemaps`, `bing_issues` and `bing_quota` 60 seconds; `version`,
+`config show`, `doctor`, `properties` and `auth status` 30 seconds; `auth set`/`auth delete` 120
+seconds. A timeout kills the exact child process and returns a typed error.
 
 - **Cancellable long jobs.** `crawl`, `report weekly`, `logs analyze`, `backup create`,
   `backup restore` and `schedule install` may carry a stable run id. The Rust runner registers

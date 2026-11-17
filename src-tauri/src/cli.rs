@@ -35,6 +35,9 @@ const MAX_TASK_PAYLOAD_BYTES: usize = 16 * 1024;
 const MAX_TASKS_LIMIT: u32 = 500;
 /// `portfolio list` returns a bounded roll-up; the shell keeps the same cap.
 const MAX_PORTFOLIO_LIMIT: u32 = 50;
+/// One Bing submit is split into provider batches by the engine; the shell
+/// still caps the webview-supplied list so argv cannot grow without bound.
+const MAX_BING_SUBMIT_URLS: usize = 10_000;
 /// A confirm token is `<expiry>:<hmac>`; keep the charset narrow so nothing
 /// but the token itself can reach argv.
 const MAX_CONFIRM_TOKEN_LEN: usize = 512;
@@ -81,6 +84,14 @@ pub enum CliCommandId {
     SitemapSubmit,
     /// Two-phase IndexNow submit built from the project sitemap.
     IndexNowSubmit,
+    /// Two-phase native Bing URL submission; plan without a token, apply with one.
+    BingSubmit,
+    /// Read-only list of known Bing sitemaps and their status.
+    BingSitemaps,
+    /// Read-only list of Bing crawl issues.
+    BingIssues,
+    /// Read-only Bing URL submission quota.
+    BingQuota,
     /// Internal commands used by dedicated auth commands; they are deliberately
     /// absent from the generic `cli_run` allow-list.
     AuthSet,
@@ -124,6 +135,10 @@ impl CliCommandId {
             "schedule_install" => Ok(Self::ScheduleInstall),
             "sitemap_submit" => Ok(Self::SitemapSubmit),
             "indexnow_submit" => Ok(Self::IndexNowSubmit),
+            "bing_submit" => Ok(Self::BingSubmit),
+            "bing_sitemaps" => Ok(Self::BingSitemaps),
+            "bing_issues" => Ok(Self::BingIssues),
+            "bing_quota" => Ok(Self::BingQuota),
             other => Err(AppError::new(
                 "INVALID_COMMAND",
                 format!("command {other:?} is not in the desktop allow-list"),
@@ -135,7 +150,8 @@ impl CliCommandId {
                     "init", "schedule_print", "logs_analyze", "tasks_list",
                     "tasks_add", "tasks_update", "backup_create", "backup_restore",
                     "portfolio_list", "schedule_install", "sitemap_submit",
-                    "indexnow_submit"
+                    "indexnow_submit", "bing_submit", "bing_sitemaps",
+                    "bing_issues", "bing_quota"
                 ]
             }))),
         }
@@ -164,6 +180,10 @@ impl CliCommandId {
             Self::ScheduleInstall => "schedule_install",
             Self::SitemapSubmit => "sitemap_submit",
             Self::IndexNowSubmit => "indexnow_submit",
+            Self::BingSubmit => "bing_submit",
+            Self::BingSitemaps => "bing_sitemaps",
+            Self::BingIssues => "bing_issues",
+            Self::BingQuota => "bing_quota",
             Self::AuthSet => "auth_set",
             Self::AuthLogout => "auth_delete",
         }
@@ -189,6 +209,10 @@ impl CliCommandId {
                 | Self::BackupRestore
                 | Self::SitemapSubmit
                 | Self::IndexNowSubmit
+                | Self::BingSubmit
+                | Self::BingSitemaps
+                | Self::BingIssues
+                | Self::BingQuota
         )
     }
 
@@ -203,7 +227,9 @@ impl CliCommandId {
             | Self::BackupCreate
             | Self::BackupRestore
             | Self::ScheduleInstall => WriteKind::LocalState,
-            Self::SitemapSubmit | Self::IndexNowSubmit => WriteKind::ProviderState,
+            Self::SitemapSubmit | Self::IndexNowSubmit | Self::BingSubmit => {
+                WriteKind::ProviderState
+            }
             _ => WriteKind::None,
         }
     }
@@ -219,7 +245,8 @@ impl CliCommandId {
             | Self::ReportDiff
             | Self::BackupCreate
             | Self::SitemapSubmit
-            | Self::IndexNowSubmit => Duration::from_secs(120),
+            | Self::IndexNowSubmit
+            | Self::BingSubmit => Duration::from_secs(120),
             // Onboarding may create a directory tree on a slow disk.
             Self::Init => Duration::from_secs(60),
             // A cold PyInstaller sidecar can spend well over ten seconds on
@@ -230,7 +257,10 @@ impl CliCommandId {
             | Self::TasksAdd
             | Self::TasksUpdate
             | Self::PortfolioList
-            | Self::ScheduleInstall => Duration::from_secs(60),
+            | Self::ScheduleInstall
+            | Self::BingSitemaps
+            | Self::BingIssues
+            | Self::BingQuota => Duration::from_secs(60),
             Self::ConfigShow
             | Self::Doctor
             | Self::Properties
@@ -273,7 +303,7 @@ pub struct CliArgs {
     /// app export directory.
     pub out: Option<String>,
     /// Used by the dedicated auth commands; never contains a secret.
-    /// `sitemap_submit` only: must be `bing`.
+    /// `sitemap_submit` and `bing_submit` only: must be `bing`.
     pub provider: Option<String>,
     /// `init` only: site URL or GSC property (`sc-domain:example.com`).
     pub property: Option<String>,
@@ -301,8 +331,12 @@ pub struct CliArgs {
     /// `sitemap_submit`: optional absolute sitemap URL; the engine uses
     /// `{project.base_url}/sitemap.xml` when it is absent.
     pub url: Option<String>,
-    /// `indexnow_submit` only: optional absolute sitemap URL; the engine uses
-    /// `{project.base_url}/sitemap.xml` when it is absent.
+    /// `bing_submit` only: absolute http(s) URLs, one `--url` per entry.
+    pub urls: Option<Vec<String>>,
+    /// `bing_submit` only: read the URL list from the sitemap.
+    pub from_sitemap: Option<bool>,
+    /// `indexnow_submit` and `bing_submit` only: optional absolute sitemap URL;
+    /// the engine uses `{project.base_url}/sitemap.xml` when it is absent.
     pub sitemap_url: Option<String>,
     /// `tasks_add` only: rule/finding id that produced the task.
     pub rule: Option<String>,
@@ -716,8 +750,52 @@ pub fn build_argv(command: CliCommandId, args: &CliArgs) -> AppResult<Vec<String
             argv.push("--json".into());
             argv
         }
+        CliCommandId::BingSubmit => {
+            // The command group is already Bing; an optional provider field is
+            // accepted for UI symmetry but never emitted as `--provider`.
+            if let Some(provider) = args.provider.as_deref() {
+                normalize_indexing_provider(provider)?;
+            }
+            let config = validate_config_path(args.config_path.as_deref().unwrap_or(""))?;
+            let mut argv = vec![
+                "bing".into(),
+                "submit".into(),
+                "--config".into(),
+                config.display().to_string(),
+            ];
+            for url in args.urls.as_deref().unwrap_or_default() {
+                argv.push("--url".into());
+                argv.push(validate_http_url(url, "submit URL")?.to_string());
+            }
+            if args.from_sitemap == Some(true) {
+                argv.push("--from-sitemap".into());
+            }
+            if let Some(url) = args.sitemap_url.as_deref() {
+                argv.push("--sitemap-url".into());
+                argv.push(validate_http_url(url, "sitemap URL")?.to_string());
+            }
+            append_write_gate(&mut argv, args)?;
+            argv.push("--json".into());
+            argv
+        }
+        CliCommandId::BingSitemaps => bing_read_argv("sitemaps", args)?,
+        CliCommandId::BingIssues => bing_read_argv("issues", args)?,
+        CliCommandId::BingQuota => bing_read_argv("quota", args)?,
     };
     Ok(argv)
+}
+
+/// The three read-only Bing views share one shape: the active config and
+/// `--json`, with no write flag, token or provider field.
+fn bing_read_argv(subcommand: &str, args: &CliArgs) -> AppResult<Vec<String>> {
+    let config = validate_config_path(args.config_path.as_deref().unwrap_or(""))?;
+    Ok(vec![
+        "bing".into(),
+        subcommand.into(),
+        "--config".into(),
+        config.display().to_string(),
+        "--json".into(),
+    ])
 }
 
 /// The write opt-in and token are appended only when the UI confirmed the
@@ -733,8 +811,9 @@ fn append_write_gate(argv: &mut Vec<String>, args: &CliArgs) -> AppResult<()> {
     Ok(())
 }
 
-/// Only Bing exposes a sitemap submit endpoint in the desktop contract. The
-/// engine may grow other providers later; until then the shell refuses them.
+/// Only Bing exposes a sitemap submit or native URL submission endpoint in the
+/// desktop contract. The engine may grow other providers later; until then the
+/// shell refuses them.
 fn normalize_indexing_provider(raw: &str) -> AppResult<String> {
     let value = raw.trim().to_ascii_lowercase();
     if value == "bing" {
@@ -742,7 +821,7 @@ fn normalize_indexing_provider(raw: &str) -> AppResult<String> {
     } else {
         Err(AppError::new(
             "INVALID_ARGUMENT",
-            format!("provider {raw:?} is not supported for sitemap_submit"),
+            format!("provider {raw:?} is not supported for Bing indexing"),
         )
         .with_details(serde_json::json!({ "allowed": ["bing"] })))
     }
@@ -755,6 +834,13 @@ fn validate_args(command: CliCommandId, args: &CliArgs) -> AppResult<()> {
             format!("{field} is not accepted by {}", command.id()),
         ))
     };
+
+    // The per-URL list and the sitemap-source switch belong to `bing_submit`.
+    // A single top-level guard keeps every other arm from silently ignoring
+    // them as the command surface grows.
+    if command != CliCommandId::BingSubmit && (args.urls.is_some() || args.from_sitemap.is_some()) {
+        return reject("urls/fromSitemap");
+    }
 
     match command {
         CliCommandId::Stats => {
@@ -1320,6 +1406,109 @@ fn validate_args(command: CliCommandId, args: &CliArgs) -> AppResult<()> {
                 validate_http_url(url, "sitemap URL")?;
             }
             validate_indexing_write(command, args)?;
+        }
+        CliCommandId::BingSubmit => {
+            if args.days.is_some()
+                || args.lag_days.is_some()
+                || args.base.is_some()
+                || args.head.is_some()
+                || args.start.is_some()
+                || args.max_urls.is_some()
+                || args.out.is_some()
+                || args.property.is_some()
+                || args.data_dir.is_some()
+                || args.cron.is_some()
+                || args.target.is_some()
+                || args.file.is_some()
+                || args.bot.is_some()
+                || args.kind.is_some()
+                || args.state.is_some()
+                || args.limit.is_some()
+                || args.url.is_some()
+                || args.rule.is_some()
+                || args.payload.is_some()
+                || args.id.is_some()
+                || args.force.is_some()
+                || args.root.is_some()
+            {
+                return reject(
+                    "an argument other than urls/fromSitemap/sitemapUrl/provider/configPath/allowWrite/confirm",
+                );
+            }
+            if let Some(provider) = args.provider.as_deref() {
+                normalize_indexing_provider(provider)?;
+            }
+            let config = args.config_path.as_deref().ok_or_else(|| {
+                AppError::new("INVALID_ARGUMENT", "configPath is required for bing_submit")
+            })?;
+            validate_config_path(config)?;
+            let urls = args.urls.as_deref().unwrap_or_default();
+            if urls.len() > MAX_BING_SUBMIT_URLS {
+                return Err(AppError::new(
+                    "INVALID_ARGUMENT",
+                    format!(
+                        "bing_submit accepts at most {MAX_BING_SUBMIT_URLS} URLs, got {}",
+                        urls.len()
+                    ),
+                ));
+            }
+            for url in urls {
+                validate_http_url(url, "submit URL")?;
+            }
+            if args.from_sitemap != Some(true) && args.sitemap_url.is_some() {
+                return Err(AppError::new(
+                    "INVALID_ARGUMENT",
+                    "sitemapUrl requires fromSitemap=true for bing_submit",
+                ));
+            }
+            if let Some(url) = args.sitemap_url.as_deref() {
+                validate_http_url(url, "sitemap URL")?;
+            }
+            if urls.is_empty() && args.from_sitemap != Some(true) {
+                return Err(AppError::new(
+                    "INVALID_ARGUMENT",
+                    "bing_submit requires at least one url or fromSitemap=true",
+                ));
+            }
+            validate_indexing_write(command, args)?;
+        }
+        CliCommandId::BingSitemaps | CliCommandId::BingIssues | CliCommandId::BingQuota => {
+            if args.days.is_some()
+                || args.lag_days.is_some()
+                || args.base.is_some()
+                || args.head.is_some()
+                || args.start.is_some()
+                || args.max_urls.is_some()
+                || args.out.is_some()
+                || args.provider.is_some()
+                || args.property.is_some()
+                || args.data_dir.is_some()
+                || args.cron.is_some()
+                || args.target.is_some()
+                || args.file.is_some()
+                || args.bot.is_some()
+                || args.kind.is_some()
+                || args.state.is_some()
+                || args.limit.is_some()
+                || args.url.is_some()
+                || args.rule.is_some()
+                || args.payload.is_some()
+                || args.id.is_some()
+                || args.force.is_some()
+                || args.sitemap_url.is_some()
+                || args.allow_write.is_some()
+                || args.confirm.is_some()
+                || args.root.is_some()
+            {
+                return reject("an argument other than configPath");
+            }
+            let config = args.config_path.as_deref().ok_or_else(|| {
+                AppError::new(
+                    "INVALID_ARGUMENT",
+                    format!("configPath is required for {}", command.id()),
+                )
+            })?;
+            validate_config_path(config)?;
         }
     }
     Ok(())
@@ -3015,6 +3204,10 @@ mod tests {
             "schedule_install",
             "sitemap_submit",
             "indexnow_submit",
+            "bing_submit",
+            "bing_sitemaps",
+            "bing_issues",
+            "bing_quota",
         ] {
             assert_eq!(CliCommandId::parse(id).unwrap().id(), id);
         }
@@ -4989,6 +5182,14 @@ mod tests {
             CliCommandId::IndexNowSubmit.timeout(),
             Duration::from_secs(120)
         );
+        assert_eq!(CliCommandId::BingSubmit.timeout(), Duration::from_secs(120));
+        for id in [
+            CliCommandId::BingSitemaps,
+            CliCommandId::BingIssues,
+            CliCommandId::BingQuota,
+        ] {
+            assert_eq!(id.timeout(), Duration::from_secs(60), "{}", id.id());
+        }
     }
 
     #[test]
@@ -5021,6 +5222,10 @@ mod tests {
             CliCommandId::AuthLogout,
             CliCommandId::SitemapSubmit,
             CliCommandId::IndexNowSubmit,
+            CliCommandId::BingSubmit,
+            CliCommandId::BingSitemaps,
+            CliCommandId::BingIssues,
+            CliCommandId::BingQuota,
         ] {
             assert!(!id.cancellable(), "{}", id.id());
         }
@@ -5668,6 +5873,235 @@ mod tests {
     }
 
     #[test]
+    fn bing_submit_argv_plans_urls_then_applies() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = dir.path().join("seo.toml");
+        let config_text = config.display().to_string();
+        let urls = vec![
+            "https://example.com/a".to_string(),
+            "https://example.com/b".to_string(),
+        ];
+
+        // Plan with repeated --url entries. The engine requires the write
+        // opt-in even to mint the reviewed token.
+        assert_eq!(
+            build_argv(
+                CliCommandId::BingSubmit,
+                &CliArgs {
+                    urls: Some(urls.clone()),
+                    config_path: Some(config_text.clone()),
+                    allow_write: Some(true),
+                    ..CliArgs::default()
+                }
+            )
+            .unwrap(),
+            vec![
+                "bing",
+                "submit",
+                "--config",
+                config_text.as_str(),
+                "--url",
+                "https://example.com/a",
+                "--url",
+                "https://example.com/b",
+                "--allow-write",
+                "--json"
+            ]
+        );
+
+        // Plan from the shared sitemap. `provider` is accepted for UI symmetry
+        // and must be Bing, but the command group never emits `--provider`.
+        assert_eq!(
+            build_argv(
+                CliCommandId::BingSubmit,
+                &CliArgs {
+                    provider: Some("Bing".into()),
+                    from_sitemap: Some(true),
+                    sitemap_url: Some("https://example.com/sitemap.xml".into()),
+                    config_path: Some(config_text.clone()),
+                    allow_write: Some(true),
+                    ..CliArgs::default()
+                }
+            )
+            .unwrap(),
+            vec![
+                "bing",
+                "submit",
+                "--config",
+                config_text.as_str(),
+                "--from-sitemap",
+                "--sitemap-url",
+                "https://example.com/sitemap.xml",
+                "--allow-write",
+                "--json"
+            ]
+        );
+
+        // Apply: the reviewed token is appended after the opt-in.
+        assert_eq!(
+            build_argv(
+                CliCommandId::BingSubmit,
+                &CliArgs {
+                    urls: Some(urls.clone()),
+                    config_path: Some(config_text.clone()),
+                    allow_write: Some(true),
+                    confirm: Some("1700000000:abcdef0123".into()),
+                    ..CliArgs::default()
+                }
+            )
+            .unwrap(),
+            vec![
+                "bing",
+                "submit",
+                "--config",
+                config_text.as_str(),
+                "--url",
+                "https://example.com/a",
+                "--url",
+                "https://example.com/b",
+                "--allow-write",
+                "--confirm",
+                "1700000000:abcdef0123",
+                "--json"
+            ]
+        );
+
+        // A plan without a source, a relative URL, a single `url` field, a
+        // sitemap URL without fromSitemap, a non-Bing provider, a missing
+        // opt-in and a token without the opt-in are all refused.
+        for args in [
+            CliArgs {
+                config_path: Some(config_text.clone()),
+                allow_write: Some(true),
+                ..CliArgs::default()
+            },
+            CliArgs {
+                urls: Some(vec!["sitemap.xml".into()]),
+                config_path: Some(config_text.clone()),
+                allow_write: Some(true),
+                ..CliArgs::default()
+            },
+            CliArgs {
+                url: Some("https://example.com/a".into()),
+                config_path: Some(config_text.clone()),
+                allow_write: Some(true),
+                ..CliArgs::default()
+            },
+            CliArgs {
+                sitemap_url: Some("https://example.com/sitemap.xml".into()),
+                config_path: Some(config_text.clone()),
+                allow_write: Some(true),
+                ..CliArgs::default()
+            },
+            CliArgs {
+                provider: Some("gsc".into()),
+                urls: Some(urls.clone()),
+                config_path: Some(config_text.clone()),
+                allow_write: Some(true),
+                ..CliArgs::default()
+            },
+            CliArgs {
+                urls: Some(urls.clone()),
+                config_path: Some(config_text.clone()),
+                ..CliArgs::default()
+            },
+            CliArgs {
+                urls: Some(urls.clone()),
+                config_path: Some(config_text.clone()),
+                confirm: Some("1700000000:abcdef".into()),
+                ..CliArgs::default()
+            },
+        ] {
+            assert_eq!(
+                build_argv(CliCommandId::BingSubmit, &args)
+                    .unwrap_err()
+                    .code(),
+                "INVALID_ARGUMENT"
+            );
+        }
+
+        // The per-URL list must not be silently ignored by another command.
+        assert_eq!(
+            build_argv(
+                CliCommandId::Stats,
+                &CliArgs {
+                    urls: Some(urls),
+                    ..CliArgs::default()
+                }
+            )
+            .unwrap_err()
+            .code(),
+            "INVALID_ARGUMENT"
+        );
+        assert!(CliCommandId::BingSubmit.requires_config());
+        assert_eq!(
+            CliCommandId::BingSubmit.write_kind(),
+            WriteKind::ProviderState
+        );
+    }
+
+    #[test]
+    fn bing_read_only_commands_are_config_only() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = dir.path().join("seo.toml");
+        let config_text = config.display().to_string();
+
+        for (command, subcommand) in [
+            (CliCommandId::BingSitemaps, "sitemaps"),
+            (CliCommandId::BingIssues, "issues"),
+            (CliCommandId::BingQuota, "quota"),
+        ] {
+            assert_eq!(
+                build_argv(
+                    command,
+                    &CliArgs {
+                        config_path: Some(config_text.clone()),
+                        ..CliArgs::default()
+                    }
+                )
+                .unwrap(),
+                vec![
+                    "bing",
+                    subcommand,
+                    "--config",
+                    config_text.as_str(),
+                    "--json"
+                ],
+                "{}",
+                command.id()
+            );
+            assert!(command.requires_config(), "{}", command.id());
+            assert_eq!(command.write_kind(), WriteKind::None, "{}", command.id());
+
+            // Read-only views reject write flags and indexing arguments.
+            for args in [
+                CliArgs {
+                    config_path: Some(config_text.clone()),
+                    allow_write: Some(true),
+                    ..CliArgs::default()
+                },
+                CliArgs {
+                    config_path: Some(config_text.clone()),
+                    sitemap_url: Some("https://example.com/sitemap.xml".into()),
+                    ..CliArgs::default()
+                },
+                CliArgs {
+                    config_path: Some(config_text.clone()),
+                    urls: Some(vec!["https://example.com/a".into()]),
+                    ..CliArgs::default()
+                },
+            ] {
+                assert_eq!(
+                    build_argv(command, &args).unwrap_err().code(),
+                    "INVALID_ARGUMENT",
+                    "{}",
+                    command.id()
+                );
+            }
+        }
+    }
+
+    #[test]
     fn only_local_state_commands_write() {
         for command in [
             CliCommandId::Init,
@@ -5684,7 +6118,11 @@ mod tests {
                 command.id()
             );
         }
-        for command in [CliCommandId::SitemapSubmit, CliCommandId::IndexNowSubmit] {
+        for command in [
+            CliCommandId::SitemapSubmit,
+            CliCommandId::IndexNowSubmit,
+            CliCommandId::BingSubmit,
+        ] {
             assert_eq!(
                 command.write_kind(),
                 WriteKind::ProviderState,
@@ -5708,6 +6146,9 @@ mod tests {
             CliCommandId::PortfolioList,
             CliCommandId::AuthSet,
             CliCommandId::AuthLogout,
+            CliCommandId::BingSitemaps,
+            CliCommandId::BingIssues,
+            CliCommandId::BingQuota,
         ] {
             assert_eq!(command.write_kind(), WriteKind::None, "{}", command.id());
         }

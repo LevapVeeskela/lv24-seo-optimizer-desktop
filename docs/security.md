@@ -6,6 +6,9 @@ enforce and the residual risks accepted for the pre-1.0 line; where a control is
 says so.
 `0.7.0` adds the gated `sitemap_submit` and `indexnow_submit` commands (engine `0.9.0`), one
 external-URL allow-list for `open_bing_sitescan`, and a per-session in-memory write secret.
+The unreleased Bing URL submission wave adds `bing_submit` (engine `0.10.0`) with the same write
+secret and plan/apply gate, plus read-only `bing_sitemaps`, `bing_issues` and `bing_quota` commands
+that accept only the active config. It does not change the secret or the write gate.
 `0.6.0` added exact-process cancellation for the six long local jobs (`run_cancel`) and made
 `schedule install` append `--allow-write` only after the confirmation dialog, matching engine
 `0.8.0`. `0.5.0` added a native archive picker whose result is the only arbitrary
@@ -124,10 +127,16 @@ opt-in file. The desktop must show which source is active.
   canonicalized before use.
 - Write flags (`--send`, `--allow-write`, confirmation tokens) are never accepted from a read
   command and require an explicit confirmation dialog naming the target. The engine's write gate
-  requires `--allow-write` even for a plan, so `sitemap_submit` and `indexnow_submit` accept exactly
-  two shapes: a plan with the opt-in and no token, or an apply with the opt-in and the token. A token
-  without the opt-in is refused before the engine is spawned. The plan only mints a token; it does
-  not call the provider.
+  requires `--allow-write` even for a plan, so `sitemap_submit`, `indexnow_submit` and `bing_submit`
+  accept exactly two shapes: a plan with the opt-in and no token, or an apply with the opt-in and the
+  token. A token without the opt-in is refused before the engine is spawned. The plan only mints a
+  token; it does not call the provider. `bing_submit` additionally requires at least one explicit URL
+  or the sitemap source, validates every URL, and rejects `sitemapUrl` unless `fromSitemap=true`.
+- **Read-only Bing views.** `bing_sitemaps`, `bing_issues` and `bing_quota` are bound to the active
+  config and accept no write flag, token, sitemap URL or per-URL argument. They read the same
+  workspace the write gate uses and never create a ledger entry. Their rows are rendered as returned:
+  quota is remaining, never used or total; a crawl-issue bitmask is decoded by the UI; no per-URL
+  status is invented.
 - **External URL allow-list.** `open_bing_sitescan` is the only command that opens a remote URL. It
   accepts only an absolute `https://` site URL, rejects whitespace, control characters, userinfo and
   malformed hosts, and percent-encodes the value with the RFC 3986 unreserved set. The destination is
@@ -316,6 +325,8 @@ These require an explicit confirmation naming the target and action:
 | Export skills/tools | writes files to a chosen directory |
 | IndexNow submit | network write to Bing/IndexNow; two-phase plan token and idempotency ledger |
 | Bing sitemap submit | network write to Bing Webmaster; two-phase plan token and idempotency ledger |
+| Bing URL submission | network write to Bing Webmaster; two-phase plan token and idempotency ledger; success means accepted, not indexed |
+| Bing sitemap/issue/quota views | read-only Bing Webmaster calls; no write flag, token or provider mutation |
 | Bing Site Scan | no public API; opens the official Bing page only and never reports a started scan |
 | Yandex recrawl | currently `WRITE_DISABLED` in the engine |
 
@@ -405,6 +416,8 @@ paid certificate, notarization or paid runner without explicit owner approval.
 - [ ] `open_bing_sitescan` opens only the hard-coded Bing Site Scan page, accepts only an absolute
       https site URL and never claims a scan was started.
 - [ ] Write actions require confirmation and preserve engine `WRITE_DISABLED` semantics.
+- [ ] Bing read-only views reject write flags and tokens; quota is labeled remaining, and submission
+      success is described as accepted, not indexed.
 - [ ] A timeout kills only the exact child process; no wildcard process cleanup exists.
 - [ ] Sidecar version is verified before release, and the rebuild-aware checksum report exists for
       every shipped target.
