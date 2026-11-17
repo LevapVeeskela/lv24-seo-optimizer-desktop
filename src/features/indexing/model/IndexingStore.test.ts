@@ -72,7 +72,7 @@ describe("IndexingStore sitemap", () => {
     expect(await store.planSitemap(CONFIG)).toBe(true);
     expect(submitSitemap).toHaveBeenNthCalledWith(
       1,
-      { provider: "bing" },
+      { provider: "bing", allowWrite: true },
       CONFIG,
     );
     expect(store.sitemapState).toBe("planned");
@@ -103,7 +103,11 @@ describe("IndexingStore sitemap", () => {
     expect(await store.confirmSitemap(CONFIG)).toBe(true);
     expect(submitSitemap).toHaveBeenNthCalledWith(
       1,
-      { provider: "bing", url: "https://example.com/sitemap.xml" },
+      {
+        provider: "bing",
+        url: "https://example.com/sitemap.xml",
+        allowWrite: true,
+      },
       CONFIG,
     );
     expect(submitSitemap).toHaveBeenNthCalledWith(
@@ -197,7 +201,7 @@ describe("IndexingStore IndexNow", () => {
     expect(await store.planIndexNow(CONFIG)).toBe(true);
     expect(submitIndexNow).toHaveBeenNthCalledWith(
       1,
-      { sitemapUrl: "https://example.com/sitemap.xml" },
+      { sitemapUrl: "https://example.com/sitemap.xml", allowWrite: true },
       CONFIG,
     );
     expect(store.requestIndexNowApply()).toBe(true);

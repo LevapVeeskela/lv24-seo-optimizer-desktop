@@ -18,7 +18,7 @@ pub fn run() {
             let paths = paths::AppPaths::resolve(app.handle())?;
             let settings =
                 settings::SettingsStore::load(paths.config_dir.join(settings::SETTINGS_FILE))?;
-            app.manage(commands::AppState::new(paths, settings));
+            app.manage(commands::AppState::new(paths, settings)?);
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![

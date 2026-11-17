@@ -458,6 +458,12 @@ action. The desktop does not apply site edits itself.
   still travels only over stdin. Every engine `stderr` and every bounded output preview is redacted
   (`token = "…"`, `--token …`, `Bearer …` → `***`) before truncation and before IPC, and a TOML syntax
   error is redacted too, because the parser quotes the offending line.
+- **In-memory write secret.** The desktop generates a fresh 32-byte hex `LV24_SEO_WRITE_SECRET` at
+  startup with the OS CSPRNG, keeps it only in Rust memory and passes it to every engine child as an
+  environment variable after `env_clear()`. It is never written to settings, argv, logs, diagnostics
+  or the webview. A new app session gets a new secret, so old plan tokens fail and the UI re-plans.
+  The engine requires this secret for the write gate even when only minting a plan; CLI users set
+  `LV24_SEO_WRITE_SECRET` themselves.
 - **One shared secret store with the CLI.** The desktop runs the same engine under the same OS user,
   so a token stored by `lv24-seo auth set` in a terminal is visible in the desktop's `auth status`
   and vice versa. The OS keychain entry uses service `lv24-seo` and the same secret name on every

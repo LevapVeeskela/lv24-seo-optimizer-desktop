@@ -661,8 +661,9 @@ pub async fn validate_with_engine(
     location: &EngineLocation,
     target: &Path,
     content: &str,
+    write_secret: &str,
 ) -> AppResult<ValidationOutcome> {
-    validate_with_engine_in(location, target, content, None).await
+    validate_with_engine_in(location, target, content, None, write_secret).await
 }
 
 /// Same as [`validate_with_engine`], but when the directory next to `target`
@@ -673,6 +674,7 @@ pub(crate) async fn validate_with_engine_in(
     target: &Path,
     content: &str,
     fallback_dir: Option<&Path>,
+    write_secret: &str,
 ) -> AppResult<ValidationOutcome> {
     let temp = stage_validation_temp(target, content, fallback_dir)?;
     let result = cli::run(
@@ -680,6 +682,7 @@ pub(crate) async fn validate_with_engine_in(
         Some(&temp),
         CliCommandId::ConfigShow,
         &CliArgs::default(),
+        write_secret,
     )
     .await;
     let _ = fs::remove_file(&temp);

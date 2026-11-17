@@ -44,6 +44,26 @@ const BING_SITE_SCAN_URL: &str = "https://www.bing.com/webmasters/sitescan";
 const BING_SITE_SCAN_QUERY: &str = "?siteUrl=";
 const MAX_SITE_URL_LEN: usize = 2048;
 
+/// 32 random bytes rendered as 64 lowercase hex characters. `getrandom` uses
+/// the OS CSPRNG (BCryptGenRandom, getrandom(2), SecRandomCopyBytes).
+fn generate_write_secret() -> AppResult<String> {
+    use std::fmt::Write as _;
+
+    let mut bytes = [0u8; 32];
+    getrandom::fill(&mut bytes).map_err(|err| {
+        AppError::new(
+            "WRITE_SECRET",
+            format!("cannot generate the session write secret: {err}"),
+        )
+    })?;
+    let mut secret = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        // Writing to a String cannot fail.
+        let _ = write!(secret, "{byte:02x}");
+    }
+    Ok(secret)
+}
+
 pub struct AppState {
     pub paths: paths::AppPaths,
     pub settings: Arc<SettingsStore>,
@@ -59,20 +79,32 @@ pub struct AppState {
     /// Backup archives the user picked in the native file dialog.
     /// `backup_restore` reads only one of these.
     approved_backup_archives: Mutex<HashSet<PathBuf>>,
+    /// Per-app-session write-gate secret. Generated from the OS CSPRNG at
+    /// startup, kept in memory only and passed to engine children as
+    /// `LV24_SEO_WRITE_SECRET`; never persisted, logged or returned to the
+    /// webview. A new session intentionally invalidates old plan tokens.
+    write_secret: Zeroizing<String>,
     update: UpdateGate,
 }
 
 impl AppState {
-    pub fn new(paths: paths::AppPaths, settings: SettingsStore) -> Self {
-        Self {
+    pub fn new(paths: paths::AppPaths, settings: SettingsStore) -> AppResult<Self> {
+        Ok(Self {
             paths,
             settings: Arc::new(settings),
             approved_configs: Mutex::new(HashSet::new()),
             approved_directories: Mutex::new(HashSet::new()),
             approved_log_files: Mutex::new(HashSet::new()),
             approved_backup_archives: Mutex::new(HashSet::new()),
+            write_secret: Zeroizing::new(generate_write_secret()?),
             update: UpdateGate::default(),
-        }
+        })
+    }
+
+    /// Secret handed to every engine child for the write gate. Borrowed only
+    /// for the spawn; it is never serialized into a status or result type.
+    pub fn write_secret(&self) -> &str {
+        self.write_secret.as_str()
     }
 
     fn approved_configs(&self) -> MutexGuard<'_, HashSet<PathBuf>> {
@@ -814,7 +846,7 @@ pub async fn shell_status(
             engine.found = true;
             engine.path = Some(location.display_path());
             engine.source = Some(location.source.clone());
-            match cli::probe_version(&location).await {
+            match cli::probe_version(&location, state.write_secret()).await {
                 Ok(version) => {
                     engine.compatible = version_at_least(&version, MIN_ENGINE_VERSION);
                     engine.version = Some(version);
@@ -1073,12 +1105,23 @@ pub async fn cli_run(
         _ => config_path.as_deref(),
     };
     let location = paths::locate_engine(&app)?;
+    let write_secret = state.inner().write_secret();
     let result = match run_id.as_deref() {
         // A run id is the webview's cancellation handle. It is only accepted
         // for long local jobs (`CliCommandId::cancellable`); a short read keeps
         // the plain synchronous path.
-        Some(run_id) => cli::run_tracked(&location, engine_config, command, &args, run_id).await?,
-        None => cli::run(&location, engine_config, command, &args).await?,
+        Some(run_id) => {
+            cli::run_tracked(
+                &location,
+                engine_config,
+                command,
+                &args,
+                run_id,
+                write_secret,
+            )
+            .await?
+        }
+        None => cli::run(&location, engine_config, command, &args, write_secret).await?,
     };
     if let Some(target) = init_target {
         // `init` created the file: approve it now so the wizard can call
@@ -1155,6 +1198,7 @@ pub async fn auth_set(
         CliCommandId::AuthSet,
         &args,
         Some(secret.as_bytes()),
+        state.inner().write_secret(),
     )
     .await
 }
@@ -1179,6 +1223,7 @@ pub async fn auth_delete(
         Some(&config_path),
         CliCommandId::AuthLogout,
         &args,
+        state.inner().write_secret(),
     )
     .await
 }
@@ -1215,7 +1260,9 @@ pub async fn config_patch(
     }
 
     let location = paths::locate_engine(&app)?;
-    let validation = config::validate_with_engine(&location, &target, &new_raw).await?;
+    let validation =
+        config::validate_with_engine(&location, &target, &new_raw, state.inner().write_secret())
+            .await?;
     if !validation.valid {
         return Err(AppError::new(
             "CONFIG_INVALID",
@@ -1268,6 +1315,7 @@ pub async fn config_patch(
         Some(&target),
         CliCommandId::ConfigShow,
         &CliArgs::default(),
+        state.inner().write_secret(),
     )
     .await
     {
@@ -1386,6 +1434,7 @@ pub async fn config_read(
                 Some(&config_path),
                 CliCommandId::ConfigShow,
                 &CliArgs::default(),
+                state.inner().write_secret(),
             )
             .await
             {
@@ -1463,9 +1512,14 @@ pub async fn config_validate(
 
     let location = paths::locate_engine(&app)?;
     let fallback_dir = state.paths.config_dir.clone();
-    let outcome =
-        config::validate_with_engine_in(&location, &target, &content, Some(fallback_dir.as_path()))
-            .await?;
+    let outcome = config::validate_with_engine_in(
+        &location,
+        &target,
+        &content,
+        Some(fallback_dir.as_path()),
+        state.inner().write_secret(),
+    )
+    .await?;
     Ok(ConfigValidateResult {
         path: target.display().to_string(),
         valid: outcome.valid,
@@ -1498,7 +1552,9 @@ pub async fn config_write(
     ensure_local_data_dir(&document, &target)?;
 
     let location = paths::locate_engine(&app)?;
-    let validation = config::validate_with_engine(&location, &target, &content).await?;
+    let validation =
+        config::validate_with_engine(&location, &target, &content, state.inner().write_secret())
+            .await?;
     if !validation.valid {
         return Err(AppError::new(
             "CONFIG_INVALID",
@@ -2086,7 +2142,7 @@ mod tests {
         let mut current = settings.get();
         current.config_path = active.map(|path| path.display().to_string());
         settings.set(current).unwrap();
-        let state = AppState::new(paths, settings);
+        let state = AppState::new(paths, settings).unwrap();
         if let Some(active) = active {
             state.approve_config(active).unwrap();
         }
@@ -2459,6 +2515,22 @@ mod tests {
         let redacted = redacted_syntax_error(&error);
         assert!(!redacted.contains("sk-live-123"), "{redacted}");
         assert_eq!(error.code(), "CONFIG_TOML_INVALID");
+    }
+
+    #[test]
+    fn a_session_write_secret_is_random_and_hex_encoded() {
+        let first = generate_write_secret().unwrap();
+        assert_eq!(first.len(), 64);
+        assert!(first
+            .chars()
+            .all(|ch| ch.is_ascii_hexdigit() && !ch.is_ascii_uppercase()));
+        let second = generate_write_secret().unwrap();
+        assert_ne!(first, second);
+
+        let dir = tempfile::tempdir().unwrap();
+        let state = app_state(dir.path(), None);
+        assert_eq!(state.write_secret().len(), 64);
+        assert!(!state.write_secret().is_empty());
     }
 
     #[test]

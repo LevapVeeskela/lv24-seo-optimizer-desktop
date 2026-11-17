@@ -69,15 +69,19 @@ This branch does not bump the desktop version, tag, push or publish. It adds the
 two engine `0.9.0` commands and one external opener:
 
 - `sitemap_submit` builds
-  `sitemap submit --provider bing --config <path> [--url <abs>] --json`. The plan call omits
-  `--allow-write`/`--confirm`; the apply call includes both and the plan token. Without `--url` the
-  engine uses `{project.base_url}/sitemap.xml`. Only `--provider bing` is accepted.
+  `sitemap submit --provider bing --config <path> [--url <abs>] --allow-write [--confirm <token>] --json`.
+  The engine requires the opt-in even for the plan, so the plan call includes `--allow-write` but no
+  token; the apply adds the reviewed token. Without `--url` the engine uses
+  `{project.base_url}/sitemap.xml`. Only `--provider bing` is accepted.
 - `indexnow_submit` builds
-  `indexnow submit --from-sitemap --config <path> [--sitemap-url <abs>] --json`, with the same
-  two-phase gate. The engine reads the sitemap and extracts its URLs.
+  `indexnow submit --from-sitemap --config <path> [--sitemap-url <abs>] --allow-write [--confirm <token>] --json`,
+  with the same two-phase gate. The engine reads the sitemap and extracts its URLs.
 - Both commands pin `--config` to the active workspace because the engine opens its write ledger
-  there. A token without the opt-in, an opt-in without a token, a non-Bing provider or a relative
-  URL is rejected by the shell before the engine starts.
+  there. A token without the opt-in, a missing opt-in, a non-Bing provider or a relative URL is
+  rejected by the shell before the engine starts.
+- The shell generates a fresh 32-byte hex `LV24_SEO_WRITE_SECRET` at startup, keeps it only in Rust
+  memory and sets it on every engine child after `env_clear()`. It is never in argv or a result; a new
+  session invalidates old plan tokens. A CLI user sets the variable themselves.
 - A missing Bing key is shown as `AUTH_REQUIRED` with a Settings hint. A pre-`0.9.0` engine returns
   `CLI_INVALID_JSON`; the panel says the action needs engine `0.9.0` instead of showing a success.
   The branch keeps `MIN_ENGINE_VERSION` at `0.8.0` so it does not invalidate the shipped `0.6.0`

@@ -228,6 +228,9 @@ export class IndexingStore {
     const request: SitemapSubmitArgs = {
       provider: "bing",
       ...(url ? { url } : {}),
+      // The engine's write gate requires the explicit opt-in even for a plan;
+      // no confirm token is sent, so this only mints a reviewed plan.
+      allowWrite: true,
     };
     const result = await this.submitSitemap(request, configPath);
     if (generation !== this.sitemapGeneration) {
@@ -367,6 +370,8 @@ export class IndexingStore {
     this.indexNowError = null;
     const request: IndexNowSubmitArgs = {
       ...(sitemapUrl ? { sitemapUrl } : {}),
+      // Same engine rule as the sitemap plan: opt in, no token yet.
+      allowWrite: true,
     };
     const result = await this.submitIndexNow(request, configPath);
     if (generation !== this.indexNowGeneration) {

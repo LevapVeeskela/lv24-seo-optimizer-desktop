@@ -2,9 +2,10 @@ import { invoke } from "@tauri-apps/api/core";
 import { cliRun, type Envelope } from "@/shared/cli";
 
 /**
- * `sitemap_submit` is two-phase. The plan phase carries neither `allowWrite`
- * nor `confirm`; the apply phase carries both and the token must come from the
- * plan the user just reviewed. `--url` is optional: the engine defaults to
+ * `sitemap_submit` is two-phase. The engine's write gate requires
+ * `allow_write=true` even for the dry run, so the plan carries `allowWrite`
+ * without `confirm` and only mints a token. The apply carries `allowWrite` and
+ * the token from the reviewed plan. `--url` is optional: the engine defaults to
  * `{project.base_url}/sitemap.xml`.
  */
 export interface SitemapSubmitArgs {
@@ -26,8 +27,8 @@ export function runSitemapSubmit(
 
 /**
  * `indexnow_submit --from-sitemap` reads the sitemap in the engine. The
- * optional `sitemapUrl` defaults to `{project.base_url}/sitemap.xml`, and the
- * same plan/apply gate applies.
+ * optional `sitemapUrl` defaults to `{project.base_url}/sitemap.xml`. The plan
+ * sends `allowWrite` without `confirm`; the apply adds the reviewed token.
  */
 export interface IndexNowSubmitArgs {
   sitemapUrl?: string;

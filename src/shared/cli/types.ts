@@ -95,9 +95,9 @@ export interface CliArgs {
   /** `backup_create` only: replace a same-second archive. */
   force?: boolean;
   /**
-   * `backup_restore` and `sitemap_submit`/`indexnow_submit` apply phases and
-   * `schedule_install` write opt-in. The plan and preview phases must omit it;
-   * `schedule_install` is refused without it.
+   * `backup_restore` and the indexing apply phases, plus the indexing plan
+   * phases (the engine requires the opt-in to mint a token), and
+   * `schedule_install`. The plan/preview phases omit `confirm`, not this flag.
    */
   allowWrite?: boolean;
   /** Apply-phase `confirmToken` from the plan; never set on a plan call. */

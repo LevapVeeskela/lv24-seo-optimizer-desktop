@@ -7,7 +7,9 @@ says so.
 `0.6.0` adds exact-process cancellation for the six long local jobs (`run_cancel`) and makes
 `schedule install` append `--allow-write` only after the confirmation dialog, matching engine
 `0.8.0`. The `wave/bing-indexing` working tree adds the gated `sitemap_submit` and `indexnow_submit`
-commands (engine `0.9.0`) and one external-URL allow-list for `open_bing_sitescan`. `0.5.0` added a native archive picker whose result is the only arbitrary backup path
+commands (engine `0.9.0`), one external-URL allow-list for `open_bing_sitescan`, and a per-session
+in-memory write secret. `0.5.0` added a native archive picker whose result is the only arbitrary
+backup path
 `backup restore` may read, a portfolio root that must be a dialog-picked folder, and a two-phase
 restore that writes only with `--allow-write` plus the plan token. `0.4.0` added a native log-file
 picker whose result is the only arbitrary log path `logs analyze` may read, a backup output folder
@@ -89,6 +91,11 @@ engine via `LV24_SEO_BIN`, and provider-side breaches.
 - MCP client installation may return the full merged host configuration, which can contain other
   servers' tokens. The desktop extracts and displays only its own entry and never logs or persists
   the full document.
+- The write-gate secret is separate from provider credentials. The desktop generates 32 random bytes
+  at startup, keeps the 64-character hex value only in Rust memory (zeroized on drop) and passes it
+  as `LV24_SEO_WRITE_SECRET` to every engine child after `env_clear()`. It is absent from argv,
+  settings, logs, diagnostics and result envelopes; a new session invalidates old plan tokens. A CLI
+  user who runs the engine directly sets `LV24_SEO_WRITE_SECRET` in their own environment.
 
 The engine's own secret sources are documented in
 [`docs/configuration.md`](configuration.md#5-secrets). Keychain support requires the engine's
@@ -104,6 +111,8 @@ opt-in file. The desktop must show which source is active.
 - `--config` must be absolute, canonicalized, and selected through the native dialog (or persisted in
   desktop settings). Canonicalization rejects symlink escapes and control characters; the selected
   project is the consent boundary, not a global directory allow-list.
+- The engine child receives the session `LV24_SEO_WRITE_SECRET` through its environment after
+  `env_clear()`, not through argv. The value is generated once per app session and never serialized.
 - The consent is enforced, not implied: `settings_set` accepts a new `configPath` only when the path
   is already active or was returned by `pick_config`, which opens the native dialog and records the
   canonical path for this process. Any other value fails with `PATH_NOT_APPROVED` and the rejected
@@ -114,10 +123,11 @@ opt-in file. The desktop must show which source is active.
 - `--out` and export paths come from a native folder picker or an approved root; they are
   canonicalized before use.
 - Write flags (`--send`, `--allow-write`, confirmation tokens) are never accepted from a read
-  command and require an explicit confirmation dialog naming the target. `sitemap_submit` and
-  `indexnow_submit` accept exactly two shapes: a plan with neither flag nor token, or an apply with
-  both. A half-gated call (`allowWrite` without `confirm`, or a token without the opt-in) is refused
-  before the engine is spawned.
+  command and require an explicit confirmation dialog naming the target. The engine's write gate
+  requires `--allow-write` even for a plan, so `sitemap_submit` and `indexnow_submit` accept exactly
+  two shapes: a plan with the opt-in and no token, or an apply with the opt-in and the token. A token
+  without the opt-in is refused before the engine is spawned. The plan only mints a token; it does
+  not call the provider.
 - **External URL allow-list.** `open_bing_sitescan` is the only command that opens a remote URL. It
   accepts only an absolute `https://` site URL, rejects whitespace, control characters, userinfo and
   malformed hosts, and percent-encodes the value with the RFC 3986 unreserved set. The destination is

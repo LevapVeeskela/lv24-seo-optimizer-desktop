@@ -121,8 +121,8 @@ The command surface is fixed. The generic `cli_run` allow-list is:
 | `backup_restore` | `backup restore --file <zip> --config <path> [--allow-write --confirm <token>] --json` | local write (gated) |
 | `portfolio_list` | `portfolio list --root <dir> [--limit <n>] --json` | read |
 | `schedule_install` | `schedule install --kind weekly\|daily [--cron <expr>] --config <path> --allow-write --json` | host write (gated) |
-| `sitemap_submit` | `sitemap submit --provider bing --config <path> [--url <abs>] [--allow-write --confirm <token>] --json` | provider write (gated) |
-| `indexnow_submit` | `indexnow submit --from-sitemap --config <path> [--sitemap-url <abs>] [--allow-write --confirm <token>] --json` | provider write (gated) |
+| `sitemap_submit` | `sitemap submit --provider bing --config <path> [--url <abs>] --allow-write [--confirm <token>] --json` | provider write (gated) |
+| `indexnow_submit` | `indexnow submit --from-sitemap --config <path> [--sitemap-url <abs>] --allow-write [--confirm <token>] --json` | provider write (gated) |
 
 Dedicated Tauri commands cover the rest: `shell_status`, `config_read`, `config_validate`,
 `config_write`, `config_patch`, `auth_set` (secret over stdin), `auth_delete`, `write_text_file`,
@@ -166,13 +166,21 @@ config and a confirmed `allowWrite=true`; the UI asks for confirmation first, an
 `--allow-write` only then. Without that opt-in the call is refused with `CONFIRM_REQUIRED` before
 the engine is spawned, so a plan-only engine default cannot be bypassed by the webview.
 
-`sitemap_submit` and `indexnow_submit` are provider writes with the same two-shape gate. The plan
-call omits `--allow-write` and `--confirm`; the apply call includes both, and the shell rejects a
-half-gated call before the engine sees it. `--url` / `--sitemap-url` are optional, so the engine
-defaults to `{project.base_url}/sitemap.xml`; when supplied they must be absolute http(s) URLs. The
-shell pins `--config` to the active workspace because the engine opens its write ledger next to that
-config. `sitemap_submit` accepts only `--provider bing`; `indexnow_submit` takes no provider and no
-per-URL list.
+`sitemap_submit` and `indexnow_submit` are provider writes with the same two-shape gate. The engine's
+write gate requires the explicit opt-in even for the plan, so both the plan and the apply call send
+`--allow-write`; only the apply adds `--confirm <token>`. The plan does not write to the provider, it
+mints the reviewed token. `--url` / `--sitemap-url` are optional, so the engine defaults to
+`{project.base_url}/sitemap.xml`; when supplied they must be absolute http(s) URLs. The shell pins
+`--config` to the active workspace because the engine opens its write ledger next to that config.
+`sitemap_submit` accepts only `--provider bing`; `indexnow_submit` takes no provider and no per-URL
+list.
+
+The engine also requires a non-empty `LV24_SEO_WRITE_SECRET`. The desktop generates 32 random bytes
+from the OS CSPRNG once at startup, stores the 64-character hex value in `AppState` in memory only and
+sets it on every engine child after `env_clear()`; it is never an argv element, a settings value, a log
+line or part of a result envelope. The same value is used for the plan and the apply in one session; a
+new session gets a new secret, so a token from an older session is rejected and the UI reviews a fresh
+plan. A CLI user who runs the engine directly sets `LV24_SEO_WRITE_SECRET` in their own environment.
 
 `open_bing_sitescan` is not an engine command. It accepts only an absolute `https://` site URL,
 percent-encodes it with the RFC 3986 unreserved set and opens exactly
