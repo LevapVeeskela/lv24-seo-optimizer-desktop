@@ -11,6 +11,7 @@ import {
   WorkspaceStore,
 } from "@/entities/workspace";
 import { BackupStore } from "@/features/backup/model/BackupStore";
+import { DiagnosticsStore } from "@/features/diagnostics";
 import { IndexingStore } from "@/features/indexing/model/IndexingStore";
 import { ScheduleStore } from "@/features/schedule/model/ScheduleStore";
 import { setDesktopConfigPath } from "@/shared/desktop/settings";
@@ -40,6 +41,7 @@ export class RootStore {
   backup = new BackupStore(undefined, undefined, undefined, this.runs);
   schedule = new ScheduleStore(this.runs);
   indexing = new IndexingStore();
+  diagnostics = new DiagnosticsStore();
   config = new ConfigStore();
   properties = new PropertiesStore();
   workspace = new WorkspaceStore({
@@ -74,6 +76,7 @@ export class RootStore {
         backup: false,
         schedule: false,
         indexing: false,
+        diagnostics: false,
         config: false,
         properties: false,
         workspace: false,
@@ -107,6 +110,7 @@ export class RootStore {
     this.backup.reset();
     this.schedule.reset();
     this.indexing.reset();
+    this.diagnostics.reset();
     this.properties.reset();
   }
 

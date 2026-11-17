@@ -65,5 +65,9 @@ export function tasksAdd(
 export function tasksUpdate(
   args: TasksUpdateArgs,
 ): Promise<Envelope<TaskMutationData>> {
-  return runTaskCommand<TaskMutationData>("tasks_update", args);
+  // `CliArgs.id` is a string shared with the read-only provider ids.
+  return runTaskCommand<TaskMutationData>("tasks_update", {
+    id: String(args.id),
+    state: args.state,
+  });
 }

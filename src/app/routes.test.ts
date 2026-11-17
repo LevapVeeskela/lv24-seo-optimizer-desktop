@@ -37,6 +37,13 @@ describe("routes and navigation", () => {
     expect(en["nav.tasks"].trim()).not.toBe("");
   });
 
+  it("adds the read-only diagnostics screen to the primary navigation", () => {
+    expect(ROUTES.diagnostics).toBe("/diagnostics");
+    const item = NAV_ITEMS.find((entry) => entry.to === ROUTES.diagnostics);
+    expect(item?.key).toBe("nav.diagnostics");
+    expect(en["nav.diagnostics"].trim()).not.toBe("");
+  });
+
   it("keeps onboarding out of the primary navigation", () => {
     expect(NAV_ITEMS.some((item) => item.to === ROUTES.onboarding)).toBe(false);
   });

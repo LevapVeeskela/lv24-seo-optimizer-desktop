@@ -59,6 +59,11 @@ const OnboardingPage = lazy(() =>
     default: module.OnboardingPage,
   })),
 );
+const DiagnosticsPage = lazy(() =>
+  import("@/pages/diagnostics/DiagnosticsPage").then((module) => ({
+    default: module.DiagnosticsPage,
+  })),
+);
 const NotFoundPage = lazy(() =>
   import("@/pages/not-found/NotFoundPage").then((module) => ({
     default: module.NotFoundPage,
@@ -75,9 +80,8 @@ function RouteFallback() {
 }
 
 /**
- * Stable URLs. Diagnostics live inside the configuration screen (doctor,
- * environment, validation), so `/diagnostics` is kept as a redirect for old
- * links instead of duplicating the same controls. Onboarding is reachable by
+ * Stable URLs. Diagnostics is its own read-only screen; the Configuration
+ * screen keeps doctor, environment and validation. Onboarding is reachable by
  * URL and from the dashboard empty state, but stays out of the primary nav.
  * Pages are code-split so the first window paints without loading every
  * settings form.
@@ -97,10 +101,7 @@ export function AppRoutes() {
         <Route path={ROUTES.portfolio} element={<PortfolioPage />} />
         <Route path={ROUTES.integrations} element={<IntegrationsPage />} />
         <Route path={ROUTES.onboarding} element={<OnboardingPage />} />
-        <Route
-          path={ROUTES.diagnostics}
-          element={<Navigate to={ROUTES.config} replace />}
-        />
+        <Route path={ROUTES.diagnostics} element={<DiagnosticsPage />} />
         <Route
           path="/dashboard"
           element={<Navigate to={ROUTES.dashboard} replace />}

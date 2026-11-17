@@ -25,6 +25,24 @@ export const CLI_COMMAND_IDS = [
   "bing_sitemaps",
   "bing_issues",
   "bing_quota",
+  "gsc_inspect",
+  "gsc_sitemaps",
+  "yandex_indexing",
+  "yandex_sitemaps",
+  "yandex_queue",
+  "bing_pages",
+  "bing_traffic",
+  "bing_crawl",
+  "bing_urlinfo",
+  "bing_joins",
+  "metrika_pages",
+  "metrika_goals",
+  "metrika_devices",
+  "metrika_countries",
+  "metrika_engagement",
+  "metrika_bytime",
+  "cwv_audits",
+  "cwv_history",
 ] as const;
 
 export type CliCommandId = (typeof CLI_COMMAND_IDS)[number];
@@ -98,8 +116,11 @@ export interface CliArgs {
   rule?: string;
   /** `tasks_add` only: evidence object, JSON-encoded (16 KiB cap). */
   payload?: Record<string, unknown>;
-  /** `tasks_update` only: positive task id. */
-  id?: number;
+  /**
+   * `tasks_update`: positive task id, sent as a decimal string.
+   * `yandex_sitemaps`/`yandex_queue`: provider sitemap or recrawl task id.
+   */
+  id?: string;
   /** `backup_create` only: replace a same-second archive. */
   force?: boolean;
   /**
@@ -112,6 +133,36 @@ export interface CliArgs {
   confirm?: string;
   /** `portfolio_list` only: absolute projects directory from `pick_directory`. */
   root?: string;
+  /** `gsc_inspect` only: BCP-47 language for localized states. */
+  language?: string;
+  /** `gsc_sitemaps` only: sitemap index URL whose summary is also read. */
+  sitemapIndex?: string;
+  /** `yandex_indexing`/`yandex_queue` only: first day, YYYY-MM-DD. */
+  dateFrom?: string;
+  /** `yandex_indexing`/`yandex_queue` only: last day, YYYY-MM-DD. */
+  dateTo?: string;
+  /** `yandex_sitemaps` only: list the children of one sitemap index. */
+  parentId?: string;
+  /** `yandex_queue` only: first provider row. */
+  offset?: number;
+  /** `bing_joins` only: search query; lists the pages that received impressions. */
+  query?: string;
+  /** `bing_joins` only: page URL or `domain:<host>`; lists its queries. */
+  page?: string;
+  /** `metrika_bytime` only: day, week or month. */
+  group?: "day" | "week" | "month";
+  /** `cwv_audits` only: mobile or desktop. */
+  strategy?: "mobile" | "desktop";
+  /** `cwv_audits` only: Lighthouse categories; one `--category` per entry. */
+  category?: Array<
+    "performance" | "seo" | "accessibility" | "best-practices"
+  >;
+  /** `cwv_history` only: phone, desktop or tablet. */
+  device?: "phone" | "desktop" | "tablet";
+  /** `cwv_history` only: weekly collection periods (1..40). */
+  weeks?: number;
+  /** `cwv_history` only: origin URL (mutually exclusive with `url`). */
+  origin?: string;
 }
 
 export interface CliRunOptions {

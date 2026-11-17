@@ -129,7 +129,7 @@ describe("TasksStore", () => {
       await store.updateState("C:\\work\\seo.toml", TASK!, "in_progress"),
     ).toBe(true);
     expect(runMock).toHaveBeenCalledWith("tasks_update", {
-      args: { id: 7, state: "in_progress" },
+      args: { id: "7", state: "in_progress" },
     });
     expect(store.tasks[0].state).toBe("in_progress");
     expect(store.updatingId).toBeNull();

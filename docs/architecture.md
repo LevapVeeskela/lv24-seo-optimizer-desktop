@@ -9,6 +9,10 @@ in the same release. It keeps the `0.7.0` gated `sitemap_submit`/`indexnow_submi
 `open_bing_sitescan` opener, the `0.6.0` cancellable background runs (`run_cancel`), window-wide run
 banner and the schedule-install `--allow-write` opt-in that engine `0.8.0` requires.
 
+The read-only diagnostics commands listed in section 4 are implemented in this tree for the next
+desktop line and require engine `lv24-seo 0.11.0`; they are not part of the published `0.8.0`
+feature set.
+
 ## 1. Shape
 
 ```
@@ -127,6 +131,24 @@ The command surface is fixed. The generic `cli_run` allow-list is:
 | `bing_sitemaps` | `bing sitemaps --config <path> --json` | read |
 | `bing_issues` | `bing issues --config <path> --json` | read |
 | `bing_quota` | `bing quota --config <path> --json` | read |
+| `gsc_inspect` | `gsc inspect --url <abs> [--language <tag>] --json` | read |
+| `gsc_sitemaps` | `gsc sitemaps [--sitemap-index <abs>] --json` | read |
+| `yandex_indexing` | `yandex indexing [--date-from <d>] [--date-to <d>] --json` | read |
+| `yandex_sitemaps` | `yandex sitemaps [--id <id>] [--parent-id <id>] [--limit <n>] --json` | read |
+| `yandex_queue` | `yandex queue [--id <id>] [--limit <n>] [--offset <n>] [--date-from <d>] [--date-to <d>] --json` | read |
+| `bing_pages` | `bing pages --json` | read |
+| `bing_traffic` | `bing traffic --json` | read |
+| `bing_crawl` | `bing crawl --json` | read |
+| `bing_urlinfo` | `bing urlinfo --url <abs\|domain:host> --json` | read |
+| `bing_joins` | `bing joins [--query <text>] [--page <abs\|domain:host>] --json` | read |
+| `metrika_pages` | `metrika pages --days <n> --lag-days <n> [--limit <n>] --json` | read |
+| `metrika_goals` | `metrika goals --days <n> --lag-days <n> [--limit <n>] --json` | read |
+| `metrika_devices` | `metrika devices --days <n> --lag-days <n> [--limit <n>] --json` | read |
+| `metrika_countries` | `metrika countries --days <n> --lag-days <n> [--limit <n>] --json` | read |
+| `metrika_engagement` | `metrika engagement --days <n> --lag-days <n> --json` | read |
+| `metrika_bytime` | `metrika bytime --days <n> --lag-days <n> [--group day\|week\|month] --json` | read |
+| `cwv_audits` | `cwv audits --url <abs> [--strategy mobile\|desktop] [--category <c> ...] --json` | read |
+| `cwv_history` | `cwv history (--url <abs>\|--origin <abs>) [--device phone\|desktop\|tablet] [--weeks <n>] --json` | read |
 
 Dedicated Tauri commands cover the rest: `shell_status`, `config_read`, `config_validate`,
 `config_write`, `config_patch`, `auth_set` (secret over stdin), `auth_delete`, `write_text_file`,
@@ -194,6 +216,17 @@ code, decoded issue bitmask, in-links) and `GetUrlSubmissionQuota` remaining dai
 quota is always labeled as remaining, never as used or total. `GetFeedDetails` is not a separate
 screen: it only expands sitemap-index children, and the panel states that Bing does not return a
 per-URL error reason or crawl status.
+
+The read-only diagnostics commands (`gsc_inspect`, `gsc_sitemaps`, the three `yandex_*` reads, the
+five `bing_*` reads, the six `metrika_*` reads and the two `cwv_*` reads) share one contract. Each
+has a short argument allow-list; the shell rejects a field that belongs to another command, an
+unknown `group`/`strategy`/`device`/`category` value, `allowWrite`, a confirm token or a raw
+provider option before the engine is spawned. They all require the active project config and are
+never cancellable, because each is a bounded read. The Diagnostics screen renders `meta.total`,
+`meta.truncated`, `meta.data_age_days` and `meta.limitations` for every answer, plus
+`meta.organic_only` and the sampling fields for Metrika. An empty provider answer is shown as
+`no_rows_for_window`, `provider_returned_no_rows` or `low_traffic` — never as a zero row. Bing
+statistics take the site from `providers.bing.site`; the webview cannot pass `--site`.
 
 The engine also requires a non-empty `LV24_SEO_WRITE_SECRET`. The desktop generates 32 random bytes
 from the OS CSPRNG once at startup, stores the 64-character hex value in `AppState` in memory only and
@@ -295,10 +328,11 @@ file. Values are never displayed.
 ## 7. Long-running calls and failure model
 
 Engine calls are synchronous from the UI's perspective. Each command has a fixed timeout: `crawl`
-600 seconds; `stats`, `report weekly`, `report diff`, `sitemap_submit`, `indexnow_submit` and
-`bing_submit` 120 seconds; `bing_sitemaps`, `bing_issues` and `bing_quota` 60 seconds; `version`,
-`config show`, `doctor`, `properties` and `auth status` 30 seconds; `auth set`/`auth delete` 120
-seconds. A timeout kills the exact child process and returns a typed error.
+600 seconds; `stats`, `report weekly`, `report diff`, `sitemap_submit`, `indexnow_submit`,
+`bing_submit` and `cwv_audits` 120 seconds; `bing_sitemaps`, `bing_issues`, `bing_quota` and the other
+read-only diagnostics commands 60 seconds; `version`, `config show`, `doctor`, `properties` and
+`auth status` 30 seconds; `auth set`/`auth delete` 120 seconds. A timeout kills the exact child
+process and returns a typed error.
 
 - **Cancellable long jobs.** `crawl`, `report weekly`, `logs analyze`, `backup create`,
   `backup restore` and `schedule install` may carry a stable run id. The Rust runner registers

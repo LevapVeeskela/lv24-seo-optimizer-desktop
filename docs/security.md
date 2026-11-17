@@ -7,6 +7,13 @@ control is future work, the text says so.
 `0.8.0` adds the gated `bing_submit` command (engine `0.10.0`) with the same write secret and
 plan/apply gate, plus read-only `bing_sitemaps`, `bing_issues` and `bing_quota` commands that accept
 only the active config. It does not change the secret or the write gate.
+The read-only diagnostics surface adds `gsc_inspect`, `gsc_sitemaps`, `yandex_indexing`,
+`yandex_sitemaps`, `yandex_queue`, `bing_pages`, `bing_traffic`, `bing_crawl`, `bing_urlinfo`,
+`bing_joins`, six `metrika_*` reads and `cwv_audits`/`cwv_history`. Each has a short argument
+allow-list, rejects `allowWrite`, a confirm token and every field owned by another command, and
+requires the active project config. They never write provider or local state. They are implemented
+for the next desktop line and require engine `lv24-seo 0.11.0`; they are not part of the published
+`0.8.0` feature set.
 `0.7.0` added the gated `sitemap_submit` and `indexnow_submit` commands (engine `0.9.0`), one
 external-URL allow-list for `open_bing_sitescan`, and a per-session in-memory write secret.
 `0.6.0` added exact-process cancellation for the six long local jobs (`run_cancel`) and made
@@ -137,6 +144,13 @@ opt-in file. The desktop must show which source is active.
   workspace the write gate uses and never create a ledger entry. Their rows are rendered as returned:
   quota is remaining, never used or total; a crawl-issue bitmask is decoded by the UI; no per-URL
   status is invented.
+- **Read-only platform diagnostics.** The Diagnostics screen wires 18 allow-listed reads across GSC,
+  Yandex Webmaster, Bing, Metrika and CWV. The shell rejects `allowWrite`, a confirm token, a raw
+  provider flag and any argument owned by another command; `group`, `strategy`, `device` and
+  `category` are checked against fixed sets in Rust before argv is built. Every command needs the
+  active config, and the webview cannot pass `--site` to a Bing read: the site comes from
+  `providers.bing.site`. The page has no write button, and an empty provider answer is labeled
+  `no_rows_for_window`, `provider_returned_no_rows` or `low_traffic` rather than shown as zero.
 - **External URL allow-list.** `open_bing_sitescan` is the only command that opens a remote URL. It
   accepts only an absolute `https://` site URL, rejects whitespace, control characters, userinfo and
   malformed hosts, and percent-encodes the value with the RFC 3986 unreserved set. The destination is

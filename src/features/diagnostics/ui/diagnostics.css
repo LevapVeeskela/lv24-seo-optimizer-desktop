@@ -1,0 +1,63 @@
+.diagnostics-section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding-top: var(--space-4);
+  border-top: 1px solid var(--border);
+}
+
+.diagnostics-section:first-of-type {
+  padding-top: 0;
+  border-top: none;
+}
+
+.diagnostics-facts {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: var(--space-3);
+}
+
+.diagnostics-fact {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  padding: var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--inset);
+  overflow-wrap: anywhere;
+}
+
+.diagnostics-meta {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.diagnostics-form {
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+}
+
+.diagnostics-categories {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+}
+
+.diagnostics-check {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.diagnostics-inline {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+}
+
+.diagnostics-list {
+  margin: 0;
+  padding-left: 1.2rem;
+  overflow-wrap: anywhere;
+}

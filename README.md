@@ -53,6 +53,13 @@ not want to remember flags:
   `GetUrlSubmissionQuota`. A missing Bing key is reported as `AUTH_REQUIRED` with a Settings hint.
   **Bing Site Scan** has no public API in the official Webmaster method list, so the desktop only
   opens the official page in your default browser — it never claims to start a scan.
+- **Read-only platform diagnostics:** a Diagnostics screen with five tabs — Google URL Inspection
+  and sitemaps, Yandex indexing history/search events/sitemaps/recrawl queue, Bing page, traffic,
+  crawl, URL and query/page-join stats, Metrika pages, goals, devices, countries, engagement and
+  visits over time, and CWV Lighthouse audits plus CrUX weekly history. Every answer shows
+  `total`, truncation, data age, limitations, `organic_only` and sampling fields where relevant; a
+  provider-empty answer is labeled `no_rows_for_window`, `provider_returned_no_rows` or
+  `low_traffic`, never zero-filled. There is no write action on this page.
 - **A report view** for the weekly digest: headline, the sections the engine returns, limitations,
   warnings and the generated local HTML report, which opens in your default browser. It also compares
   the two newest stored snapshots, renders the attributed change digest, shows Core Web Vitals by URL
@@ -86,7 +93,7 @@ The desktop is one surface over the same engine. These are the tools the engine 
 
 | Surface | What you get |
 |---|---|
-| Desktop | Project wizard, dashboard with properties and reporting window, crawl screen, log analysis, task lifecycle, portfolio, weekly report with snapshot comparison, attributed digest and CWV, config editor/diff/validation, recommendations with search/bulk, integrations snippets, Bing sitemap/IndexNow/URL submission actions, read-only Bing sitemap/issue/quota views, Site Scan opener, backup create/restore, host schedule install, agent task queue, signed updates |
+| Desktop | Project wizard, dashboard with properties and reporting window, crawl screen, log analysis, task lifecycle, portfolio, weekly report with snapshot comparison, attributed digest and CWV, read-only platform diagnostics (GSC, Yandex, Bing, Metrika, CWV), config editor/diff/validation, recommendations with search/bulk, integrations snippets, Bing sitemap/IndexNow/URL submission actions, read-only Bing sitemap/issue/quota views, Site Scan opener, backup create/restore, host schedule install, agent task queue, signed updates |
 | CLI | 22 top-level commands (15 groups + 7 commands): `version`, `doctor`, `init`, `properties`, `stats`, `crawl`, `install`, `auth`, `config`, `gsc`, `yandex`, `sitemap`, `indexnow`, `report`, `cwv`, `schedule`, `export`, `logs`, `tasks`, `backup`, `portfolio`, `mcp` |
 | MCP | 12 tools, 3 resources, 3 prompts; no provider writes by default |
 | Skills | `seo-weekly`, `seo-indexing-triage`, `seo-technical-audit` |
@@ -399,6 +406,29 @@ your default browser through the Rust `open_path` command, which requires an abs
 approved root and an allowed extension (`.html` included). The desktop never renders the report HTML
 inside its own webview.
 
+## Diagnostics
+
+The Diagnostics screen is read-only and has five tabs over the same active workspace:
+
+| Tab | Commands | What it shows |
+|---|---|---|
+| Google | `gsc_inspect`, `gsc_sitemaps` | URL verdict, coverage, canonical, crawled-as, last crawl, rich results, referring URLs and the property sitemap list with submitted contents |
+| Yandex | `yandex_indexing`, `yandex_sitemaps`, `yandex_queue` | Daily appeared/removed events, HTTP 2xx–5xx buckets, summary counters, sitemap URL/error counts and the recrawl queue with `meta.total` |
+| Bing | `bing_pages`, `bing_traffic`, `bing_crawl`, `bing_urlinfo`, `bing_joins` | Page and daily traffic rows, six-month crawl buckets, URL index details and query/page joins |
+| Metrika | `metrika_pages`, `metrika_goals`, `metrika_devices`, `metrika_countries`, `metrika_engagement`, `metrika_bytime` | Organic pages, goal reaches/visits/users/conversion, device and country breakdowns, engagement totals and visits over time |
+| Core Web Vitals | `cwv_audits`, `cwv_history` | Lighthouse lab audit rows with scores and savings, and weekly CrUX p75 history for a URL or origin |
+
+Every card renders `meta.total`, `meta.truncated`, `meta.data_age_days` and `meta.limitations`.
+Metrika cards also show `meta.organic_only` and the sampling fields. A provider-empty answer is an
+explicit `no_rows_for_window`, `provider_returned_no_rows` or `low_traffic` state, not a zero row.
+The webview cannot pass `--site` to Bing, `--allow-write` to any of these commands, or an unknown
+`group`, `strategy`, `device` or `category` value; the Rust shell rejects them before spawning the
+engine. Sitemap submission, recrawl requests and URL submission remain on the Indexing screen behind
+their own confirmation dialogs.
+
+These reads ship in engine `lv24-seo 0.11.0`. With an older bundled sidecar the screen shows the
+standard engine-update hint instead of pretending the provider returned nothing.
+
 ## Settings and configuration outputs
 
 Settings are grouped by project, providers, report/delivery, crawl, storage and desktop preferences.
@@ -535,7 +565,7 @@ build from source and sign it with your own certificate. See [`docs/release.md`]
 | Contracts (`config.schema.json`, CLI fixtures incl. `stats`) | generated from `lv24-seo 0.10.0`; drift check in CI |
 | CI (web, Rust matrix, contract check) | active on pull requests and `main`; standard runners only |
 | Manual desktop build workflow (NSIS, DMG, AppImage, deb, rpm) | available; owner-triggered; publish requires the updater key |
-| Tauri command bridge (config read/validate/write/patch, CLI runner incl. `init`, `schedule_print`, `logs_analyze`, `tasks_*`, `backup_create`, `backup_restore`, `portfolio_list`, `schedule_install`, `sitemap_submit`, `indexnow_submit`, `bing_submit`, `bing_sitemaps`, `bing_issues` and `bing_quota`, file and directory pickers, known configs, secrets, diagnostics, `open_bing_sitescan`) | implemented |
+| Tauri command bridge (config read/validate/write/patch, CLI runner incl. `init`, `schedule_print`, `logs_analyze`, `tasks_*`, `backup_create`, `backup_restore`, `portfolio_list`, `schedule_install`, `sitemap_submit`, `indexnow_submit`, `bing_submit`, `bing_sitemaps`, `bing_issues`, `bing_quota`, the 18 read-only diagnostics commands, file and directory pickers, known configs, secrets, diagnostics, `open_bing_sitescan`) | implemented |
 | Bing indexing actions (sitemap submit, IndexNow from sitemap, Site Scan opener) | implemented in `0.7.0`; requires engine `0.9.0`; Site Scan only opens the official page |
 | Bing URL submission and read-only sitemap/issue/quota views | implemented in `0.8.0`; requires engine `0.10.0`; accepted is not indexed |
 | Cancellable background runs (`run_cancel`, run banner) | implemented in `0.6.0` |

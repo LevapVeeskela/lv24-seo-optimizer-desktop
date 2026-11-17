@@ -27,6 +27,7 @@ export const NAV_ITEMS: readonly NavItem[] = [
   { to: ROUTES.crawl, key: "nav.crawl", icon: "crawl" },
   { to: ROUTES.logs, key: "nav.logs", icon: "logs" },
   { to: ROUTES.tasks, key: "nav.tasks", icon: "tasks" },
+  { to: ROUTES.diagnostics, key: "nav.diagnostics", icon: "diagnostics" },
   { to: ROUTES.portfolio, key: "nav.portfolio", icon: "portfolio" },
   { to: ROUTES.integrations, key: "nav.integrations", icon: "integrations" },
   { to: ROUTES.settings, key: "nav.settings", icon: "settings" },

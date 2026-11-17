@@ -92,6 +92,42 @@ pub enum CliCommandId {
     BingIssues,
     /// Read-only Bing URL submission quota.
     BingQuota,
+    /// Read-only Google URL Inspection for one absolute URL.
+    GscInspect,
+    /// Read-only list of the property's Google sitemaps.
+    GscSitemaps,
+    /// Read-only Yandex indexing history, search events and counters.
+    YandexIndexing,
+    /// Read-only Yandex sitemap list.
+    YandexSitemaps,
+    /// Read-only Yandex recrawl queue.
+    YandexQueue,
+    /// Read-only Bing page-level traffic statistics.
+    BingPages,
+    /// Read-only Bing daily traffic statistics.
+    BingTraffic,
+    /// Read-only Bing six-month crawl statistics.
+    BingCrawl,
+    /// Read-only Bing index details for one URL or `domain:` target.
+    BingUrlinfo,
+    /// Read-only Bing query/page join.
+    BingJoins,
+    /// Read-only Yandex Metrika organic landing pages.
+    MetrikaPages,
+    /// Read-only Yandex Metrika configured goals.
+    MetrikaGoals,
+    /// Read-only Yandex Metrika device breakdown.
+    MetrikaDevices,
+    /// Read-only Yandex Metrika country breakdown.
+    MetrikaCountries,
+    /// Read-only Yandex Metrika engagement totals.
+    MetrikaEngagement,
+    /// Read-only Yandex Metrika visits over time.
+    MetrikaBytime,
+    /// Read-only Lighthouse lab audits for one URL.
+    CwvAudits,
+    /// Read-only CrUX weekly p75 history for one URL or origin.
+    CwvHistory,
     /// Internal commands used by dedicated auth commands; they are deliberately
     /// absent from the generic `cli_run` allow-list.
     AuthSet,
@@ -139,6 +175,24 @@ impl CliCommandId {
             "bing_sitemaps" => Ok(Self::BingSitemaps),
             "bing_issues" => Ok(Self::BingIssues),
             "bing_quota" => Ok(Self::BingQuota),
+            "gsc_inspect" => Ok(Self::GscInspect),
+            "gsc_sitemaps" => Ok(Self::GscSitemaps),
+            "yandex_indexing" => Ok(Self::YandexIndexing),
+            "yandex_sitemaps" => Ok(Self::YandexSitemaps),
+            "yandex_queue" => Ok(Self::YandexQueue),
+            "bing_pages" => Ok(Self::BingPages),
+            "bing_traffic" => Ok(Self::BingTraffic),
+            "bing_crawl" => Ok(Self::BingCrawl),
+            "bing_urlinfo" => Ok(Self::BingUrlinfo),
+            "bing_joins" => Ok(Self::BingJoins),
+            "metrika_pages" => Ok(Self::MetrikaPages),
+            "metrika_goals" => Ok(Self::MetrikaGoals),
+            "metrika_devices" => Ok(Self::MetrikaDevices),
+            "metrika_countries" => Ok(Self::MetrikaCountries),
+            "metrika_engagement" => Ok(Self::MetrikaEngagement),
+            "metrika_bytime" => Ok(Self::MetrikaBytime),
+            "cwv_audits" => Ok(Self::CwvAudits),
+            "cwv_history" => Ok(Self::CwvHistory),
             other => Err(AppError::new(
                 "INVALID_COMMAND",
                 format!("command {other:?} is not in the desktop allow-list"),
@@ -151,7 +205,12 @@ impl CliCommandId {
                     "tasks_add", "tasks_update", "backup_create", "backup_restore",
                     "portfolio_list", "schedule_install", "sitemap_submit",
                     "indexnow_submit", "bing_submit", "bing_sitemaps",
-                    "bing_issues", "bing_quota"
+                    "bing_issues", "bing_quota", "gsc_inspect", "gsc_sitemaps",
+                    "yandex_indexing", "yandex_sitemaps", "yandex_queue",
+                    "bing_pages", "bing_traffic", "bing_crawl", "bing_urlinfo",
+                    "bing_joins", "metrika_pages", "metrika_goals",
+                    "metrika_devices", "metrika_countries", "metrika_engagement",
+                    "metrika_bytime", "cwv_audits", "cwv_history"
                 ]
             }))),
         }
@@ -184,9 +243,53 @@ impl CliCommandId {
             Self::BingSitemaps => "bing_sitemaps",
             Self::BingIssues => "bing_issues",
             Self::BingQuota => "bing_quota",
+            Self::GscInspect => "gsc_inspect",
+            Self::GscSitemaps => "gsc_sitemaps",
+            Self::YandexIndexing => "yandex_indexing",
+            Self::YandexSitemaps => "yandex_sitemaps",
+            Self::YandexQueue => "yandex_queue",
+            Self::BingPages => "bing_pages",
+            Self::BingTraffic => "bing_traffic",
+            Self::BingCrawl => "bing_crawl",
+            Self::BingUrlinfo => "bing_urlinfo",
+            Self::BingJoins => "bing_joins",
+            Self::MetrikaPages => "metrika_pages",
+            Self::MetrikaGoals => "metrika_goals",
+            Self::MetrikaDevices => "metrika_devices",
+            Self::MetrikaCountries => "metrika_countries",
+            Self::MetrikaEngagement => "metrika_engagement",
+            Self::MetrikaBytime => "metrika_bytime",
+            Self::CwvAudits => "cwv_audits",
+            Self::CwvHistory => "cwv_history",
             Self::AuthSet => "auth_set",
             Self::AuthLogout => "auth_delete",
         }
+    }
+
+    /// Read-only provider diagnostics. They share one contract: an existing
+    /// project config, no write flag and no confirm token.
+    pub fn is_diagnostics(self) -> bool {
+        matches!(
+            self,
+            Self::GscInspect
+                | Self::GscSitemaps
+                | Self::YandexIndexing
+                | Self::YandexSitemaps
+                | Self::YandexQueue
+                | Self::BingPages
+                | Self::BingTraffic
+                | Self::BingCrawl
+                | Self::BingUrlinfo
+                | Self::BingJoins
+                | Self::MetrikaPages
+                | Self::MetrikaGoals
+                | Self::MetrikaDevices
+                | Self::MetrikaCountries
+                | Self::MetrikaEngagement
+                | Self::MetrikaBytime
+                | Self::CwvAudits
+                | Self::CwvHistory
+        )
     }
 
     /// Commands that need an existing project config file. `version`, `stats`,
@@ -213,6 +316,24 @@ impl CliCommandId {
                 | Self::BingSitemaps
                 | Self::BingIssues
                 | Self::BingQuota
+                | Self::GscInspect
+                | Self::GscSitemaps
+                | Self::YandexIndexing
+                | Self::YandexSitemaps
+                | Self::YandexQueue
+                | Self::BingPages
+                | Self::BingTraffic
+                | Self::BingCrawl
+                | Self::BingUrlinfo
+                | Self::BingJoins
+                | Self::MetrikaPages
+                | Self::MetrikaGoals
+                | Self::MetrikaDevices
+                | Self::MetrikaCountries
+                | Self::MetrikaEngagement
+                | Self::MetrikaBytime
+                | Self::CwvAudits
+                | Self::CwvHistory
         )
     }
 
@@ -246,7 +367,9 @@ impl CliCommandId {
             | Self::BackupCreate
             | Self::SitemapSubmit
             | Self::IndexNowSubmit
-            | Self::BingSubmit => Duration::from_secs(120),
+            | Self::BingSubmit
+            // A Lighthouse run (PSI) can take longer than a plain provider read.
+            | Self::CwvAudits => Duration::from_secs(120),
             // Onboarding may create a directory tree on a slow disk.
             Self::Init => Duration::from_secs(60),
             // A cold PyInstaller sidecar can spend well over ten seconds on
@@ -260,7 +383,24 @@ impl CliCommandId {
             | Self::ScheduleInstall
             | Self::BingSitemaps
             | Self::BingIssues
-            | Self::BingQuota => Duration::from_secs(60),
+            | Self::BingQuota
+            | Self::GscInspect
+            | Self::GscSitemaps
+            | Self::YandexIndexing
+            | Self::YandexSitemaps
+            | Self::YandexQueue
+            | Self::BingPages
+            | Self::BingTraffic
+            | Self::BingCrawl
+            | Self::BingUrlinfo
+            | Self::BingJoins
+            | Self::MetrikaPages
+            | Self::MetrikaGoals
+            | Self::MetrikaDevices
+            | Self::MetrikaCountries
+            | Self::MetrikaEngagement
+            | Self::MetrikaBytime
+            | Self::CwvHistory => Duration::from_secs(60),
             Self::ConfigShow
             | Self::Doctor
             | Self::Properties
@@ -342,8 +482,9 @@ pub struct CliArgs {
     pub rule: Option<String>,
     /// `tasks_add` only: evidence object, encoded as compact JSON (16 KiB cap).
     pub payload: Option<Value>,
-    /// `tasks_update` only: positive task id.
-    pub id: Option<i64>,
+    /// `tasks_update`: positive task id. `yandex_sitemaps`/`yandex_queue`:
+    /// provider sitemap or recrawl task id (a string, never a flag).
+    pub id: Option<String>,
     /// `backup_create` only: replace a same-second archive.
     pub force: Option<bool>,
     /// `backup_restore` apply phase and `schedule_install` write opt-in. The
@@ -353,6 +494,34 @@ pub struct CliArgs {
     pub confirm: Option<String>,
     /// `portfolio_list` only: absolute directory picked in the native dialog.
     pub root: Option<String>,
+    /// `gsc_inspect` only: BCP-47 language for localized states.
+    pub language: Option<String>,
+    /// `gsc_sitemaps` only: sitemap index URL whose summary is also read.
+    pub sitemap_index: Option<String>,
+    /// `yandex_indexing`/`yandex_queue` only: first day, YYYY-MM-DD.
+    pub date_from: Option<String>,
+    /// `yandex_indexing`/`yandex_queue` only: last day, YYYY-MM-DD.
+    pub date_to: Option<String>,
+    /// `yandex_sitemaps` only: list the children of one sitemap index.
+    pub parent_id: Option<String>,
+    /// `yandex_queue` only: first provider row.
+    pub offset: Option<u32>,
+    /// `bing_joins` only: search query; lists the pages that received impressions.
+    pub query: Option<String>,
+    /// `bing_joins` only: page URL or `domain:<host>`; lists its queries.
+    pub page: Option<String>,
+    /// `metrika_bytime` only: day, week or month.
+    pub group: Option<String>,
+    /// `cwv_audits` only: mobile or desktop.
+    pub strategy: Option<String>,
+    /// `cwv_audits` only: Lighthouse categories; one `--category` per entry.
+    pub category: Option<Vec<String>>,
+    /// `cwv_history` only: phone, desktop or tablet.
+    pub device: Option<String>,
+    /// `cwv_history` only: weekly collection periods (1..=40).
+    pub weeks: Option<u32>,
+    /// `cwv_history` only: origin URL (mutually exclusive with `url`).
+    pub origin: Option<String>,
 }
 
 impl CliArgs {
@@ -406,6 +575,26 @@ impl CliArgs {
     /// other command rejects it instead of silently ignoring a URL.
     fn has_indexing_args(&self) -> bool {
         self.sitemap_url.is_some()
+    }
+
+    /// Fields that only the read-only diagnostics commands accept. The shared
+    /// fields (`days`, `lagDays`, `limit`, `url`, `id`) are validated per
+    /// command; every other field is rejected here before the match.
+    fn has_diagnostic_args(&self) -> bool {
+        self.language.is_some()
+            || self.sitemap_index.is_some()
+            || self.date_from.is_some()
+            || self.date_to.is_some()
+            || self.parent_id.is_some()
+            || self.offset.is_some()
+            || self.query.is_some()
+            || self.page.is_some()
+            || self.group.is_some()
+            || self.strategy.is_some()
+            || self.category.is_some()
+            || self.device.is_some()
+            || self.weeks.is_some()
+            || self.origin.is_some()
     }
 }
 
@@ -626,9 +815,14 @@ pub fn build_argv(command: CliCommandId, args: &CliArgs) -> AppResult<Vec<String
             argv
         }
         CliCommandId::TasksUpdate => {
-            let id = args.id.filter(|value| *value > 0).ok_or_else(|| {
-                AppError::new("INVALID_ARGUMENT", "id must be a positive integer")
-            })?;
+            let id = args
+                .id
+                .as_deref()
+                .and_then(|raw| raw.trim().parse::<i64>().ok())
+                .filter(|value| *value > 0)
+                .ok_or_else(|| {
+                    AppError::new("INVALID_ARGUMENT", "id must be a positive integer")
+                })?;
             let state = normalize_task_state(args.state.as_deref().unwrap_or(""))?;
             vec![
                 "tasks".into(),
@@ -781,6 +975,155 @@ pub fn build_argv(command: CliCommandId, args: &CliArgs) -> AppResult<Vec<String
         CliCommandId::BingSitemaps => bing_read_argv("sitemaps", args)?,
         CliCommandId::BingIssues => bing_read_argv("issues", args)?,
         CliCommandId::BingQuota => bing_read_argv("quota", args)?,
+        CliCommandId::GscInspect => {
+            let url = validate_http_url(required_arg(args.url.as_deref(), "url")?, "url")?;
+            let mut argv = vec!["gsc".into(), "inspect".into(), "--url".into(), url.into()];
+            if let Some(language) = args.language.as_deref() {
+                argv.push("--language".into());
+                argv.push(normalize_language(language)?);
+            }
+            argv.push("--json".into());
+            argv
+        }
+        CliCommandId::GscSitemaps => {
+            let mut argv = vec!["gsc".into(), "sitemaps".into()];
+            if let Some(index) = args.sitemap_index.as_deref() {
+                argv.push("--sitemap-index".into());
+                argv.push(validate_http_url(index, "sitemap index")?.into());
+            }
+            argv.push("--json".into());
+            argv
+        }
+        CliCommandId::YandexIndexing => {
+            let mut argv = vec!["yandex".into(), "indexing".into()];
+            append_date_window(&mut argv, args)?;
+            argv.push("--json".into());
+            argv
+        }
+        CliCommandId::YandexSitemaps => {
+            let mut argv = vec!["yandex".into(), "sitemaps".into()];
+            if let Some(id) = args.id.as_deref() {
+                argv.push("--id".into());
+                argv.push(normalize_provider_id(id, "id")?);
+            }
+            if let Some(parent) = args.parent_id.as_deref() {
+                argv.push("--parent-id".into());
+                argv.push(normalize_provider_id(parent, "parentId")?);
+            }
+            if let Some(limit) = args.limit {
+                argv.push("--limit".into());
+                argv.push(limit.to_string());
+            }
+            argv.push("--json".into());
+            argv
+        }
+        CliCommandId::YandexQueue => {
+            let mut argv = vec!["yandex".into(), "queue".into()];
+            if let Some(id) = args.id.as_deref() {
+                argv.push("--id".into());
+                argv.push(normalize_provider_id(id, "id")?);
+            }
+            if let Some(limit) = args.limit {
+                argv.push("--limit".into());
+                argv.push(limit.to_string());
+            }
+            if let Some(offset) = args.offset {
+                argv.push("--offset".into());
+                argv.push(offset.to_string());
+            }
+            append_date_window(&mut argv, args)?;
+            argv.push("--json".into());
+            argv
+        }
+        CliCommandId::BingPages => bing_stats_argv("pages"),
+        CliCommandId::BingTraffic => bing_stats_argv("traffic"),
+        CliCommandId::BingCrawl => bing_stats_argv("crawl"),
+        CliCommandId::BingUrlinfo => {
+            let url = validate_bing_target(required_arg(args.url.as_deref(), "url")?, "url")?;
+            vec![
+                "bing".into(),
+                "urlinfo".into(),
+                "--url".into(),
+                url,
+                "--json".into(),
+            ]
+        }
+        CliCommandId::BingJoins => {
+            let mut argv = vec!["bing".into(), "joins".into()];
+            if let Some(query) = args.query.as_deref() {
+                argv.push("--query".into());
+                argv.push(normalize_query_text(query)?);
+            }
+            if let Some(page) = args.page.as_deref() {
+                argv.push("--page".into());
+                argv.push(validate_bing_target(page, "page")?);
+            }
+            argv.push("--json".into());
+            argv
+        }
+        CliCommandId::MetrikaPages => metrika_read_argv("pages", args, true)?,
+        CliCommandId::MetrikaGoals => metrika_read_argv("goals", args, true)?,
+        CliCommandId::MetrikaDevices => metrika_read_argv("devices", args, true)?,
+        CliCommandId::MetrikaCountries => metrika_read_argv("countries", args, true)?,
+        CliCommandId::MetrikaEngagement => metrika_read_argv("engagement", args, false)?,
+        CliCommandId::MetrikaBytime => {
+            let mut argv = metrika_read_argv("bytime", args, false)?;
+            // `--group` goes before the trailing `--json`.
+            if let Some(group) = args.group.as_deref() {
+                let json = argv.pop();
+                argv.push("--group".into());
+                argv.push(normalize_metrika_group(group)?);
+                if let Some(json) = json {
+                    argv.push(json);
+                }
+            }
+            argv
+        }
+        CliCommandId::CwvAudits => {
+            let url = validate_http_url(required_arg(args.url.as_deref(), "url")?, "url")?;
+            let mut argv = vec!["cwv".into(), "audits".into(), "--url".into(), url.into()];
+            if let Some(strategy) = args.strategy.as_deref() {
+                argv.push("--strategy".into());
+                argv.push(normalize_cwv_strategy(strategy)?);
+            }
+            for category in normalize_cwv_categories(args.category.as_deref())? {
+                argv.push("--category".into());
+                argv.push(category);
+            }
+            argv.push("--json".into());
+            argv
+        }
+        CliCommandId::CwvHistory => {
+            let url = args
+                .url
+                .as_deref()
+                .map(|value| validate_http_url(value, "url"))
+                .transpose()?;
+            let origin = args
+                .origin
+                .as_deref()
+                .map(|value| validate_http_url(value, "origin"))
+                .transpose()?;
+            let mut argv = vec!["cwv".into(), "history".into()];
+            if let Some(url) = url {
+                argv.push("--url".into());
+                argv.push(url.into());
+            }
+            if let Some(origin) = origin {
+                argv.push("--origin".into());
+                argv.push(origin.into());
+            }
+            if let Some(device) = args.device.as_deref() {
+                argv.push("--device".into());
+                argv.push(normalize_cwv_device(device)?);
+            }
+            if let Some(weeks) = args.weeks {
+                argv.push("--weeks".into());
+                argv.push(weeks.to_string());
+            }
+            argv.push("--json".into());
+            argv
+        }
     };
     Ok(argv)
 }
@@ -796,6 +1139,300 @@ fn bing_read_argv(subcommand: &str, args: &CliArgs) -> AppResult<Vec<String>> {
         config.display().to_string(),
         "--json".into(),
     ])
+}
+
+/// Bing statistics reads take the site from `providers.bing.site`; the desktop
+/// never sends `--site`, so one workspace cannot read another site's rows.
+fn bing_stats_argv(subcommand: &str) -> Vec<String> {
+    vec!["bing".into(), subcommand.into(), "--json".into()]
+}
+
+/// Every `metrika` read uses the same window flags; `limit` is omitted for the
+/// commands whose engine signature does not accept it.
+fn metrika_read_argv(
+    subcommand: &str,
+    args: &CliArgs,
+    include_limit: bool,
+) -> AppResult<Vec<String>> {
+    let days = args.days.unwrap_or(DEFAULT_DAYS).to_string();
+    let lag_days = args.lag_days.unwrap_or(DEFAULT_LAG_DAYS).to_string();
+    let mut argv = vec![
+        "metrika".into(),
+        subcommand.into(),
+        "--days".into(),
+        days,
+        "--lag-days".into(),
+        lag_days,
+    ];
+    if include_limit {
+        if let Some(limit) = args.limit {
+            argv.push("--limit".into());
+            argv.push(limit.to_string());
+        }
+    }
+    argv.push("--json".into());
+    Ok(argv)
+}
+
+fn append_date_window(argv: &mut Vec<String>, args: &CliArgs) -> AppResult<()> {
+    if let Some(from) = args.date_from.as_deref() {
+        argv.push("--date-from".into());
+        argv.push(normalize_iso_date(from, "dateFrom")?.into());
+    }
+    if let Some(to) = args.date_to.as_deref() {
+        argv.push("--date-to".into());
+        argv.push(normalize_iso_date(to, "dateTo")?.into());
+    }
+    Ok(())
+}
+
+fn required_arg<'a>(value: Option<&'a str>, label: &str) -> AppResult<&'a str> {
+    value
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| AppError::new("INVALID_ARGUMENT", format!("{label} is required")))
+}
+
+/// BCP-47 is broader than the engine needs; the shell keeps the value to
+/// language subtags so nothing but a locale can reach argv.
+fn normalize_language(raw: &str) -> AppResult<String> {
+    let value = raw.trim();
+    if value.len() < 2 || value.len() > 35 {
+        return Err(AppError::new(
+            "INVALID_ARGUMENT",
+            "language must be a 2..35 character BCP-47 tag",
+        ));
+    }
+    if !value.starts_with(|ch: char| ch.is_ascii_alphabetic())
+        || value.ends_with('-')
+        || value.contains("--")
+        || !value
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || ch == '-')
+    {
+        return Err(AppError::new(
+            "INVALID_ARGUMENT",
+            format!("language {raw:?} is not a BCP-47 language tag"),
+        ));
+    }
+    Ok(value.to_string())
+}
+
+fn normalize_iso_date<'a>(raw: &'a str, label: &str) -> AppResult<&'a str> {
+    let value = raw.trim();
+    if !is_iso_date(value) {
+        return Err(AppError::new(
+            "INVALID_ARGUMENT",
+            format!("{label} must be YYYY-MM-DD, got {raw:?}"),
+        ));
+    }
+    Ok(value)
+}
+
+/// Provider ids (sitemap, parent sitemap, recrawl task) are opaque strings.
+/// The shell only enforces a bounded, option-safe charset.
+fn normalize_provider_id(raw: &str, label: &str) -> AppResult<String> {
+    let value = raw.trim();
+    if value.is_empty() {
+        return Err(AppError::new(
+            "INVALID_ARGUMENT",
+            format!("{label} is empty"),
+        ));
+    }
+    if value.len() > 128 || value.starts_with('-') {
+        return Err(AppError::new(
+            "INVALID_ARGUMENT",
+            format!("{label} must be at most 128 characters and must not start with '-'"),
+        ));
+    }
+    if value
+        .chars()
+        .any(|ch| ch.is_control() || ch.is_whitespace())
+    {
+        return Err(AppError::new(
+            "INVALID_ARGUMENT",
+            format!("{label} must not contain whitespace or control characters"),
+        ));
+    }
+    Ok(value.to_string())
+}
+
+/// `bing joins --query` is free text, so spaces are allowed; control
+/// characters and an option prefix are not.
+fn normalize_query_text(raw: &str) -> AppResult<String> {
+    let value = raw.trim();
+    if value.is_empty() {
+        return Err(AppError::new("INVALID_ARGUMENT", "query is empty"));
+    }
+    if value.len() > 512 {
+        return Err(AppError::new(
+            "INVALID_ARGUMENT",
+            "query is longer than 512 characters",
+        ));
+    }
+    if value.starts_with('-') || value.chars().any(char::is_control) {
+        return Err(AppError::new(
+            "INVALID_ARGUMENT",
+            "query must not start with '-' or contain control characters",
+        ));
+    }
+    Ok(value.to_string())
+}
+
+/// Bing's `GetUrlInfo`/`GetPageQueryStats` accept an absolute URL or
+/// `domain:<host>`; nothing else.
+fn validate_bing_target(raw: &str, label: &str) -> AppResult<String> {
+    let value = raw.trim();
+    if let Some(host) = value.strip_prefix("domain:") {
+        if !is_host_like(host) {
+            return Err(AppError::new(
+                "INVALID_ARGUMENT",
+                format!("{label} has an invalid domain target: {raw:?}"),
+            ));
+        }
+        return Ok(format!("domain:{}", host.to_ascii_lowercase()));
+    }
+    validate_http_url(value, label).map(str::to_string)
+}
+
+const METRIKA_GROUPS: &[&str] = &["day", "week", "month"];
+const CWV_STRATEGIES: &[&str] = &["mobile", "desktop"];
+const CWV_DEVICES: &[&str] = &["phone", "desktop", "tablet"];
+const CWV_CATEGORIES: &[&str] = &["performance", "seo", "accessibility", "best-practices"];
+
+fn normalize_metrika_group(raw: &str) -> AppResult<String> {
+    let value = raw.trim().to_ascii_lowercase();
+    if METRIKA_GROUPS.contains(&value.as_str()) {
+        Ok(value)
+    } else {
+        Err(AppError::new(
+            "INVALID_ARGUMENT",
+            format!("group {raw:?} is not a Metrika interval"),
+        )
+        .with_details(serde_json::json!({ "allowed": METRIKA_GROUPS })))
+    }
+}
+
+fn normalize_cwv_strategy(raw: &str) -> AppResult<String> {
+    let value = raw.trim().to_ascii_lowercase();
+    if CWV_STRATEGIES.contains(&value.as_str()) {
+        Ok(value)
+    } else {
+        Err(AppError::new(
+            "INVALID_ARGUMENT",
+            format!("strategy {raw:?} is not supported by Lighthouse"),
+        )
+        .with_details(serde_json::json!({ "allowed": CWV_STRATEGIES })))
+    }
+}
+
+fn normalize_cwv_device(raw: &str) -> AppResult<String> {
+    let value = raw.trim().to_ascii_lowercase();
+    if CWV_DEVICES.contains(&value.as_str()) {
+        Ok(value)
+    } else {
+        Err(AppError::new(
+            "INVALID_ARGUMENT",
+            format!("device {raw:?} is not a CrUX form factor"),
+        )
+        .with_details(serde_json::json!({ "allowed": CWV_DEVICES })))
+    }
+}
+
+fn normalize_cwv_categories(values: Option<&[String]>) -> AppResult<Vec<String>> {
+    let mut categories: Vec<String> = Vec::new();
+    for raw in values.unwrap_or_default() {
+        let value = raw.trim().to_ascii_lowercase();
+        if !CWV_CATEGORIES.contains(&value.as_str()) {
+            return Err(AppError::new(
+                "INVALID_ARGUMENT",
+                format!("category {raw:?} is not a Lighthouse category"),
+            )
+            .with_details(serde_json::json!({ "allowed": CWV_CATEGORIES })));
+        }
+        if !categories.contains(&value) {
+            categories.push(value);
+        }
+    }
+    Ok(categories)
+}
+
+/// Every argument the webview actually set. The diagnostics commands accept a
+/// short per-command allow-list, so a field that belongs to another command is
+/// rejected instead of being silently ignored.
+fn set_arg_fields(args: &CliArgs) -> BTreeSet<&'static str> {
+    let mut fields = BTreeSet::new();
+    let mut add = |name: &'static str, present: bool| {
+        if present {
+            fields.insert(name);
+        }
+    };
+    add("days", args.days.is_some());
+    add("lagDays", args.lag_days.is_some());
+    add("base", args.base.is_some());
+    add("head", args.head.is_some());
+    add("start", args.start.is_some());
+    add("maxUrls", args.max_urls.is_some());
+    add("out", args.out.is_some());
+    add("provider", args.provider.is_some());
+    add("property", args.property.is_some());
+    add("configPath", args.config_path.is_some());
+    add("dataDir", args.data_dir.is_some());
+    add("cron", args.cron.is_some());
+    add("target", args.target.is_some());
+    add("file", args.file.is_some());
+    add("bot", args.bot.is_some());
+    add("kind", args.kind.is_some());
+    add("state", args.state.is_some());
+    add("limit", args.limit.is_some());
+    add("url", args.url.is_some());
+    add("urls", args.urls.is_some());
+    add("fromSitemap", args.from_sitemap.is_some());
+    add("sitemapUrl", args.sitemap_url.is_some());
+    add("rule", args.rule.is_some());
+    add("payload", args.payload.is_some());
+    add("id", args.id.is_some());
+    add("force", args.force.is_some());
+    add("allowWrite", args.allow_write.is_some());
+    add("confirm", args.confirm.is_some());
+    add("root", args.root.is_some());
+    add("language", args.language.is_some());
+    add("sitemapIndex", args.sitemap_index.is_some());
+    add("dateFrom", args.date_from.is_some());
+    add("dateTo", args.date_to.is_some());
+    add("parentId", args.parent_id.is_some());
+    add("offset", args.offset.is_some());
+    add("query", args.query.is_some());
+    add("page", args.page.is_some());
+    add("group", args.group.is_some());
+    add("strategy", args.strategy.is_some());
+    add("category", args.category.is_some());
+    add("device", args.device.is_some());
+    add("weeks", args.weeks.is_some());
+    add("origin", args.origin.is_some());
+    fields
+}
+
+fn reject_unexpected_args(
+    command: CliCommandId,
+    args: &CliArgs,
+    allowed: &[&str],
+) -> AppResult<()> {
+    let allowed: BTreeSet<&str> = allowed.iter().copied().collect();
+    let fields = set_arg_fields(args);
+    let unexpected: Vec<&str> = fields.difference(&allowed).copied().collect();
+    if unexpected.is_empty() {
+        return Ok(());
+    }
+    Err(AppError::new(
+        "INVALID_ARGUMENT",
+        format!("{} does not accept {}", command.id(), unexpected.join(", ")),
+    )
+    .with_details(serde_json::json!({
+        "command": command.id(),
+        "unexpected": unexpected,
+        "allowed": allowed,
+    })))
 }
 
 /// The write opt-in and token are appended only when the UI confirmed the
@@ -840,6 +1477,15 @@ fn validate_args(command: CliCommandId, args: &CliArgs) -> AppResult<()> {
     // them as the command surface grows.
     if command != CliCommandId::BingSubmit && (args.urls.is_some() || args.from_sitemap.is_some()) {
         return reject("urls/fromSitemap");
+    }
+    // Diagnostics fields belong to the read-only platform reads. Every other
+    // command rejects them here, so a new field cannot be ignored silently.
+    if !command.is_diagnostics() && args.has_diagnostic_args() {
+        return reject("diagnostic arguments");
+    }
+
+    if command.is_diagnostics() {
+        return validate_diagnostics_args(command, args);
     }
 
     match command {
@@ -1137,7 +1783,12 @@ fn validate_args(command: CliCommandId, args: &CliArgs) -> AppResult<()> {
             {
                 return reject("an argument other than id/state");
             }
-            if args.id.is_none_or(|value| value <= 0) {
+            if args
+                .id
+                .as_deref()
+                .and_then(|raw| raw.trim().parse::<i64>().ok())
+                .is_none_or(|value| value <= 0)
+            {
                 return Err(AppError::new(
                     "INVALID_ARGUMENT",
                     "id must be a positive integer",
@@ -1509,6 +2160,200 @@ fn validate_args(command: CliCommandId, args: &CliArgs) -> AppResult<()> {
                 )
             })?;
             validate_config_path(config)?;
+        }
+        // Every diagnostics command returned through `validate_diagnostics_args`
+        // above; listing them here keeps this match exhaustive without a
+        // catch-all that would hide a future variant.
+        CliCommandId::GscInspect
+        | CliCommandId::GscSitemaps
+        | CliCommandId::YandexIndexing
+        | CliCommandId::YandexSitemaps
+        | CliCommandId::YandexQueue
+        | CliCommandId::BingPages
+        | CliCommandId::BingTraffic
+        | CliCommandId::BingCrawl
+        | CliCommandId::BingUrlinfo
+        | CliCommandId::BingJoins
+        | CliCommandId::MetrikaPages
+        | CliCommandId::MetrikaGoals
+        | CliCommandId::MetrikaDevices
+        | CliCommandId::MetrikaCountries
+        | CliCommandId::MetrikaEngagement
+        | CliCommandId::MetrikaBytime
+        | CliCommandId::CwvAudits
+        | CliCommandId::CwvHistory => {
+            unreachable!("diagnostics are validated before the command match")
+        }
+    }
+    Ok(())
+}
+
+/// Read-only platform diagnostics. Each command has a short allow-list, and a
+/// field that belongs to another command is rejected instead of being ignored.
+/// No write flag, confirm token or arbitrary provider option is accepted.
+fn validate_diagnostics_args(command: CliCommandId, args: &CliArgs) -> AppResult<()> {
+    match command {
+        CliCommandId::GscInspect => {
+            reject_unexpected_args(command, args, &["url", "language"])?;
+            validate_http_url(required_arg(args.url.as_deref(), "url")?, "url")?;
+            if let Some(language) = args.language.as_deref() {
+                normalize_language(language)?;
+            }
+        }
+        CliCommandId::GscSitemaps => {
+            reject_unexpected_args(command, args, &["sitemapIndex"])?;
+            if let Some(index) = args.sitemap_index.as_deref() {
+                validate_http_url(index, "sitemap index")?;
+            }
+        }
+        CliCommandId::YandexIndexing => {
+            reject_unexpected_args(command, args, &["dateFrom", "dateTo"])?;
+            validate_date_window(args)?;
+        }
+        CliCommandId::YandexSitemaps => {
+            reject_unexpected_args(command, args, &["id", "parentId", "limit"])?;
+            if let Some(id) = args.id.as_deref() {
+                normalize_provider_id(id, "id")?;
+            }
+            if let Some(parent) = args.parent_id.as_deref() {
+                normalize_provider_id(parent, "parentId")?;
+            }
+            if args.id.is_some() && args.parent_id.is_some() {
+                return Err(AppError::new(
+                    "INVALID_ARGUMENT",
+                    "id and parentId cannot be combined",
+                ));
+            }
+            if let Some(limit) = args.limit {
+                validate_range(limit, 1, 500, "limit")?;
+            }
+        }
+        CliCommandId::YandexQueue => {
+            reject_unexpected_args(
+                command,
+                args,
+                &["id", "limit", "offset", "dateFrom", "dateTo"],
+            )?;
+            if let Some(id) = args.id.as_deref() {
+                normalize_provider_id(id, "id")?;
+                if args.limit.is_some()
+                    || args.offset.is_some()
+                    || args.date_from.is_some()
+                    || args.date_to.is_some()
+                {
+                    return Err(AppError::new(
+                        "INVALID_ARGUMENT",
+                        "a single recrawl task (id) cannot be combined with limit/offset/date window",
+                    ));
+                }
+            }
+            if let Some(limit) = args.limit {
+                validate_range(limit, 1, 500, "limit")?;
+            }
+            if let Some(offset) = args.offset {
+                validate_range(offset, 0, 1_000_000, "offset")?;
+            }
+            validate_date_window(args)?;
+        }
+        CliCommandId::BingPages | CliCommandId::BingTraffic | CliCommandId::BingCrawl => {
+            reject_unexpected_args(command, args, &[])?;
+        }
+        CliCommandId::BingUrlinfo => {
+            reject_unexpected_args(command, args, &["url"])?;
+            validate_bing_target(required_arg(args.url.as_deref(), "url")?, "url")?;
+        }
+        CliCommandId::BingJoins => {
+            reject_unexpected_args(command, args, &["query", "page"])?;
+            if args.query.is_none() && args.page.is_none() {
+                return Err(AppError::new(
+                    "INVALID_ARGUMENT",
+                    "bing_joins requires query and/or page",
+                ));
+            }
+            if let Some(query) = args.query.as_deref() {
+                normalize_query_text(query)?;
+            }
+            if let Some(page) = args.page.as_deref() {
+                validate_bing_target(page, "page")?;
+            }
+        }
+        CliCommandId::MetrikaPages
+        | CliCommandId::MetrikaGoals
+        | CliCommandId::MetrikaDevices
+        | CliCommandId::MetrikaCountries => {
+            reject_unexpected_args(command, args, &["days", "lagDays", "limit"])?;
+            validate_days_window(args)?;
+            if let Some(limit) = args.limit {
+                validate_range(limit, 1, 500, "limit")?;
+            }
+        }
+        CliCommandId::MetrikaEngagement => {
+            reject_unexpected_args(command, args, &["days", "lagDays"])?;
+            validate_days_window(args)?;
+        }
+        CliCommandId::MetrikaBytime => {
+            reject_unexpected_args(command, args, &["days", "lagDays", "group"])?;
+            validate_days_window(args)?;
+            if let Some(group) = args.group.as_deref() {
+                normalize_metrika_group(group)?;
+            }
+        }
+        CliCommandId::CwvAudits => {
+            reject_unexpected_args(command, args, &["url", "strategy", "category"])?;
+            validate_http_url(required_arg(args.url.as_deref(), "url")?, "url")?;
+            if let Some(strategy) = args.strategy.as_deref() {
+                normalize_cwv_strategy(strategy)?;
+            }
+            normalize_cwv_categories(args.category.as_deref())?;
+        }
+        CliCommandId::CwvHistory => {
+            reject_unexpected_args(command, args, &["url", "origin", "device", "weeks"])?;
+            if args.url.is_some() == args.origin.is_some() {
+                return Err(AppError::new(
+                    "INVALID_ARGUMENT",
+                    "cwv_history takes either url or origin, not both and not neither",
+                ));
+            }
+            if let Some(url) = args.url.as_deref() {
+                validate_http_url(url, "url")?;
+            }
+            if let Some(origin) = args.origin.as_deref() {
+                validate_http_url(origin, "origin")?;
+            }
+            if let Some(device) = args.device.as_deref() {
+                normalize_cwv_device(device)?;
+            }
+            if let Some(weeks) = args.weeks {
+                validate_range(weeks, 1, 40, "weeks")?;
+            }
+        }
+        _ => unreachable!("only diagnostics commands reach this validator"),
+    }
+    Ok(())
+}
+
+fn validate_days_window(args: &CliArgs) -> AppResult<()> {
+    validate_range(args.days.unwrap_or(DEFAULT_DAYS), 1, 3660, "days")?;
+    validate_range(args.lag_days.unwrap_or(DEFAULT_LAG_DAYS), 0, 30, "lagDays")
+}
+
+fn validate_date_window(args: &CliArgs) -> AppResult<()> {
+    let from = args
+        .date_from
+        .as_deref()
+        .map(|value| normalize_iso_date(value, "dateFrom"))
+        .transpose()?;
+    let to = args
+        .date_to
+        .as_deref()
+        .map(|value| normalize_iso_date(value, "dateTo"))
+        .transpose()?;
+    if let (Some(from), Some(to)) = (from, to) {
+        if from > to {
+            return Err(AppError::new(
+                "INVALID_ARGUMENT",
+                format!("dateFrom {from} is after dateTo {to}"),
+            ));
         }
     }
     Ok(())
@@ -3208,6 +4053,24 @@ mod tests {
             "bing_sitemaps",
             "bing_issues",
             "bing_quota",
+            "gsc_inspect",
+            "gsc_sitemaps",
+            "yandex_indexing",
+            "yandex_sitemaps",
+            "yandex_queue",
+            "bing_pages",
+            "bing_traffic",
+            "bing_crawl",
+            "bing_urlinfo",
+            "bing_joins",
+            "metrika_pages",
+            "metrika_goals",
+            "metrika_devices",
+            "metrika_countries",
+            "metrika_engagement",
+            "metrika_bytime",
+            "cwv_audits",
+            "cwv_history",
         ] {
             assert_eq!(CliCommandId::parse(id).unwrap().id(), id);
         }
@@ -3652,7 +4515,7 @@ mod tests {
         let argv = build_argv(
             CliCommandId::TasksUpdate,
             &CliArgs {
-                id: Some(42),
+                id: Some("42".into()),
                 state: Some("verified".into()),
                 ..CliArgs::default()
             },
@@ -3671,7 +4534,7 @@ mod tests {
             (
                 "zero",
                 CliArgs {
-                    id: Some(0),
+                    id: Some("0".into()),
                     state: Some("open".into()),
                     ..CliArgs::default()
                 },
@@ -3679,7 +4542,7 @@ mod tests {
             (
                 "negative",
                 CliArgs {
-                    id: Some(-1),
+                    id: Some("-1".into()),
                     state: Some("open".into()),
                     ..CliArgs::default()
                 },
@@ -3694,7 +4557,7 @@ mod tests {
             (
                 "state",
                 CliArgs {
-                    id: Some(1),
+                    id: Some("1".into()),
                     state: Some("closed".into()),
                     ..CliArgs::default()
                 },
@@ -3702,7 +4565,7 @@ mod tests {
             (
                 "missing state",
                 CliArgs {
-                    id: Some(1),
+                    id: Some("1".into()),
                     ..CliArgs::default()
                 },
             ),
@@ -4283,7 +5146,7 @@ mod tests {
             build_argv(
                 CliCommandId::Stats,
                 &CliArgs {
-                    id: Some(1),
+                    id: Some("1".into()),
                     ..CliArgs::default()
                 }
             )
@@ -6152,5 +7015,445 @@ mod tests {
         ] {
             assert_eq!(command.write_kind(), WriteKind::None, "{}", command.id());
         }
+    }
+
+    #[test]
+    fn diagnostics_argv_is_allow_listed_and_read_only() {
+        // Google: one URL inspection and the sitemap list.
+        assert_eq!(
+            build_argv(
+                CliCommandId::GscInspect,
+                &CliArgs {
+                    url: Some("https://example.com/page".into()),
+                    language: Some("en-US".into()),
+                    ..CliArgs::default()
+                }
+            )
+            .unwrap(),
+            vec![
+                "gsc",
+                "inspect",
+                "--url",
+                "https://example.com/page",
+                "--language",
+                "en-US",
+                "--json"
+            ]
+        );
+        assert_eq!(
+            build_argv(
+                CliCommandId::GscSitemaps,
+                &CliArgs {
+                    sitemap_index: Some("https://example.com/sitemap.xml".into()),
+                    ..CliArgs::default()
+                }
+            )
+            .unwrap(),
+            vec![
+                "gsc",
+                "sitemaps",
+                "--sitemap-index",
+                "https://example.com/sitemap.xml",
+                "--json"
+            ]
+        );
+
+        // Yandex: date window, sitemap paging and recrawl queue.
+        assert_eq!(
+            build_argv(
+                CliCommandId::YandexIndexing,
+                &CliArgs {
+                    date_from: Some("2026-11-01".into()),
+                    date_to: Some("2026-11-15".into()),
+                    ..CliArgs::default()
+                }
+            )
+            .unwrap(),
+            vec![
+                "yandex",
+                "indexing",
+                "--date-from",
+                "2026-11-01",
+                "--date-to",
+                "2026-11-15",
+                "--json"
+            ]
+        );
+        assert_eq!(
+            build_argv(
+                CliCommandId::YandexSitemaps,
+                &CliArgs {
+                    parent_id: Some("123".into()),
+                    limit: Some(50),
+                    ..CliArgs::default()
+                }
+            )
+            .unwrap(),
+            vec![
+                "yandex",
+                "sitemaps",
+                "--parent-id",
+                "123",
+                "--limit",
+                "50",
+                "--json"
+            ]
+        );
+        assert_eq!(
+            build_argv(
+                CliCommandId::YandexQueue,
+                &CliArgs {
+                    limit: Some(10),
+                    offset: Some(20),
+                    date_from: Some("2026-11-01".into()),
+                    ..CliArgs::default()
+                }
+            )
+            .unwrap(),
+            vec![
+                "yandex",
+                "queue",
+                "--limit",
+                "10",
+                "--offset",
+                "20",
+                "--date-from",
+                "2026-11-01",
+                "--json"
+            ]
+        );
+
+        // Bing: fixed stats reads, one URL/domain target and one join.
+        for (command, subcommand) in [
+            (CliCommandId::BingPages, "pages"),
+            (CliCommandId::BingTraffic, "traffic"),
+            (CliCommandId::BingCrawl, "crawl"),
+        ] {
+            assert_eq!(
+                build_argv(command, &CliArgs::default()).unwrap(),
+                vec!["bing", subcommand, "--json"]
+            );
+        }
+        assert_eq!(
+            build_argv(
+                CliCommandId::BingUrlinfo,
+                &CliArgs {
+                    url: Some("domain:Example.com".into()),
+                    ..CliArgs::default()
+                }
+            )
+            .unwrap(),
+            vec!["bing", "urlinfo", "--url", "domain:example.com", "--json"]
+        );
+        assert_eq!(
+            build_argv(
+                CliCommandId::BingJoins,
+                &CliArgs {
+                    query: Some("seo tools".into()),
+                    page: Some("https://example.com/page".into()),
+                    ..CliArgs::default()
+                }
+            )
+            .unwrap(),
+            vec![
+                "bing",
+                "joins",
+                "--query",
+                "seo tools",
+                "--page",
+                "https://example.com/page",
+                "--json"
+            ]
+        );
+
+        // Metrika: shared window, optional limit and bytime grouping.
+        assert_eq!(
+            build_argv(
+                CliCommandId::MetrikaPages,
+                &CliArgs {
+                    days: Some(28),
+                    lag_days: Some(3),
+                    limit: Some(50),
+                    ..CliArgs::default()
+                }
+            )
+            .unwrap(),
+            vec![
+                "metrika",
+                "pages",
+                "--days",
+                "28",
+                "--lag-days",
+                "3",
+                "--limit",
+                "50",
+                "--json"
+            ]
+        );
+        assert_eq!(
+            build_argv(
+                CliCommandId::MetrikaBytime,
+                &CliArgs {
+                    group: Some("Week".into()),
+                    ..CliArgs::default()
+                }
+            )
+            .unwrap(),
+            vec![
+                "metrika",
+                "bytime",
+                "--days",
+                "7",
+                "--lag-days",
+                "2",
+                "--group",
+                "week",
+                "--json"
+            ]
+        );
+
+        // CWV: lab audits with repeated categories and one history target.
+        assert_eq!(
+            build_argv(
+                CliCommandId::CwvAudits,
+                &CliArgs {
+                    url: Some("https://example.com/".into()),
+                    strategy: Some("desktop".into()),
+                    category: Some(vec!["seo".into(), "performance".into(), "seo".into()]),
+                    ..CliArgs::default()
+                }
+            )
+            .unwrap(),
+            vec![
+                "cwv",
+                "audits",
+                "--url",
+                "https://example.com/",
+                "--strategy",
+                "desktop",
+                "--category",
+                "seo",
+                "--category",
+                "performance",
+                "--json"
+            ]
+        );
+        assert_eq!(
+            build_argv(
+                CliCommandId::CwvHistory,
+                &CliArgs {
+                    origin: Some("https://example.com".into()),
+                    device: Some("phone".into()),
+                    weeks: Some(12),
+                    ..CliArgs::default()
+                }
+            )
+            .unwrap(),
+            vec![
+                "cwv",
+                "history",
+                "--origin",
+                "https://example.com",
+                "--device",
+                "phone",
+                "--weeks",
+                "12",
+                "--json"
+            ]
+        );
+    }
+
+    #[test]
+    fn diagnostics_reject_unknown_values_cross_command_args_and_writes() {
+        for command in [
+            CliCommandId::GscInspect,
+            CliCommandId::GscSitemaps,
+            CliCommandId::YandexIndexing,
+            CliCommandId::YandexSitemaps,
+            CliCommandId::YandexQueue,
+            CliCommandId::BingPages,
+            CliCommandId::BingTraffic,
+            CliCommandId::BingCrawl,
+            CliCommandId::BingUrlinfo,
+            CliCommandId::BingJoins,
+            CliCommandId::MetrikaPages,
+            CliCommandId::MetrikaGoals,
+            CliCommandId::MetrikaDevices,
+            CliCommandId::MetrikaCountries,
+            CliCommandId::MetrikaEngagement,
+            CliCommandId::MetrikaBytime,
+            CliCommandId::CwvAudits,
+            CliCommandId::CwvHistory,
+        ] {
+            assert!(command.is_diagnostics(), "{}", command.id());
+            assert!(command.requires_config(), "{}", command.id());
+            assert_eq!(command.write_kind(), WriteKind::None, "{}", command.id());
+            assert!(!command.cancellable(), "{}", command.id());
+            // A write flag or token never reaches a diagnostics command.
+            for args in [
+                CliArgs {
+                    allow_write: Some(true),
+                    ..CliArgs::default()
+                },
+                CliArgs {
+                    confirm: Some("1700000000:abcdef".into()),
+                    ..CliArgs::default()
+                },
+            ] {
+                assert_eq!(
+                    build_argv(command, &args).unwrap_err().code(),
+                    "INVALID_ARGUMENT",
+                    "{}",
+                    command.id()
+                );
+            }
+        }
+
+        // Unknown enum values are refused before the engine is spawned.
+        assert_eq!(
+            build_argv(
+                CliCommandId::MetrikaBytime,
+                &CliArgs {
+                    group: Some("quarter".into()),
+                    ..CliArgs::default()
+                }
+            )
+            .unwrap_err()
+            .code(),
+            "INVALID_ARGUMENT"
+        );
+        assert_eq!(
+            build_argv(
+                CliCommandId::CwvAudits,
+                &CliArgs {
+                    url: Some("https://example.com/".into()),
+                    strategy: Some("tablet".into()),
+                    ..CliArgs::default()
+                }
+            )
+            .unwrap_err()
+            .code(),
+            "INVALID_ARGUMENT"
+        );
+        assert_eq!(
+            build_argv(
+                CliCommandId::CwvHistory,
+                &CliArgs {
+                    origin: Some("https://example.com".into()),
+                    device: Some("mobile".into()),
+                    ..CliArgs::default()
+                }
+            )
+            .unwrap_err()
+            .code(),
+            "INVALID_ARGUMENT"
+        );
+        assert_eq!(
+            build_argv(
+                CliCommandId::CwvAudits,
+                &CliArgs {
+                    url: Some("https://example.com/".into()),
+                    category: Some(vec!["pwa".into()]),
+                    ..CliArgs::default()
+                }
+            )
+            .unwrap_err()
+            .code(),
+            "INVALID_ARGUMENT"
+        );
+
+        // Cross-command fields are rejected, not silently ignored.
+        for (command, args) in [
+            (
+                CliCommandId::BingPages,
+                CliArgs {
+                    days: Some(7),
+                    ..CliArgs::default()
+                },
+            ),
+            (
+                CliCommandId::MetrikaEngagement,
+                CliArgs {
+                    limit: Some(10),
+                    ..CliArgs::default()
+                },
+            ),
+            (
+                CliCommandId::MetrikaPages,
+                CliArgs {
+                    limit: Some(501),
+                    ..CliArgs::default()
+                },
+            ),
+            (
+                CliCommandId::CwvAudits,
+                CliArgs {
+                    url: Some("https://example.com/".into()),
+                    weeks: Some(4),
+                    ..CliArgs::default()
+                },
+            ),
+            (
+                CliCommandId::YandexSitemaps,
+                CliArgs {
+                    id: Some("1".into()),
+                    parent_id: Some("2".into()),
+                    ..CliArgs::default()
+                },
+            ),
+            (
+                CliCommandId::YandexQueue,
+                CliArgs {
+                    id: Some("1".into()),
+                    limit: Some(10),
+                    ..CliArgs::default()
+                },
+            ),
+            (
+                CliCommandId::CwvHistory,
+                CliArgs {
+                    url: Some("https://example.com/".into()),
+                    origin: Some("https://example.com".into()),
+                    ..CliArgs::default()
+                },
+            ),
+            (CliCommandId::BingJoins, CliArgs::default()),
+            (
+                CliCommandId::GscInspect,
+                CliArgs {
+                    url: Some("file:///etc/passwd".into()),
+                    ..CliArgs::default()
+                },
+            ),
+            (
+                CliCommandId::CwvHistory,
+                CliArgs {
+                    origin: Some("https://example.com".into()),
+                    weeks: Some(41),
+                    ..CliArgs::default()
+                },
+            ),
+        ] {
+            assert_eq!(
+                build_argv(command, &args).unwrap_err().code(),
+                "INVALID_ARGUMENT",
+                "{}",
+                command.id()
+            );
+        }
+
+        // An older command cannot smuggle a diagnostics field through.
+        assert_eq!(
+            build_argv(
+                CliCommandId::Stats,
+                &CliArgs {
+                    language: Some("en-US".into()),
+                    ..CliArgs::default()
+                }
+            )
+            .unwrap_err()
+            .code(),
+            "INVALID_ARGUMENT"
+        );
     }
 }
