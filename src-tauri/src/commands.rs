@@ -41,6 +41,10 @@ const EXPORT_WRITE_TIMEOUT: Duration = Duration::from_secs(30);
 const BING_SITE_SCAN_URL: &str = "https://www.bing.com/webmasters/sitescan";
 const BING_SITE_SCAN_QUERY: &str = "?siteUrl=";
 const MAX_SITE_URL_LEN: usize = 2048;
+/// The only URL `open_oauth_url` may open: the Yandex consent page. The engine
+/// returns this URL from `auth login --url-only`; nothing else is accepted.
+const OAUTH_YANDEX_AUTHORIZE_URL: &str = "https://oauth.yandex.ru/authorize";
+const MAX_OAUTH_URL_LEN: usize = 8192;
 
 /// 32 random bytes rendered as 64 lowercase hex characters. `getrandom` uses
 /// the OS CSPRNG (BCryptGenRandom, getrandom(2), SecRandomCopyBytes).
@@ -1781,6 +1785,84 @@ fn ensure_bing_sitescan_destination(url: &str) -> AppResult<()> {
     Ok(())
 }
 
+/// Open the Yandex OAuth consent page returned by `auth login --url-only`.
+///
+/// This is deliberately not a generic URL opener: the scheme, host and path are
+/// fixed to `https://oauth.yandex.ru/authorize`, the query must be non-empty and
+/// a fragment, userinfo or backslash is refused. Google's loopback flow is
+/// opened by the engine itself, so it never reaches this command.
+#[tauri::command(rename_all = "camelCase")]
+pub fn open_oauth_url(app: AppHandle, url: String) -> Result<String, AppError> {
+    let url = validate_oauth_authorize_url(&url)?.to_string();
+    app.opener()
+        .open_url(url.clone(), None::<&str>)
+        .map_err(|err| {
+            AppError::new(
+                "OPEN_URL",
+                format!("cannot open the Yandex authorization page: {err}"),
+            )
+        })?;
+    Ok(url)
+}
+
+fn validate_oauth_authorize_url(raw: &str) -> AppResult<&str> {
+    let value = raw.trim();
+    if value.is_empty() {
+        return Err(AppError::new("INVALID_ARGUMENT", "url is empty"));
+    }
+    if value.len() > MAX_OAUTH_URL_LEN {
+        return Err(AppError::new(
+            "INVALID_ARGUMENT",
+            format!("url is longer than {MAX_OAUTH_URL_LEN} characters"),
+        ));
+    }
+    if value
+        .chars()
+        .any(|ch| ch.is_control() || ch.is_whitespace())
+    {
+        return Err(AppError::new(
+            "INVALID_ARGUMENT",
+            "url must not contain whitespace or control characters",
+        ));
+    }
+    let rest = value.strip_prefix("https://").ok_or_else(|| {
+        AppError::new(
+            "INVALID_ARGUMENT",
+            format!("url must be an absolute https URL, got {value:?}"),
+        )
+    })?;
+    let (authority, path) = rest
+        .split_once('/')
+        .map(|(authority, path)| (authority, format!("/{path}")))
+        .unwrap_or((rest, String::new()));
+    if !authority.eq_ignore_ascii_case("oauth.yandex.ru") {
+        return Err(AppError::new(
+            "INVALID_ARGUMENT",
+            format!("refusing to open a URL outside oauth.yandex.ru: {value:?}"),
+        ));
+    }
+    let Some(query) = path.strip_prefix("/authorize?") else {
+        return Err(AppError::new(
+            "INVALID_ARGUMENT",
+            "refusing to open a URL outside the Yandex authorize page",
+        ));
+    };
+    if query.is_empty() || query.contains('#') || query.contains('\\') {
+        return Err(AppError::new(
+            "INVALID_ARGUMENT",
+            "refusing to open a malformed Yandex authorize URL",
+        ));
+    }
+    // Defense in depth: the composed prefix must still be the fixed page.
+    if !value.starts_with(&format!("{OAUTH_YANDEX_AUTHORIZE_URL}?")) {
+        return Err(AppError::new(
+            "INVALID_ARGUMENT",
+            "refusing to open a URL outside the Yandex authorize page",
+        ));
+    }
+    Ok(value)
+}
+
 /// SEC-05: a config path may only become active when it equals the current one,
 /// came from the native dialog in this process, or is a path the user already
 /// picked/created in an earlier run (persisted `known_configs`). Otherwise any
@@ -2595,6 +2677,39 @@ mod tests {
                 ensure_bing_sitescan_destination(url).unwrap_err().code(),
                 "INVALID_ARGUMENT",
                 "{url}"
+            );
+        }
+    }
+
+    #[test]
+    fn oauth_open_url_only_accepts_the_yandex_authorize_page() {
+        let allowed = "https://oauth.yandex.ru/authorize?response_type=code&client_id=abc&redirect_uri=https%3A%2F%2Foauth.yandex.ru%2Fverification_code&state=xyz";
+        assert_eq!(validate_oauth_authorize_url(allowed).unwrap(), allowed);
+        // Surrounding whitespace is trimmed, not passed to the opener.
+        assert_eq!(
+            validate_oauth_authorize_url(&format!("  {allowed}  ")).unwrap(),
+            allowed
+        );
+        for url in [
+            "",
+            "http://oauth.yandex.ru/authorize?response_type=code",
+            "ftp://oauth.yandex.ru/authorize?x=1",
+            "javascript:alert(1)",
+            "https://oauth.yandex.ru/",
+            "https://oauth.yandex.ru/authorize",
+            "https://oauth.yandex.ru/authorize?",
+            "https://oauth.yandex.ru/authorize?x=1#fragment",
+            "https://oauth.yandex.ru/authorize?x=1\\y",
+            "https://oauth.yandex.ru.evil.test/authorize?x=1",
+            "https://user@oauth.yandex.ru/authorize?x=1",
+            "https://oauth.yandex.ru:443/authorize?x=1",
+            "https://oauth.yandex.ru/other?x=1",
+            "https://oauth.yandex.ru/authorize?x=1 y",
+        ] {
+            assert_eq!(
+                validate_oauth_authorize_url(url).unwrap_err().code(),
+                "INVALID_ARGUMENT",
+                "{url:?}"
             );
         }
     }

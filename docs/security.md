@@ -98,6 +98,15 @@ engine via `LV24_SEO_BIN`, and provider-side breaches.
   same workspace/data directory.
 - `seo.toml` never contains tokens, passwords or bot tokens. `config show` is redacted by the
   engine; the desktop must not “unredact” it.
+- OAuth connectors never receive a token. `auth_login` returns a token-free summary (provider, flow,
+  scopes, expiry, target); the engine writes the access/refresh tokens to its secret store. The card
+  shows only `auth status` presence for `gsc_oauth`, `yandex_oauth` and `metrika_oauth`.
+- The OAuth client secret is CLI-only: `lv24-seo auth set --provider gsc_oauth_secret --stdin` or
+  `--provider yandex_oauth_secret --stdin`. The window has no field for it and never asks for it;
+  client ids stay in `[auth.gsc]` / `[auth.yandex]` in `seo.toml`.
+- A Yandex authorization code is single-use. The card sends it once as `--code`, clears it from the
+  store after the exchange (success or failure) and never writes it to a log or the clipboard. The
+  Google flow is handled entirely inside the engine's loopback listener.
 - MCP client installation may return the full merged host configuration, which can contain other
   servers' tokens. The desktop extracts and displays only its own entry and never logs or persists
   the full document.
@@ -139,6 +148,15 @@ opt-in file. The desktop must show which source is active.
   token. A token without the opt-in is refused before the engine is spawned. The plan only mints a
   token; it does not call the provider. `bing_submit` additionally requires at least one explicit URL
   or the sitemap source, validates every URL, and rejects `sitemapUrl` unless `fromSitemap=true`.
+- **OAuth connector arguments.** `auth_login` accepts only `provider` (`gsc`, `yandex`, `metrika`),
+  `noBrowser`, `port` (`0..65535`), `code` and `urlOnly`; every other field is rejected. The shell
+  refuses `allowWrite`/`confirm`, `urlOnly` for Google, `code` with `urlOnly`, and `port` for
+  Yandex/Metrika before the engine is spawned. A code must be one non-empty argv element without
+  whitespace or control characters.
+- **One allow-listed consent opener.** `open_oauth_url` accepts only
+  `https://oauth.yandex.ru/authorize?...` with a fixed scheme, host and path, a non-empty query and no
+  fragment, userinfo or backslash. It is not a generic `open_url` bridge; Google's consent page is
+  opened by the engine's own loopback flow and never reaches the webview.
 - **Read-only Bing views.** `bing_sitemaps`, `bing_issues` and `bing_quota` are bound to the active
   config and accept no write flag, token, sitemap URL or per-URL argument. They read the same
   workspace the write gate uses and never create a ledger entry. Their rows are rendered as returned:

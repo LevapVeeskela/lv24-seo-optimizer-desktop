@@ -72,7 +72,8 @@ not want to remember flags:
 - **A recommendations-to-agent workflow**: review findings, search and sort them, copy a bounded
   Markdown prompt, bulk-export or queue the visible set, hand it to a coding agent, then re-run the
   report to verify the fix.
-- **Integrations:** MCP snippets for Claude Desktop, OpenCode, VS Code and Cursor, two-phase Bing
+- **Integrations:** OAuth connectors for Google Search Console, Yandex Webmaster and Yandex
+  Metrika, MCP snippets for Claude Desktop, OpenCode, VS Code and Cursor, two-phase Bing
   sitemap/IndexNow/URL submission actions, a Site Scan opener, plus a schedule card that previews a
   cron/systemd/Windows artifact or installs the host job after confirmation.
 - **A per-workspace reporting window** (7/28/90 days, 2- or 3-day provider lag) and honest run status:
@@ -93,7 +94,7 @@ The desktop is one surface over the same engine. These are the tools the engine 
 
 | Surface | What you get |
 |---|---|
-| Desktop | Project wizard, dashboard with properties and reporting window, crawl screen, log analysis, task lifecycle, portfolio, weekly report with snapshot comparison, attributed digest and CWV, read-only platform diagnostics (GSC, Yandex, Bing, Metrika, CWV), config editor/diff/validation, recommendations with search/bulk, integrations snippets, Bing sitemap/IndexNow/URL submission actions, read-only Bing sitemap/issue/quota views, Site Scan opener, backup create/restore, host schedule install, agent task queue, signed updates |
+| Desktop | Project wizard, dashboard with properties and reporting window, crawl screen, log analysis, task lifecycle, portfolio, weekly report with snapshot comparison, attributed digest and CWV, read-only platform diagnostics (GSC, Yandex, Bing, Metrika, CWV), OAuth provider connectors, config editor/diff/validation, recommendations with search/bulk, integrations snippets, Bing sitemap/IndexNow/URL submission actions, read-only Bing sitemap/issue/quota views, Site Scan opener, backup create/restore, host schedule install, agent task queue, signed updates |
 | CLI | 22 top-level commands (15 groups + 7 commands): `version`, `doctor`, `init`, `properties`, `stats`, `crawl`, `install`, `auth`, `config`, `gsc`, `yandex`, `sitemap`, `indexnow`, `report`, `cwv`, `schedule`, `export`, `logs`, `tasks`, `backup`, `portfolio`, `mcp` |
 | MCP | 12 tools, 3 resources, 3 prompts; no provider writes by default |
 | Skills | `seo-weekly`, `seo-indexing-triage`, `seo-technical-audit` |
@@ -376,6 +377,35 @@ Yandex Metrika is a separate auth provider from Yandex Webmaster: the desktop st
 
 The desktop never asks for a paid provider key. Optional paid adapters in the engine are
 bring-your-own-key and are not part of the default path.
+
+## Provider connectors (OAuth)
+
+The **Integrations** page starts with a **Provider connectors** card for Google Search Console,
+Yandex Webmaster and Yandex Metrika. Each row shows **Connected** / **Not connected** from
+`lv24-seo auth status --json` (`gsc_oauth`, `yandex_oauth`, `metrika_oauth`); a provider the engine
+did not report stays **Not checked** instead of being shown as missing.
+
+- **Google Search Console:** **Connect** runs `lv24-seo auth login --provider gsc --json`. The
+  engine opens the system browser, listens on a `127.0.0.1` loopback callback and returns a
+  token-free summary after consent. The card says *Complete the sign-in in your browser* while the
+  call is in flight, then refreshes the status.
+- **Yandex Webmaster / Metrika:** **Connect** runs the same command with `--url-only`, which returns
+  the consent URL without exchanging anything. **Open Yandex** hands that exact URL to a narrow
+  opener, and **Finish** sends the pasted code back with `--code`. The code is single-use and is
+  cleared from the window after the exchange.
+
+The connectors require engine `lv24-seo >= 0.13.1`. Client ids live in `[auth.gsc]` / `[auth.yandex]`
+in `seo.toml`; the client secret is never entered in the window. Set it once from a terminal:
+
+```bash
+lv24-seo auth set --provider gsc_oauth_secret --stdin
+lv24-seo auth set --provider yandex_oauth_secret --stdin
+```
+
+No token is returned over IPC or rendered in the page. If the client id/secret is missing, the card
+shows the engine's `AUTH_REQUIRED` / `CONFIG_INVALID` message with its `next_action` and a link to
+the engine auth guide instead of a generic failure. The card has no write or confirm control: the
+engine stores the tokens in the OS keychain (or its explicit file fallback).
 
 ## Stats dashboard
 

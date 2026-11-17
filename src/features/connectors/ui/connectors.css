@@ -1,0 +1,43 @@
+.connectors-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: var(--space-3);
+}
+
+.connectors-row {
+  display: grid;
+  gap: var(--space-3);
+  padding: var(--space-4);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--inset);
+}
+
+.connectors-row-main {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+}
+
+.connectors-row h4 {
+  margin: 0 0 var(--space-1);
+}
+
+.connectors-row p {
+  margin: 0;
+}
+
+.connectors-code {
+  display: grid;
+  gap: var(--space-3);
+}
+
+/* A Yandex authorize URL is long; wrap it instead of overflowing the card. */
+.connectors-url {
+  display: block;
+  word-break: break-all;
+}
