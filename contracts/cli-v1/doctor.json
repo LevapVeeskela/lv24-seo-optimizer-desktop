@@ -44,7 +44,7 @@
     "data_dir": "<DATA_DIR>",
     "data_dir_declared": false,
     "data_dir_source": "working directory",
-    "version": "0.8.0"
+    "version": "0.9.0"
   },
   "ok": true,
   "warnings": [

@@ -1,14 +1,14 @@
 # Security model
 
-Status: **security contract for `0.6.0` (latest published line, 2026-11-16).** The Rust bridge and
-screens are implemented in this repository. This page states the controls the implementation must
-enforce and the residual risks accepted for the pre-1.0 line; where a control is future work, the text
-says so.
-`0.6.0` adds exact-process cancellation for the six long local jobs (`run_cancel`) and makes
+Status: **security contract for `0.7.0` (release candidate; `0.6.0` is the latest published line,
+2026-11-16).** The Rust bridge and screens are implemented in this repository. This page states the
+controls the implementation must enforce and the residual risks accepted for the pre-1.0 line; where a
+control is future work, the text says so.
+`0.7.0` adds the gated `sitemap_submit` and `indexnow_submit` commands (engine `0.9.0`), one
+external-URL allow-list for `open_bing_sitescan`, and a per-session in-memory write secret.
+`0.6.0` added exact-process cancellation for the six long local jobs (`run_cancel`) and made
 `schedule install` append `--allow-write` only after the confirmation dialog, matching engine
-`0.8.0`. The `wave/bing-indexing` working tree adds the gated `sitemap_submit` and `indexnow_submit`
-commands (engine `0.9.0`), one external-URL allow-list for `open_bing_sitescan`, and a per-session
-in-memory write secret. `0.5.0` added a native archive picker whose result is the only arbitrary
+`0.8.0`. `0.5.0` added a native archive picker whose result is the only arbitrary
 backup path
 `backup restore` may read, a portfolio root that must be a dialog-picked folder, and a two-phase
 restore that writes only with `--allow-write` plus the plan token. `0.4.0` added a native log-file

@@ -1,10 +1,20 @@
 {
-  "$comment": "Generated from lv24-seo 0.8.0 SeoConfig.model_json_schema(). Do not edit by hand.",
+  "$comment": "Generated from lv24-seo 0.9.0 SeoConfig.model_json_schema(). Do not edit by hand.",
   "$defs": {
     "BingConfig": {
       "additionalProperties": false,
-      "description": "Bing Webmaster Tools site.",
+      "description": "Bing Webmaster Tools site and the public IndexNow identifiers.\n\n``indexnow_key`` and ``indexnow_key_location`` are public identifiers, not secrets: the\nkey file is served openly at ``key_location`` (or ``https://<host>/<key>.txt``) and the\nsame value is sent in every IndexNow request. They are safe to keep in ``seo.toml``.\nThe Bing Webmaster API key is a secret and stays in the secret store.",
       "properties": {
+        "indexnow_key": {
+          "default": "",
+          "title": "Indexnow Key",
+          "type": "string"
+        },
+        "indexnow_key_location": {
+          "default": "",
+          "title": "Indexnow Key Location",
+          "type": "string"
+        },
         "site": {
           "default": "",
           "title": "Site",

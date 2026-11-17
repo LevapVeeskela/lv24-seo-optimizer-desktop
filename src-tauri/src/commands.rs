@@ -18,16 +18,12 @@ use crate::error::{AppError, AppResult, ErrorInfo};
 use crate::paths;
 use crate::settings::{Settings, SettingsPatch, SettingsStore};
 
-/// 0.6.0 runs `schedule install --allow-write` after the user confirms the plan; engine 0.8.0
-/// made `schedule install` plan-only by default and the write opt-in mandatory, so an older
-/// sidecar would reject the flag. It also uses `backup restore`, `portfolio list` and renders
-/// the `cwv` report section (engine 0.7.0). Report anything older as incompatible.
-///
-/// The `sitemap_submit`/`indexnow_submit` commands in this tree require engine 0.9.0, but the
-/// unchanged 0.6.0 bundle still ships 0.8.0: the release that includes them must raise this gate
-/// together with the engine pin. Until then the panel explains the resulting CLI error instead of
-/// claiming a write succeeded.
-pub const MIN_ENGINE_VERSION: &str = "0.8.0";
+/// 0.7.0 ships engine 0.9.0 and runs the gated `sitemap submit` (Bing only) and
+/// `indexnow submit --from-sitemap` commands, which that engine introduced; an older sidecar
+/// would answer `CLI_INVALID_JSON`, so report anything older as incompatible. The bundle also
+/// relies on the 0.8.0 `schedule install --allow-write` opt-in and on `backup restore`,
+/// `portfolio list` and the `cwv` report section (engine 0.7.0).
+pub const MIN_ENGINE_VERSION: &str = "0.9.0";
 
 /// Progress event emitted by the Rust updater while it downloads a release.
 pub const UPDATE_PROGRESS_EVENT: &str = "update://progress";
@@ -2655,9 +2651,10 @@ mod tests {
 
     #[test]
     fn engine_version_comparison_is_numeric() {
-        assert_eq!(MIN_ENGINE_VERSION, "0.8.0");
+        assert_eq!(MIN_ENGINE_VERSION, "0.9.0");
         assert!(version_at_least(MIN_ENGINE_VERSION, MIN_ENGINE_VERSION));
-        assert!(version_at_least("0.8.1", MIN_ENGINE_VERSION));
+        assert!(version_at_least("0.9.1", MIN_ENGINE_VERSION));
+        assert!(!version_at_least("0.8.0", MIN_ENGINE_VERSION));
         assert!(!version_at_least("0.7.0", MIN_ENGINE_VERSION));
         assert!(version_at_least("0.4.0", "0.4.0"));
         assert!(version_at_least("0.4.1", "0.4.0"));

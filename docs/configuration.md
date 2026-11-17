@@ -1,11 +1,12 @@
 # Configuration
 
-Status: **desktop configuration contract for `0.6.0` (latest published line, 2026-11-16).** The
-settings screens implement this contract; the engine-side `seo.toml` semantics below are those of the
-pinned `lv24-seo 0.8.0`. When the desktop and the engine disagree, the engine is authoritative and the
-desktop must show its validation error instead of silently “fixing” the file. The desktop's
-`ConfigModel` mirrors the subset of `lv24_seo.core.config.SeoConfig` used by the forms for `0.8.0`;
-the engine still validates the whole file.
+Status: **desktop configuration contract for `0.7.0` (release candidate; `0.6.0` is the latest
+published line, 2026-11-16).** The settings screens implement this contract; the engine-side
+`seo.toml` semantics below are those of the pinned `lv24-seo 0.9.0`. When the desktop and the engine
+disagree, the engine is authoritative and the desktop must show its validation error instead of
+silently “fixing” the file. The desktop's `ConfigModel` mirrors the subset of
+`lv24_seo.core.config.SeoConfig` used by the forms for `0.9.0`; the engine still validates the whole
+file.
 
 ## 1. What owns what
 
@@ -90,6 +91,8 @@ goals = [1, 2]                 # parsed but unused today
 
 [providers.bing]
 site = "https://example.com"
+# indexnow_key = "abc12345"                         # public identifier, not a secret
+# indexnow_key_location = "https://example.com/abc12345.txt"  # optional; defaults to https://<host>/<key>.txt
 
 [providers.crux]
 origin = "https://example.com"
@@ -145,7 +148,7 @@ raw_retention_days = 90        # reserved; no raw archives are written
 | `providers.gsc` | `property`, reserved `auth` | OAuth access token today; service-account flow is planned |
 | `providers.yandex_webmaster` | `host_id` | Yandex OAuth |
 | `providers.yandex_metrika` | `counter`, `goals` | separate `metrika` auth provider (`yandex_metrika_token`); `goals` is parsed but unused |
-| `providers.bing` | `site` | Bing Webmaster API key; IndexNow key is separate |
+| `providers.bing` | `site`, `indexnow_key`, `indexnow_key_location` | Bing Webmaster API key is a secret; the IndexNow key and location are public and live in `seo.toml` |
 | `providers.crux` | `origin` | CrUX API key |
 | `providers.psi` | `strategy`, `urls` | PSI API key; lab data, first URL for aggregate metrics |
 
@@ -235,7 +238,7 @@ All engine variables are prefixed `LV24_SEO_`. The main ones:
 | `LV24_SEO_GSC_PROPERTY` | GSC property override |
 | `LV24_SEO_YANDEX_WEBMASTER_TOKEN`, `LV24_SEO_YANDEX_HOST_ID` | Yandex Webmaster |
 | `LV24_SEO_YANDEX_METRIKA_TOKEN`, `LV24_SEO_YANDEX_METRIKA_COUNTER` | Yandex Metrika (separate token) |
-| `LV24_SEO_BING_API_KEY` | Bing Webmaster API key; the IndexNow key is the `indexnow submit --key` flag |
+| `LV24_SEO_BING_API_KEY` | Bing Webmaster API key; IndexNow reads `providers.bing.indexnow_key`/`indexnow_key_location` (or `--key`) |
 | `LV24_SEO_CRUX_API_KEY`, `LV24_SEO_PSI_API_KEY` | CrUX / PSI |
 | `LV24_SEO_SMTP_HOST`, `LV24_SEO_SMTP_PORT`, `LV24_SEO_SMTP_USER`, `LV24_SEO_SMTP_PASSWORD`, `LV24_SEO_SMTP_FROM`, `LV24_SEO_MAIL_TO` | email delivery |
 | `LV24_SEO_TELEGRAM_BOT_TOKEN`, `LV24_SEO_TELEGRAM_CHAT_ID` | Telegram delivery |

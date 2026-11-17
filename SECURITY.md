@@ -2,10 +2,10 @@
 
 ## Supported versions
 
-`lv24-seo-optimizer-desktop` is **pre-release**. The latest published line is `0.6.0` (2026-11-16);
-`0.5.0` and `0.4.0` remain available for rollback. `0.1.0` is a Windows-only preview with no updater
-and is upgraded manually. Security fixes are provided for the latest release line; older pre-1.0
-lines are not maintained unless stated in the release notes.
+`lv24-seo-optimizer-desktop` is **pre-release**. `0.7.0` is the current release candidate; `0.6.0`
+is the latest published line (2026-11-16); `0.5.0` and `0.4.0` remain available for rollback. `0.1.0`
+is a Windows-only preview with no updater and is upgraded manually. Security fixes are provided for
+the latest release line; older pre-1.0 lines are not maintained unless stated in the release notes.
 
 The desktop is a shell around the pinned `lv24-seo` engine. A vulnerability in the engine should be
 reported to the engine repository as well; this policy covers the desktop shell, scripts, packaging,

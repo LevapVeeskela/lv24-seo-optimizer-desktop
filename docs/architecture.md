@@ -1,13 +1,12 @@
 # Architecture
 
-Status: **implementation contract for `0.6.0` (latest published line, 2026-11-16).** The Rust command
-bridge and product screens are implemented in this repository. Where this document describes a
-control, it is the requirement that implementation must satisfy. The pinned engine is
-`lv24-seo 0.8.0`. `0.6.0` adds cancellable background runs (`run_cancel`), a window-wide run banner
-and the schedule-install `--allow-write` opt-in that engine `0.8.0` requires. The `wave/bing-indexing`
-working tree adds two gated provider-write commands (`sitemap_submit`, `indexnow_submit`) and the
-`open_bing_sitescan` opener; they require engine `0.9.0` and are not part of the shipped `0.6.0`
-bundle until the engine and desktop versions are bumped together.
+Status: **implementation contract for `0.7.0` (release candidate; `0.6.0` is the latest published
+line, 2026-11-16).** The Rust command bridge and product screens are implemented in this repository.
+Where this document describes a control, it is the requirement that implementation must satisfy. The
+pinned engine is `lv24-seo 0.9.0`. `0.7.0` adds two gated provider-write commands (`sitemap_submit`,
+`indexnow_submit`) and the `open_bing_sitescan` opener; `MIN_ENGINE_VERSION` is raised to `0.9.0` in
+the same release. It keeps the `0.6.0` cancellable background runs (`run_cancel`), window-wide run
+banner and the schedule-install `--allow-write` opt-in that engine `0.8.0` requires.
 
 ## 1. Shape
 
@@ -211,7 +210,7 @@ The AppImage step is the fallback that keeps an AppImage build from silently dro
 `resource_dir()` points somewhere other than the mounted engine tree.
 
 Nothing is downloaded automatically. The shell runs `lv24-seo version --json`, records the path,
-source and version, and compares the version with `MIN_ENGINE_VERSION` (`0.8.0`). An older engine is
+source and version, and compares the version with `MIN_ENGINE_VERSION` (`0.9.0`). An older engine is
 marked `compatible: false`; the UI treats the engine as offline and shows the standard offline
 notice. It does not silently downgrade or run the command. A newer engine passes the gate but is not
 the release-tested pin.
