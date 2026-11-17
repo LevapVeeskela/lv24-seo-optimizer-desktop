@@ -59,6 +59,9 @@ pub enum CliCommandId {
     Doctor,
     Properties,
     AuthStatus,
+    /// OAuth connector (`auth login`). The engine opens the consent page and
+    /// stores the tokens in its own secret store; no token crosses IPC.
+    AuthLogin,
     ReportWeekly,
     ReportDiff,
     Crawl,
@@ -156,6 +159,7 @@ impl CliCommandId {
             "doctor" => Ok(Self::Doctor),
             "properties" => Ok(Self::Properties),
             "auth_status" => Ok(Self::AuthStatus),
+            "auth_login" => Ok(Self::AuthLogin),
             "report_weekly" => Ok(Self::ReportWeekly),
             "report_diff" => Ok(Self::ReportDiff),
             "crawl" => Ok(Self::Crawl),
@@ -200,7 +204,7 @@ impl CliCommandId {
             .with_details(serde_json::json!({
                 "allowed": [
                     "version", "stats", "config_show", "doctor", "properties",
-                    "auth_status", "report_weekly", "report_diff", "crawl",
+                    "auth_status", "auth_login", "report_weekly", "report_diff", "crawl",
                     "init", "schedule_print", "logs_analyze", "tasks_list",
                     "tasks_add", "tasks_update", "backup_create", "backup_restore",
                     "portfolio_list", "schedule_install", "sitemap_submit",
@@ -224,6 +228,7 @@ impl CliCommandId {
             Self::Doctor => "doctor",
             Self::Properties => "properties",
             Self::AuthStatus => "auth_status",
+            Self::AuthLogin => "auth_login",
             Self::ReportWeekly => "report_weekly",
             Self::ReportDiff => "report_diff",
             Self::Crawl => "crawl",
@@ -300,6 +305,7 @@ impl CliCommandId {
         matches!(
             self,
             Self::ConfigShow
+                | Self::AuthLogin
                 | Self::ReportWeekly
                 | Self::ReportDiff
                 | Self::Crawl
@@ -359,6 +365,9 @@ impl CliCommandId {
         match self {
             Self::Crawl => Duration::from_secs(600),
             Self::AuthSet | Self::AuthLogout => Duration::from_secs(120),
+            // The Google loopback waits ~180s for consent; keep headroom for a
+            // cold sidecar and the token exchange.
+            Self::AuthLogin => Duration::from_secs(240),
             // A restore copies a whole database and may replace large files.
             Self::BackupRestore => Duration::from_secs(300),
             Self::Stats
@@ -445,6 +454,14 @@ pub struct CliArgs {
     /// Used by the dedicated auth commands; never contains a secret.
     /// `sitemap_submit` and `bing_submit` only: must be `bing`.
     pub provider: Option<String>,
+    /// `auth_login` only: print the authorization URL instead of opening it.
+    pub no_browser: Option<bool>,
+    /// `auth_login` only: GSC loopback callback port (0 = auto).
+    pub port: Option<u32>,
+    /// `auth_login` only: single-use Yandex authorization code, never a token.
+    pub code: Option<String>,
+    /// `auth_login` only: return the Yandex URL without exchanging a code.
+    pub url_only: Option<bool>,
     /// `init` only: site URL or GSC property (`sc-domain:example.com`).
     pub property: Option<String>,
     /// `init` (creates it) and `schedule_print` (reads it): absolute config.
@@ -577,6 +594,15 @@ impl CliArgs {
         self.sitemap_url.is_some()
     }
 
+    /// OAuth connector fields are only valid for `auth_login`; every other
+    /// command rejects them instead of silently ignoring a login attempt.
+    fn has_oauth_login_args(&self) -> bool {
+        self.no_browser.is_some()
+            || self.port.is_some()
+            || self.code.is_some()
+            || self.url_only.is_some()
+    }
+
     /// Fields that only the read-only diagnostics commands accept. The shared
     /// fields (`days`, `lagDays`, `limit`, `url`, `id`) are validated per
     /// command; every other field is rejected here before the match.
@@ -629,6 +655,51 @@ pub fn normalize_auth_provider(raw: &str) -> AppResult<String> {
     }
 }
 
+/// `auth login` only supports the providers with an OAuth connector. The wider
+/// `auth set`/`auth status` list stays on [`AUTH_PROVIDERS`].
+pub const OAUTH_LOGIN_PROVIDERS: &[&str] = &["gsc", "yandex", "metrika"];
+
+/// An authorization code is opaque, single-use text. Keep it to one bounded
+/// argv element with no whitespace or control characters; the engine rejects a
+/// missing code anyway, but the shell refuses an empty/oversized one first.
+const MAX_OAUTH_CODE_LEN: usize = 4096;
+
+pub fn normalize_oauth_login_provider(raw: &str) -> AppResult<String> {
+    let value = raw.trim().to_ascii_lowercase();
+    if OAUTH_LOGIN_PROVIDERS.contains(&value.as_str()) {
+        Ok(value)
+    } else {
+        Err(AppError::new(
+            "INVALID_ARGUMENT",
+            format!("provider {raw:?} has no OAuth login flow"),
+        )
+        .with_details(serde_json::json!({ "allowed": OAUTH_LOGIN_PROVIDERS })))
+    }
+}
+
+fn validate_oauth_code(raw: &str) -> AppResult<String> {
+    let value = raw.trim();
+    if value.is_empty() {
+        return Err(AppError::new("INVALID_ARGUMENT", "code must not be empty"));
+    }
+    if value.len() > MAX_OAUTH_CODE_LEN {
+        return Err(AppError::new(
+            "INVALID_ARGUMENT",
+            format!("code is longer than {MAX_OAUTH_CODE_LEN} characters"),
+        ));
+    }
+    if value
+        .chars()
+        .any(|ch| ch.is_control() || ch.is_whitespace())
+    {
+        return Err(AppError::new(
+            "INVALID_ARGUMENT",
+            "code must not contain whitespace or control characters",
+        ));
+    }
+    Ok(value.to_string())
+}
+
 /// Build the exact argv for an allow-listed command. `--json` is always
 /// present; `--config` is appended by [`build_command`].
 pub fn build_argv(command: CliCommandId, args: &CliArgs) -> AppResult<Vec<String>> {
@@ -651,6 +722,27 @@ pub fn build_argv(command: CliCommandId, args: &CliArgs) -> AppResult<Vec<String
         CliCommandId::Properties => vec!["properties".into(), "--json".into()],
         CliCommandId::AuthStatus => {
             vec!["auth".into(), "status".into(), "--json".into()]
+        }
+        CliCommandId::AuthLogin => {
+            let provider = normalize_oauth_login_provider(args.provider.as_deref().unwrap_or(""))?;
+            let mut argv = vec!["auth".into(), "login".into(), "--provider".into(), provider];
+            if args.no_browser == Some(true) {
+                argv.push("--no-browser".into());
+            }
+            if let Some(port) = args.port {
+                validate_range(port, 0, 65535, "port")?;
+                argv.push("--port".into());
+                argv.push(port.to_string());
+            }
+            if args.url_only == Some(true) {
+                argv.push("--url-only".into());
+            }
+            if let Some(code) = args.code.as_deref() {
+                argv.push("--code".into());
+                argv.push(validate_oauth_code(code)?);
+            }
+            argv.push("--json".into());
+            argv
         }
         CliCommandId::ReportWeekly => {
             let mut argv = vec![
@@ -1478,6 +1570,11 @@ fn validate_args(command: CliCommandId, args: &CliArgs) -> AppResult<()> {
     if command != CliCommandId::BingSubmit && (args.urls.is_some() || args.from_sitemap.is_some()) {
         return reject("urls/fromSitemap");
     }
+    // OAuth connector fields belong to `auth_login`. Rejecting them once here
+    // keeps every other command from silently ignoring a login attempt.
+    if command != CliCommandId::AuthLogin && args.has_oauth_login_args() {
+        return reject("oauth login arguments");
+    }
     // Diagnostics fields belong to the read-only platform reads. Every other
     // command rejects them here, so a new field cannot be ignored silently.
     if !command.is_diagnostics() && args.has_diagnostic_args() {
@@ -1614,6 +1711,51 @@ fn validate_args(command: CliCommandId, args: &CliArgs) -> AppResult<()> {
                     "INVALID_ARGUMENT",
                     "provider is required for auth commands",
                 ));
+            }
+        }
+        CliCommandId::AuthLogin => {
+            if args.days.is_some()
+                || args.lag_days.is_some()
+                || args.base.is_some()
+                || args.head.is_some()
+                || args.start.is_some()
+                || args.max_urls.is_some()
+                || args.out.is_some()
+                || args.has_init_or_schedule_args()
+                || args.has_log_or_task_args()
+                || args.has_restore_args()
+                || args.has_indexing_args()
+                || args.root.is_some()
+            {
+                return reject("an argument other than provider/noBrowser/port/code/urlOnly");
+            }
+            let provider = normalize_oauth_login_provider(args.provider.as_deref().unwrap_or(""))?;
+            if let Some(port) = args.port {
+                validate_range(port, 0, 65535, "port")?;
+                // The loopback callback is a Google-only feature; Yandex uses a
+                // verification code, so a port would be silently ignored.
+                if provider != "gsc" {
+                    return Err(AppError::new(
+                        "INVALID_ARGUMENT",
+                        "port is only accepted for the Google Search Console flow",
+                    ));
+                }
+            }
+            let url_only = args.url_only == Some(true);
+            if url_only && provider == "gsc" {
+                return Err(AppError::new(
+                    "INVALID_ARGUMENT",
+                    "urlOnly is only accepted for yandex and metrika",
+                ));
+            }
+            if let Some(code) = args.code.as_deref() {
+                if url_only {
+                    return Err(AppError::new(
+                        "INVALID_ARGUMENT",
+                        "code cannot be combined with urlOnly",
+                    ));
+                }
+                validate_oauth_code(code)?;
             }
         }
         CliCommandId::Init => {
@@ -4034,6 +4176,7 @@ mod tests {
             "doctor",
             "properties",
             "auth_status",
+            "auth_login",
             "report_weekly",
             "report_diff",
             "crawl",
@@ -5403,6 +5546,191 @@ mod tests {
             argv,
             vec!["auth", "logout", "--provider", "telegram", "--json"]
         );
+    }
+
+    #[test]
+    fn auth_login_argv_covers_google_and_yandex_flows() {
+        let google = build_argv(
+            CliCommandId::AuthLogin,
+            &CliArgs {
+                provider: Some("gsc".into()),
+                ..CliArgs::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(google, vec!["auth", "login", "--provider", "gsc", "--json"]);
+
+        let google_port = build_argv(
+            CliCommandId::AuthLogin,
+            &CliArgs {
+                provider: Some("gsc".into()),
+                no_browser: Some(true),
+                port: Some(0),
+                ..CliArgs::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            google_port,
+            vec![
+                "auth",
+                "login",
+                "--provider",
+                "gsc",
+                "--no-browser",
+                "--port",
+                "0",
+                "--json"
+            ]
+        );
+
+        let yandex_url = build_argv(
+            CliCommandId::AuthLogin,
+            &CliArgs {
+                provider: Some("yandex".into()),
+                url_only: Some(true),
+                ..CliArgs::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            yandex_url,
+            vec![
+                "auth",
+                "login",
+                "--provider",
+                "yandex",
+                "--url-only",
+                "--json"
+            ]
+        );
+
+        let metrika_code = build_argv(
+            CliCommandId::AuthLogin,
+            &CliArgs {
+                provider: Some("metrika".into()),
+                code: Some("  abc123  ".into()),
+                ..CliArgs::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            metrika_code,
+            vec![
+                "auth",
+                "login",
+                "--provider",
+                "metrika",
+                "--code",
+                "abc123",
+                "--json"
+            ]
+        );
+
+        // The connector changes provider state in the engine, not local files;
+        // the shell never asks for a write opt-in and never cancels it.
+        assert!(CliCommandId::AuthLogin.requires_config());
+        assert_eq!(CliCommandId::AuthLogin.write_kind(), WriteKind::None);
+        assert!(CliCommandId::AuthLogin.timeout() >= Duration::from_secs(180));
+        assert!(!CliCommandId::AuthLogin.cancellable());
+    }
+
+    #[test]
+    fn auth_login_rejects_invalid_provider_port_and_flow_combinations() {
+        let args = |provider: &str| CliArgs {
+            provider: Some(provider.into()),
+            ..CliArgs::default()
+        };
+        let error = |args: &CliArgs| build_argv(CliCommandId::AuthLogin, args).unwrap_err();
+
+        assert_eq!(error(&CliArgs::default()).code(), "INVALID_ARGUMENT");
+        for provider in ["bing", "crux", "psi", "smtp", "telegram", "unknown", ""] {
+            assert_eq!(
+                error(&args(provider)).code(),
+                "INVALID_ARGUMENT",
+                "{provider}"
+            );
+        }
+
+        let mut out_of_range = args("gsc");
+        out_of_range.port = Some(70_000);
+        assert_eq!(error(&out_of_range).code(), "INVALID_ARGUMENT");
+
+        let mut yandex_port = args("yandex");
+        yandex_port.port = Some(0);
+        assert_eq!(error(&yandex_port).code(), "INVALID_ARGUMENT");
+
+        let mut metrika_port = args("metrika");
+        metrika_port.port = Some(8080);
+        assert_eq!(error(&metrika_port).code(), "INVALID_ARGUMENT");
+
+        let mut gsc_url_only = args("gsc");
+        gsc_url_only.url_only = Some(true);
+        assert_eq!(error(&gsc_url_only).code(), "INVALID_ARGUMENT");
+
+        let mut url_only_with_code = args("yandex");
+        url_only_with_code.url_only = Some(true);
+        url_only_with_code.code = Some("abc123".into());
+        assert_eq!(error(&url_only_with_code).code(), "INVALID_ARGUMENT");
+
+        for code in ["", "   ", "abc def", "abc\n123"] {
+            let mut invalid_code = args("metrika");
+            invalid_code.code = Some(code.into());
+            assert_eq!(error(&invalid_code).code(), "INVALID_ARGUMENT", "{code:?}");
+        }
+
+        let mut write_flag = args("gsc");
+        write_flag.allow_write = Some(true);
+        assert_eq!(error(&write_flag).code(), "INVALID_ARGUMENT");
+
+        let mut confirm = args("gsc");
+        confirm.confirm = Some("1700000000:deadbeef".into());
+        assert_eq!(error(&confirm).code(), "INVALID_ARGUMENT");
+
+        let mut days = args("gsc");
+        days.days = Some(7);
+        assert_eq!(error(&days).code(), "INVALID_ARGUMENT");
+
+        let mut config = args("gsc");
+        config.config_path = Some("C:\\ws\\seo.toml".into());
+        assert_eq!(error(&config).code(), "INVALID_ARGUMENT");
+    }
+
+    #[test]
+    fn oauth_login_fields_are_rejected_for_other_commands() {
+        for command in [
+            CliCommandId::Stats,
+            CliCommandId::Doctor,
+            CliCommandId::AuthStatus,
+            CliCommandId::AuthSet,
+            CliCommandId::Crawl,
+        ] {
+            for args in [
+                CliArgs {
+                    no_browser: Some(true),
+                    ..CliArgs::default()
+                },
+                CliArgs {
+                    port: Some(0),
+                    ..CliArgs::default()
+                },
+                CliArgs {
+                    code: Some("abc".into()),
+                    ..CliArgs::default()
+                },
+                CliArgs {
+                    url_only: Some(true),
+                    ..CliArgs::default()
+                },
+            ] {
+                assert_eq!(
+                    build_argv(command, &args).unwrap_err().code(),
+                    "INVALID_ARGUMENT",
+                    "{}",
+                    command.id()
+                );
+            }
+        }
     }
 
     #[tokio::test]

@@ -112,6 +112,7 @@ The command surface is fixed. The generic `cli_run` allow-list is:
 | `doctor` | `doctor --json` | read |
 | `properties` | `properties --json` | read |
 | `auth_status` | `auth status --json` | read |
+| `auth_login` | `auth login --provider <gsc\|yandex\|metrika> [--no-browser] [--port <n>] [--code <code>] [--url-only] --json` | read (the engine stores tokens itself) |
 | `report_weekly` | `report weekly --out <app data>/exports/reports --json` | local write |
 | `report_diff` | `report diff ... --json` | read |
 | `crawl` | `crawl ... --json` | local write |
@@ -153,8 +154,23 @@ The command surface is fixed. The generic `cli_run` allow-list is:
 Dedicated Tauri commands cover the rest: `shell_status`, `config_read`, `config_validate`,
 `config_write`, `config_patch`, `auth_set` (secret over stdin), `auth_delete`, `write_text_file`,
 `settings_get`, `settings_set`, `pick_config`, `pick_directory`, `pick_log_file`,
-`pick_backup_archive`, `open_path`, `open_bing_sitescan`, `prepare_update`, `update_install`,
-`update_cancel` and `run_cancel`. The webview cannot add a command at runtime.
+`pick_backup_archive`, `open_path`, `open_bing_sitescan`, `open_oauth_url`, `prepare_update`,
+`update_install`, `update_cancel` and `run_cancel`. The webview cannot add a command at runtime.
+
+`auth_login` is read-only for the shell: it starts the engine's OAuth flow, and the engine stores
+the tokens in its own secret store. The envelope carries the provider, flow, scopes, expiry and
+target, never a token. Before the spawn the shell rejects `allowWrite`/`confirm`, `urlOnly` for
+Google, `code` together with `urlOnly`, `port` for Yandex/Metrika, and any field that belongs to
+another command; `port` is bounded to `0..65535` and a code is one non-empty argv element without
+whitespace or control characters. The Google flow blocks for the loopback consent (~180 seconds),
+so the command timeout is 240 seconds; Yandex/Metrika use the same budget for the two calls.
+
+`open_oauth_url` is not a generic URL opener. It accepts exactly an absolute
+`https://oauth.yandex.ru/authorize?...` URL (fixed scheme, host and path, non-empty query, no
+fragment, userinfo or backslash) and hands it to the Tauri opener. The Google consent page is opened
+by the engine process, so it never crosses this command. The Connectors card needs `auth login` from
+engine `0.13.1` or newer; an older engine answers with a typed command/parse error, and the card
+shows that message plus the engine auth guide instead of claiming a connection.
 
 `cli_run` accepts an optional `runId` only for the six long local jobs listed in
 `CliCommandId::cancellable` (`crawl`, `report_weekly`, `logs_analyze`, `backup_create`,
@@ -328,7 +344,8 @@ file. Values are never displayed.
 ## 7. Long-running calls and failure model
 
 Engine calls are synchronous from the UI's perspective. Each command has a fixed timeout: `crawl`
-600 seconds; `stats`, `report weekly`, `report diff`, `sitemap_submit`, `indexnow_submit`,
+600 seconds; `auth login` 240 seconds (the Google loopback waits ~180 seconds for consent);
+`stats`, `report weekly`, `report diff`, `sitemap_submit`, `indexnow_submit`,
 `bing_submit` and `cwv_audits` 120 seconds; `bing_sitemaps`, `bing_issues`, `bing_quota` and the other
 read-only diagnostics commands 60 seconds; `version`, `config show`, `doctor`, `properties` and
 `auth status` 30 seconds; `auth set`/`auth delete` 120 seconds. A timeout kills the exact child
@@ -371,7 +388,7 @@ Feature-Sliced Design, dependencies pointing downward:
 ```
 app/        root store, providers, router, layout, styles
 pages/      dashboard, reports, settings, configuration, recommendations, not-found
-features/   save-config, secret-set, update, agent-task, backup, schedule, indexing
+features/   save-config, secret-set, connectors, update, agent-task, backup, schedule, indexing
 entities/   config, engine, report, stats, recommendation, update, crawl, logs, workspace
 shared/     CLI transport, desktop settings/files, i18n, UI primitives, formatting, run registry
 ```

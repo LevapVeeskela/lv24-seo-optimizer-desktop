@@ -6,6 +6,7 @@ export const CLI_COMMAND_IDS = [
   "doctor",
   "properties",
   "auth_status",
+  "auth_login",
   "report_weekly",
   "report_diff",
   "crawl",
@@ -110,8 +111,19 @@ export interface CliArgs {
   fromSitemap?: boolean;
   /** `indexnow_submit` and `bing_submit`: optional absolute sitemap URL. */
   sitemapUrl?: string;
-  /** `sitemap_submit` and `bing_submit` only: must be `bing`. */
-  provider?: "bing";
+  /**
+   * `sitemap_submit` and `bing_submit` only: must be `bing`.
+   * `auth_login` only: `gsc`, `yandex` or `metrika`.
+   */
+  provider?: "bing" | "gsc" | "yandex" | "metrika";
+  /** `auth_login` only: print the authorization URL instead of opening it. */
+  noBrowser?: boolean;
+  /** `auth_login` only: GSC loopback callback port (0 = auto). */
+  port?: number;
+  /** `auth_login` only: single-use Yandex authorization code, never a token. */
+  code?: string;
+  /** `auth_login` only: return the Yandex URL without exchanging a code. */
+  urlOnly?: boolean;
   /** `tasks_add` only: rule/finding id that produced the task. */
   rule?: string;
   /** `tasks_add` only: evidence object, JSON-encoded (16 KiB cap). */

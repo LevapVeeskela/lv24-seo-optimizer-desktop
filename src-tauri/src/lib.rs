@@ -40,6 +40,7 @@ pub fn run() {
             commands::pick_backup_archive,
             commands::open_path,
             commands::open_bing_sitescan,
+            commands::open_oauth_url,
             commands::prepare_update,
             commands::update_install,
             commands::update_cancel,

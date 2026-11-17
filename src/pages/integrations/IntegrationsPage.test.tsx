@@ -69,6 +69,15 @@ describe("IntegrationsPage", () => {
     expect(html).toContain("Engine offline");
   });
 
+  it("adds the OAuth connectors card for the three provider accounts", () => {
+    const html = renderPage();
+    expect(html).toContain("Provider connectors");
+    expect(html).toContain("Google Search Console");
+    expect(html).toContain("Yandex Webmaster");
+    expect(html).toContain("Yandex Metrika");
+    expect(html).toContain("Not checked");
+  });
+
   it("adds the local backup panel with a restore flow", () => {
     const html = renderPage();
     expect(html).toContain("Workspace backup");
