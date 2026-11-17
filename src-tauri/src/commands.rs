@@ -18,12 +18,13 @@ use crate::error::{AppError, AppResult, ErrorInfo};
 use crate::paths;
 use crate::settings::{Settings, SettingsPatch, SettingsStore};
 
-/// 0.7.0 ships engine 0.9.0 and runs the gated `sitemap submit` (Bing only) and
-/// `indexnow submit --from-sitemap` commands, which that engine introduced; an older sidecar
-/// would answer `CLI_INVALID_JSON`, so report anything older as incompatible. The bundle also
-/// relies on the 0.8.0 `schedule install --allow-write` opt-in and on `backup restore`,
-/// `portfolio list` and the `cwv` report section (engine 0.7.0).
-pub const MIN_ENGINE_VERSION: &str = "0.9.0";
+/// 0.8.0 ships engine 0.10.0 and runs the gated `bing submit` (URL submission) write plus the
+/// read-only `bing sitemaps`, `bing issues` and `bing quota` commands, which that engine
+/// introduced; an older sidecar would answer `CLI_INVALID_JSON`, so report anything older as
+/// incompatible. The bundle also relies on the 0.9.0 `sitemap submit` (Bing only) and
+/// `indexnow submit --from-sitemap` commands, the 0.8.0 `schedule install --allow-write` opt-in
+/// and on `backup restore`, `portfolio list` and the `cwv` report section (engine 0.7.0).
+pub const MIN_ENGINE_VERSION: &str = "0.10.0";
 
 /// Progress event emitted by the Rust updater while it downloads a release.
 pub const UPDATE_PROGRESS_EVENT: &str = "update://progress";
@@ -2661,11 +2662,11 @@ mod tests {
 
     #[test]
     fn engine_version_comparison_is_numeric() {
-        assert_eq!(MIN_ENGINE_VERSION, "0.9.0");
+        assert_eq!(MIN_ENGINE_VERSION, "0.10.0");
         assert!(version_at_least(MIN_ENGINE_VERSION, MIN_ENGINE_VERSION));
-        assert!(version_at_least("0.9.1", MIN_ENGINE_VERSION));
+        assert!(version_at_least("0.10.1", MIN_ENGINE_VERSION));
+        assert!(!version_at_least("0.9.0", MIN_ENGINE_VERSION));
         assert!(!version_at_least("0.8.0", MIN_ENGINE_VERSION));
-        assert!(!version_at_least("0.7.0", MIN_ENGINE_VERSION));
         assert!(version_at_least("0.4.0", "0.4.0"));
         assert!(version_at_least("0.4.1", "0.4.0"));
         assert!(version_at_least("0.10.0", "0.4.0"));

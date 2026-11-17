@@ -1230,7 +1230,7 @@ export const en = {
   "indexing.noWorkspaceHint": "Choose a project in Settings before submitting to Bing.",
   "indexing.openSettings": "Open Settings",
   "indexing.requiresKey": "Bing needs an API key. Add it in Settings, then review the plan again.",
-  "indexing.engineHint": "These actions need engine 0.9.0 or newer. Update the engine and retry.",
+  "indexing.engineHint": "These actions need engine 0.10.0 or newer. Update the engine and retry.",
   "indexing.twoPhaseBadge": "Plan → confirm",
   "indexing.sharedSitemapHint": "The same sitemap URL is used by the sitemap, IndexNow and Bing URL actions. Empty means the engine project default.",
   "indexing.defaultSitemap": "the engine project default sitemap",

@@ -1232,7 +1232,7 @@ export const zh: Messages = {
   "indexing.noWorkspaceHint": "请先在设置中选择项目，再向 Bing 提交。",
   "indexing.openSettings": "打开设置",
   "indexing.requiresKey": "Bing 需要 API 密钥。请在设置中添加，然后重新检查计划。",
-  "indexing.engineHint": "这些操作需要引擎 0.9.0 或更高版本。请更新引擎后重试。",
+  "indexing.engineHint": "这些操作需要引擎 0.10.0 或更高版本。请更新引擎后重试。",
   "indexing.twoPhaseBadge": "计划 → 确认",
   "indexing.sharedSitemapHint": "sitemap、IndexNow 和 Bing URL 操作共用同一个 sitemap URL。留空表示使用引擎的项目默认值。",
   "indexing.defaultSitemap": "引擎项目默认 sitemap",

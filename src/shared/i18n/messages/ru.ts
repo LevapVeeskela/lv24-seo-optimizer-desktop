@@ -1232,7 +1232,7 @@ export const ru: Messages = {
   "indexing.noWorkspaceHint": "Выберите проект в настройках перед отправкой в Bing.",
   "indexing.openSettings": "Открыть настройки",
   "indexing.requiresKey": "Bing требует ключ API. Добавьте его в настройках и повторите проверку плана.",
-  "indexing.engineHint": "Эти действия требуют движок 0.9.0 или новее. Обновите движок и повторите.",
+  "indexing.engineHint": "Эти действия требуют движок 0.10.0 или новее. Обновите движок и повторите.",
   "indexing.twoPhaseBadge": "План → подтверждение",
   "indexing.sharedSitemapHint": "Один и тот же URL sitemap используется действиями sitemap, IndexNow и Bing URL. Пустое поле — sitemap проекта по умолчанию.",
   "indexing.defaultSitemap": "sitemap проекта по умолчанию",

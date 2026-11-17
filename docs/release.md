@@ -10,28 +10,29 @@ its checksums, its updater signatures or its engine version does not ship.
 
 ## 1. Release state
 
-`0.2.0` was the first multi-platform release; `0.7.0` is the latest published release (2026-11-17).
-`0.6.0`, `0.5.0`, `0.4.0`, `0.3.0` and `0.2.3` are kept for rollback:
+`0.2.0` was the first multi-platform release; `0.7.0` is the latest published release (2026-11-17),
+and `0.8.0` is the prepared release candidate. `0.6.0`, `0.5.0`, `0.4.0`, `0.3.0` and `0.2.3` are
+kept for rollback:
 
 - **Windows x64:** unsigned NSIS installer, signed updater `.exe`, portable ZIP.
 - **Linux x64:** AppImage (signed updater), deb and rpm (manual-only).
 - **macOS arm64/x64:** DMG plus signed `.app.tar.gz` updater archives.
 - **Common:** `latest.json` and `SHA256SUMS.txt`.
 
-Release notes: [`docs/releases/0.7.0.md`](releases/0.7.0.md) for the current release,
-[`docs/releases/0.6.0.md`](releases/0.6.0.md) for the previous line and
-[`docs/releases/0.5.0.md`](releases/0.5.0.md) for the one before that.
+Release notes: [`docs/releases/0.8.0.md`](releases/0.8.0.md) for the release candidate,
+[`docs/releases/0.7.0.md`](releases/0.7.0.md) for the latest published line and
+[`docs/releases/0.6.0.md`](releases/0.6.0.md) for the previous one.
 
 Auto-update is enabled for Windows NSIS, macOS `.app` and Linux AppImage. deb, rpm, MSI and the
 portable ZIP are manual-only; the UI disables in-app installation for those bundle types and links
-to the release page. `0.1.0` has no updater, so `0.1.0` users must install `0.7.0` manually once.
+to the release page. `0.1.0` has no updater, so `0.1.0` users must install `0.8.0` manually once.
 
-Release preconditions (as used for `0.7.0`; update the version pins for the next release):
+Release preconditions (as used for `0.8.0`; update the version pins for the next release):
 
-- `package.json`, `src-tauri/tauri.conf.json` and `src-tauri/Cargo.toml` all say `0.7.0`.
-- `scripts/cli-checksums.json` says `0.9.0` and the workflow runs with `engine_version=0.9.0`.
+- `package.json`, `src-tauri/tauri.conf.json` and `src-tauri/Cargo.toml` all say `0.8.0`.
+- `scripts/cli-checksums.json` says `0.10.0` and the workflow runs with `engine_version=0.10.0`.
   The release gate rejects a mismatch.
-- `MIN_ENGINE_VERSION` in `src-tauri/src/commands.rs` is `0.9.0`, equal to the `0.7.0` bundle. An
+- `MIN_ENGINE_VERSION` in `src-tauri/src/commands.rs` is `0.10.0`, equal to the `0.8.0` bundle. An
   older engine is reported as incompatible; the desktop does not run commands against it. Verify the
   gate and the pin agree before publishing.
 - CI (web, Rust matrix, contract drift) is green on the exact release commit. The contracts were
@@ -63,11 +64,10 @@ Release preconditions (as used for `0.7.0`; update the version pins for the next
   `npm run typecheck`, `npm run build`, `npm run test:release`, `cargo fmt --check` and
   `cargo clippy --all-targets -- -D warnings`.
 
-### Bing URL submission and status views (unreleased)
+### Bing URL submission and status views (`0.8.0`)
 
-This wave adds the desktop surface for the engine `0.10.0` Bing commands. It is not part of the
-published `0.7.0` notes below, and the `0.7.0` line keeps its `0.9.0` pin until the next release
-updates the pin and the checksums.
+This wave adds the desktop surface for the engine `0.10.0` Bing commands. It ships in `0.8.0`; the
+`0.7.0` line keeps its `0.9.0` pin and its notes below.
 
 - `bing_submit` builds
   `bing submit --config <path> [--url <abs> ...] [--from-sitemap] [--sitemap-url <abs>] --allow-write [--confirm <token>] --json`.
@@ -96,8 +96,10 @@ updates the pin and the checksums.
   `cargo clippy --all-targets -- -D warnings`.
 
 Limitations: the new commands need engine `0.10.0`; an older engine returns `CLI_INVALID_JSON` and
-the panel says an update is needed. Writes are not cancellable and have no rollback. The read-only
-views are bounded by the engine response and do not retry automatically.
+the panel says an update is needed. There is no `--site` override: the target comes from
+`providers.bing.site`. Writes are not cancellable and have no rollback. The read-only views are
+bounded by the engine response and do not retry automatically. `GetFeedDetails` is a note in the
+panel, not a screen.
 
 ### Bing indexing actions (`0.7.0`)
 
@@ -157,10 +159,10 @@ match the pin before uploading.
 
 ### Engine compatibility
 
-- A release build bundles the exact pinned engine version. `0.7.0` bundles `lv24-seo 0.9.0`.
+- A release build bundles the exact pinned engine version. `0.8.0` bundles `lv24-seo 0.10.0`.
 - The shell accepts an engine whose version is at least `MIN_ENGINE_VERSION` and marks an older one
   incompatible with a notice. It does not silently migrate commands to an older engine. The current
-  source gates at `0.9.0`.
+  source gates at `0.10.0`.
 - A development build may use `LV24_SEO_BIN` with another version; the shell records it as source
   `env` and checks the minimum version. The current UI shows the engine version, not a separate
   path/source panel. A `PATH` engine is used only when `LV24_SEO_ALLOW_PATH_ENGINE=1` is set.
@@ -173,14 +175,14 @@ Trigger: **Actions → Desktop build → Run workflow**. It has no push, pull-re
 
 | Input | Type | Default | Meaning |
 |---|---|---|---|
-| `engine_version` | string | `0.9.0` for this release | exact `lv24-seo` version bundled in the sidecar |
+| `engine_version` | string | `0.10.0` for this release | exact `lv24-seo` version bundled in the sidecar |
 | `signed` | boolean | `false` | request OS signing/notarization; requires paid certificates that this project does not buy |
 | `publish` | boolean | `false` | create a GitHub release after every matrix build passes |
 | `tag` | string | empty | `vX.Y.Z` release tag; required when `publish=true` |
 
 The `engine_version` input must equal `scripts/cli-checksums.json`; the release gate rejects the
 manifest mismatch. The workflow input default and the pin name the same version and are bumped
-together in the release commit (`0.9.0` for the `0.7.0` line). A different value is allowed for a
+together in the release commit (`0.10.0` for the `0.8.0` line). A different value is allowed for a
 rebuild only when `scripts/cli-checksums.json` is updated in the same commit.
 
 ### Matrix
@@ -231,7 +233,7 @@ call, starts slowly, is AV-prone and cannot be signed correctly on macOS.
 ```bash
 # Build on the matching host; PyInstaller does not cross-compile.
 python scripts/build-sidecar.py \
-  --engine-version 0.9.0 \
+  --engine-version 0.10.0 \
   --target x86_64-pc-windows-msvc \
   --out src-tauri/engine
 ```
@@ -258,7 +260,7 @@ adjacent.
 node scripts/verify-sidecar.mjs \
   --root src-tauri/engine \
   --target x86_64-pc-windows-msvc \
-  --engine-version 0.9.0
+  --engine-version 0.10.0
 ```
 
 The strict verifier checks:
@@ -278,7 +280,7 @@ job runs the verifier with `--no-hash` (alias `--allow-rebuild`):
 node scripts/verify-sidecar.mjs \
   --root src-tauri/engine \
   --target x86_64-pc-windows-msvc \
-  --engine-version 0.9.0 \
+  --engine-version 0.10.0 \
   --no-hash \
   --report release/sidecar-checksums-x86_64-pc-windows-msvc.json
 ```
@@ -302,7 +304,7 @@ release build**:
 {
   "schemaVersion": 1,
   "engine": "lv24-seo",
-  "version": "0.9.0",
+  "version": "0.10.0",
   "python": "3.12",
   "pydantic": "2.14.3",
   "typer": "0.29.0",
@@ -333,7 +335,7 @@ release build**:
 ```
 
 The values above illustrate the shape; the committed file is authoritative. The Windows entry records
-the reviewed `0.9.0` build. The Linux and macOS targets are `null` until the `0.9.0` sidecar is
+the reviewed `0.10.0` build. The Linux and macOS targets are `null` until the `0.10.0` sidecar is
 rebuilt and reviewed on a matching host; a pin from an older engine does not carry over because the
 executable changes with the engine. `null` means “not pinned yet”. After a verified local build,
 compute the hash and commit the 64-hex value plus size in a focused PR
@@ -385,7 +387,7 @@ fails `npm test` when an artifact is added to one consumer but not the others.
 
 Asset names are normalized before checksums: GitHub replaces spaces with dots. The staging and
 release scripts reject characters GitHub may rewrite and refuse duplicate basenames. The published
-Windows asset is therefore `LV24.SEO.Optimizer_0.7.0_x64-setup.exe`, not the spaced build output.
+Windows asset is therefore `LV24.SEO.Optimizer_0.8.0_x64-setup.exe`, not the spaced build output.
 
 ## 6. Updater signing and `latest.json`
 
@@ -582,18 +584,18 @@ The release job:
 ### Preflight (before running the workflow)
 
 - [ ] CI is green on the pull request that contains the release commit.
-- [ ] `package.json`, `tauri.conf.json`, `Cargo.toml` and the intended tag agree (`0.7.0`).
-- [ ] `scripts/cli-checksums.json` says `0.9.0` and `engine_version=0.9.0` will be supplied.
-- [ ] The `engine_version` workflow input default matches the pin (`0.9.0`); the release gate compares
+- [ ] `package.json`, `tauri.conf.json`, `Cargo.toml` and the intended tag agree (`0.8.0`).
+- [ ] `scripts/cli-checksums.json` says `0.10.0` and `engine_version=0.10.0` will be supplied.
+- [ ] The `engine_version` workflow input default matches the pin (`0.10.0`); the release gate compares
       it with `scripts/cli-checksums.json`.
 - [ ] Contracts were regenerated from the pinned engine and match
       `scripts/cli-checksums.json`.
-- [ ] `MIN_ENGINE_VERSION` is `0.9.0` and equals the pin.
+- [ ] `MIN_ENGINE_VERSION` is `0.10.0` and equals the pin.
 - [ ] The local release build you reviewed matches the pinned SHA-256 and size in
       `scripts/cli-checksums.json` (strict `verify-sidecar.mjs`), or that target is explicitly
-      `null` because its `0.9.0` sidecar has not been rebuilt yet. CI rebuilds are recorded, not
+      `null` because its `0.10.0` sidecar has not been rebuilt yet. CI rebuilds are recorded, not
       compared.
-- [ ] README, `docs/*`, `docs/releases/0.7.0.md`, changelog/release notes and the unsigned warning
+- [ ] README, `docs/*`, `docs/releases/0.8.0.md`, changelog/release notes and the unsigned warning
       are current.
 - [ ] No secrets, private keys or customer data are in the diff or fixtures.
 - [ ] The GitHub environment `desktop-release` exists with the owner as required reviewer.
@@ -602,7 +604,7 @@ The release job:
 
 ### Build-only run
 
-1. Run **Desktop build** with `publish=false`, `engine_version=0.9.0` and `signed=false`.
+1. Run **Desktop build** with `publish=false`, `engine_version=0.10.0` and `signed=false`.
 2. Wait for all four matrix jobs.
 3. Download each artifact.
 4. On a clean machine/VM per OS, install and launch **offline**:
@@ -614,14 +616,14 @@ The release job:
 5. Confirm the updater panel reports the bundle type correctly: NSIS/AppImage/app can update;
    portable/deb/rpm/MSI show the manual-only hint and link to the release page.
 6. Open `sidecar-checksums-<target>.json` from the artifact: `ok` is true, `hashPolicy` is
-   `rebuild`, `sha256` is a 64-hex digest, `size` is positive and `actualVersion` is `0.9.0`. It
+   `rebuild`, `sha256` is a 64-hex digest, `size` is positive and `actualVersion` is `0.10.0`. It
    will not equal the reviewed pin; that is expected.
 
 ### Publish run
 
 1. Update `scripts/cli-checksums.json` in a PR if the reviewed local build or engine pin changed;
    merge it.
-2. Run **Desktop build** with `publish=true`, the final `tag` (`v0.7.0`), `engine_version=0.9.0`
+2. Run **Desktop build** with `publish=true`, the final `tag` (`v0.8.0`), `engine_version=0.10.0`
    and `signed=false` (unless certificates are actually configured).
 3. Approve the `desktop-release` environment as the repository owner. The release job also requires
    the actor to be the repository owner; a non-owner run is skipped.
@@ -631,8 +633,9 @@ The release job:
    platforms, `latest.json` and notes.
 6. Verify the in-app update on a machine with the previous release installed. `0.2.0 → 0.2.1`
    through `0.6.0 → 0.7.0` are verified end-to-end on Windows NSIS, including the Rust-side version
-   re-check and a running sidecar stopped before the installer. The macOS `.app` and Linux AppImage
-   update paths were not re-run for `0.7.0`; verify them on the next release. Cancellation during
+   re-check and a running sidecar stopped before the installer. `0.7.0 → 0.8.0` is the next update
+   to verify on Windows NSIS. The macOS `.app` and Linux AppImage update paths were not re-run for
+   `0.7.0`; verify them on this release. Cancellation during
    download and `UPDATE_ENGINE_BUSY` when cleanup is blocked are covered by unit tests. Do not
    advertise auto-update for deb/rpm/MSI/portable.
 7. Announce with the unsigned-build instructions, the manual-only cases and the checksum file.
