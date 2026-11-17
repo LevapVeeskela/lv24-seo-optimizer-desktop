@@ -1,0 +1,59 @@
+.indexing-status-section {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding-top: var(--space-4);
+  border-top: 1px solid var(--border);
+}
+
+.indexing-status-section:first-of-type {
+  padding-top: 0;
+  border-top: none;
+}
+
+.indexing-status-facts {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+  gap: var(--space-3);
+}
+
+.indexing-status-fact {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  padding: var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--inset);
+  overflow-wrap: anywhere;
+}
+
+.indexing-status-provider {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  overflow-wrap: anywhere;
+}
+
+.indexing-status-quota {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  white-space: nowrap;
+}
+
+.indexing-status-errors {
+  margin: 0;
+}
+
+.indexing-status-errors code {
+  overflow-wrap: anywhere;
+}
+
+.indexing-status-meta {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding-top: var(--space-4);
+  border-top: 1px solid var(--border);
+}

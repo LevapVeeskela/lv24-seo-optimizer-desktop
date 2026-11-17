@@ -7,20 +7,26 @@ import { Notice } from "@/shared/ui/Notice";
 import { BackupPanel } from "@/features/backup";
 import { ConnectorsCard, ConnectorsStore } from "@/features/connectors";
 import { IndexingPanel } from "@/features/indexing";
+import {
+  IndexingAutomationCard,
+  IndexingStatusStore,
+} from "@/features/indexing-status";
 import { McpConfigPanel } from "@/features/mcp-config";
 import { SchedulePanel } from "@/features/schedule";
 
 /**
  * Local integrations: OAuth provider connectors, copy-ready MCP host snippets,
- * two-phase Bing indexing actions, a scheduler panel with a preview and an
- * explicitly confirmed host install, and a backup panel with create plus a
- * two-phase restore. Every write is confirmed first; the connectors only start
- * the engine's own OAuth flow and never receive a token.
+ * a read-only indexing automation card, two-phase Bing indexing actions, a
+ * scheduler panel with a preview and an explicitly confirmed host install, and
+ * a backup panel with create plus a two-phase restore. Every write is confirmed
+ * first; the connectors only start the engine's own OAuth flow and never
+ * receive a token.
  */
 export const IntegrationsPage = observer(function IntegrationsPage() {
   const { t } = useI18n();
   const { engine } = useRootStore();
   const [connectors] = useState(() => new ConnectorsStore());
+  const [indexingStatus] = useState(() => new IndexingStatusStore());
   const configPath = engine.status?.configPath ?? null;
   const blocked = engine.offline || engine.loading || !configPath;
 
@@ -46,6 +52,13 @@ export const IntegrationsPage = observer(function IntegrationsPage() {
         blocked={blocked}
       />
       <McpConfigPanel />
+      <IndexingAutomationCard
+        store={indexingStatus}
+        configPath={configPath}
+        offline={engine.offline}
+        loading={engine.loading}
+        platform={engine.status?.platform ?? null}
+      />
       <IndexingPanel />
       <SchedulePanel />
       <BackupPanel />

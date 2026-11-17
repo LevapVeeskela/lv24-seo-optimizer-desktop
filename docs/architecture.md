@@ -150,6 +150,9 @@ The command surface is fixed. The generic `cli_run` allow-list is:
 | `metrika_bytime` | `metrika bytime --days <n> --lag-days <n> [--group day\|week\|month] --json` | read |
 | `cwv_audits` | `cwv audits --url <abs> [--strategy mobile\|desktop] [--category <c> ...] --json` | read |
 | `cwv_history` | `cwv history (--url <abs>\|--origin <abs>) [--device phone\|desktop\|tablet] [--weeks <n>] --json` | read |
+| `indexing_status` | `indexing status [--provider all\|bing\|yandex\|gsc\|indexnow] [--limit <n>] [--live] --json` | read |
+| `indexing_history` | `indexing history [--limit <n>] --json` | read |
+| `schedule_status` | `schedule status --kind weekly\|daily\|indexing [--target <cron\|systemd\|windows>] --json` | read |
 
 Dedicated Tauri commands cover the rest: `shell_status`, `config_read`, `config_validate`,
 `config_write`, `config_patch`, `auth_set` (secret over stdin), `auth_delete`, `write_text_file`,
@@ -243,6 +246,19 @@ never cancellable, because each is a bounded read. The Diagnostics screen render
 `meta.organic_only` and the sampling fields for Metrika. An empty provider answer is shown as
 `no_rows_for_window`, `provider_returned_no_rows` or `low_traffic` — never as a zero row. Bing
 statistics take the site from `providers.bing.site`; the webview cannot pass `--site`.
+
+`indexing_status`, `indexing_history` and `schedule_status` are the read-only indexing automation
+reads. Each has a short allow-list (`provider`/`limit`/`live`, `limit`, and `kind`/`target`
+respectively); the shell rejects a field that belongs to another command, an unknown provider,
+kind or target, an out-of-range limit, `allowWrite` or a confirm token before the engine is
+spawned. All three require the active config and are never cancellable. `indexing status` is asked
+for `provider=all`, 50 rows and `live=true`, so Bing/Yandex quotas are read now rather than from a
+stored snapshot; GSC and IndexNow report their local daily counter. The Integrations card renders
+`meta.limitations` and `meta.data_age_days` for every answer, shows a missing provider as
+**No data yet** instead of the engine's structural zeros, and labels the GSC `indexed_total` as the
+deprecated sitemap aggregate. `schedule status` only reports the host job; `schedule_install` still
+offers the weekly/daily report jobs only, so the indexing job is installed by the engine or the
+host, not by this card.
 
 The engine also requires a non-empty `LV24_SEO_WRITE_SECRET`. The desktop generates 32 random bytes
 from the OS CSPRNG once at startup, stores the 64-character hex value in `AppState` in memory only and
@@ -388,7 +404,8 @@ Feature-Sliced Design, dependencies pointing downward:
 ```
 app/        root store, providers, router, layout, styles
 pages/      dashboard, reports, settings, configuration, recommendations, not-found
-features/   save-config, secret-set, connectors, update, agent-task, backup, schedule, indexing
+features/   save-config, secret-set, connectors, update, agent-task, backup, schedule, indexing,
+            indexing-status
 entities/   config, engine, report, stats, recommendation, update, crawl, logs, workspace
 shared/     CLI transport, desktop settings/files, i18n, UI primitives, formatting, run registry
 ```

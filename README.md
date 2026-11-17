@@ -54,6 +54,13 @@ not want to remember flags:
   `GetUrlSubmissionQuota`. A missing Bing key is reported as `AUTH_REQUIRED` with a Settings hint.
   **Bing Site Scan** has no public API in the official Webmaster method list, so the desktop only
   opens the official page in your default browser — it never claims to start a scan.
+- **Indexing automation (read-only):** a card on the Integrations page reads the quota-aware
+  indexing queue (`indexing status`), the newest runs (`indexing history`) and the host job state
+  (`schedule status --kind indexing`). It shows submitted/indexed/pending counts per provider, Bing
+  daily/monthly remaining, Yandex remaining, the GSC/IndexNow used/limit counter, the documented
+  **Daily 04:00** cadence, a **Scheduled** chip when the host job is installed, the newest run with
+  up to five error items, a 7/30-day day/provider roll-up and every limitation the engine reports.
+  There is no write control, no confirm token and no provider secret on this card.
 - **Read-only platform diagnostics:** a Diagnostics screen with five tabs — Google URL Inspection
   and sitemaps, Yandex indexing history/search events/sitemaps/recrawl queue, Bing page, traffic,
   crawl, URL and query/page-join stats, Metrika pages, goals, devices, countries, engagement and
@@ -74,9 +81,10 @@ not want to remember flags:
   Markdown prompt, bulk-export or queue the visible set, hand it to a coding agent, then re-run the
   report to verify the fix.
 - **Integrations:** OAuth connectors for Google Search Console, Yandex Webmaster and Yandex
-  Metrika, MCP snippets for Claude Desktop, OpenCode, VS Code and Cursor, two-phase Bing
-  sitemap/IndexNow/URL submission actions, a Site Scan opener, plus a schedule card that previews a
-  cron/systemd/Windows artifact or installs the host job after confirmation.
+  Metrika, MCP snippets for Claude Desktop, OpenCode, VS Code and Cursor, a read-only indexing
+  automation card, two-phase Bing sitemap/IndexNow/URL submission actions, a Site Scan opener, plus
+  a schedule card that previews a cron/systemd/Windows artifact or installs the host job after
+  confirmation.
 - **A per-workspace reporting window** (7/28/90 days, 2- or 3-day provider lag) and honest run status:
   elapsed time, last run, truncation and limitations.
 - **Cancellable background runs:** crawl, weekly report, log analysis, backup create/restore and host
@@ -95,7 +103,7 @@ The desktop is one surface over the same engine. These are the tools the engine 
 
 | Surface | What you get |
 |---|---|
-| Desktop | Project wizard, dashboard with properties and reporting window, crawl screen, log analysis, task lifecycle, portfolio, weekly report with snapshot comparison, attributed digest and CWV, read-only platform diagnostics (GSC, Yandex, Bing, Metrika, CWV), OAuth provider connectors, config editor/diff/validation, recommendations with search/bulk, integrations snippets, Bing sitemap/IndexNow/URL submission actions, read-only Bing sitemap/issue/quota views, Site Scan opener, backup create/restore, host schedule install, agent task queue, signed updates |
+| Desktop | Project wizard, dashboard with properties and reporting window, crawl screen, log analysis, task lifecycle, portfolio, weekly report with snapshot comparison, attributed digest and CWV, read-only platform diagnostics (GSC, Yandex, Bing, Metrika, CWV), OAuth provider connectors, read-only indexing automation (queue, quotas, runs, host job), config editor/diff/validation, recommendations with search/bulk, integrations snippets, Bing sitemap/IndexNow/URL submission actions, read-only Bing sitemap/issue/quota views, Site Scan opener, backup create/restore, host schedule install, agent task queue, signed updates |
 | CLI | 22 top-level commands (15 groups + 7 commands): `version`, `doctor`, `init`, `properties`, `stats`, `crawl`, `install`, `auth`, `config`, `gsc`, `yandex`, `sitemap`, `indexnow`, `report`, `cwv`, `schedule`, `export`, `logs`, `tasks`, `backup`, `portfolio`, `mcp` |
 | MCP | 12 tools, 3 resources, 3 prompts; no provider writes by default |
 | Skills | `seo-weekly`, `seo-indexing-triage`, `seo-technical-audit` |
@@ -408,6 +416,36 @@ shows the engine's `AUTH_REQUIRED` / `CONFIG_INVALID` message with its `next_act
 the engine auth guide instead of a generic failure. The card has no write or confirm control: the
 engine stores the tokens in the OS keychain (or its explicit file fallback).
 
+## Indexing automation (read-only)
+
+The **Indexing automation** card sits between the MCP snippets and the write-capable indexing
+actions. It reads three commands from engine `lv24-seo >= 0.13.1`:
+
+```text
+lv24-seo indexing status --provider all --limit 50 --live --json
+lv24-seo indexing history --limit 30 --json
+lv24-seo schedule status --kind indexing --target <cron|systemd|windows> --json
+```
+
+- **Header:** a state chip from `schedule status` (`Scheduled` when the host job is `installed`,
+  otherwise the reported state) and the documented **Daily 04:00** cadence. The card never installs,
+  edits or removes the job; `schedule install` in this release still covers the weekly/daily report
+  jobs only.
+- **Providers:** Bing, Yandex, GSC and IndexNow rows with submitted, indexed (GSC only), pending and
+  quota. Bing shows daily/monthly remaining, Yandex shows remaining, and GSC/IndexNow show the local
+  used/limit counter. A provider the engine did not configure is **No data yet**, never a zero row.
+  The GSC `indexed_total` is rendered separately with a **deprecated aggregate** note because Google
+  deprecates the sitemap `contents[].indexed` field.
+- **Last run:** the newest history row with status, provider, start time, submitted/checked/errors
+  and at most five `detail.error_items` (`url`, `code`, `message`); the rest are summarized.
+- **History:** `--limit 30` is aggregated by day and provider, with 7-day and 30-day totals. There is
+  no chart dependency.
+- **Honesty:** `meta.limitations` and `meta.data_age_days` are always rendered. If the engine rejects
+  the command as unknown, the card says **Indexing status needs engine >= 0.13.1** and hides the
+  tables instead of showing empty zeros.
+- **Read-only:** no `--allow-write`, no confirm token and no credential is sent or rendered. Refresh
+  re-runs the same three reads; it is disabled while a load is in flight.
+
 ## Stats dashboard
 
 The dashboard renders the stats envelope; it is not a new metric engine. The contract is
@@ -596,11 +634,12 @@ build from source and sign it with your own certificate. See [`docs/release.md`]
 | Contracts (`config.schema.json`, CLI fixtures incl. `stats`) | generated from `lv24-seo 0.13.1`; drift check in CI |
 | CI (web, Rust matrix, contract check) | active on pull requests and `main`; standard runners only |
 | Manual desktop build workflow (NSIS, DMG, AppImage, deb, rpm) | available; owner-triggered; publish requires the updater key |
-| Tauri command bridge (config read/validate/write/patch, CLI runner incl. `init`, `schedule_print`, `logs_analyze`, `tasks_*`, `backup_create`, `backup_restore`, `portfolio_list`, `schedule_install`, `sitemap_submit`, `indexnow_submit`, `bing_submit`, `bing_sitemaps`, `bing_issues`, `bing_quota`, the 18 read-only diagnostics commands, file and directory pickers, known configs, secrets, diagnostics, `open_bing_sitescan`) | implemented |
+| Tauri command bridge (config read/validate/write/patch, CLI runner incl. `init`, `schedule_print`, `logs_analyze`, `tasks_*`, `backup_create`, `backup_restore`, `portfolio_list`, `schedule_install`, `sitemap_submit`, `indexnow_submit`, `bing_submit`, `bing_sitemaps`, `bing_issues`, `bing_quota`, `indexing_status`, `indexing_history`, `schedule_status`, the 18 read-only diagnostics commands, file and directory pickers, known configs, secrets, diagnostics, `open_bing_sitescan`) | implemented |
 | Bing indexing actions (sitemap submit, IndexNow from sitemap, Site Scan opener) | implemented in `0.7.0`; requires engine `0.9.0`; Site Scan only opens the official page |
 | Bing URL submission and read-only sitemap/issue/quota views | implemented in `0.8.0`; requires engine `0.10.0`; accepted is not indexed |
 | Read-only Diagnostics screen (Google, Yandex, Bing, Metrika, Core Web Vitals) | implemented in `0.9.0`; requires engine `0.11.0`; 18 allow-listed read commands, no writes |
 | OAuth Connect card (Google Search Console, Yandex Webmaster, Metrika) | implemented in `0.9.1`; requires engine `0.13.1`; tokens stay in the OS keychain, no token is rendered |
+| Read-only Indexing automation card (queue, quotas, last run, day/provider history, host job state) | implemented; requires engine `0.13.1`; no write control, no confirm token |
 | Cancellable background runs (`run_cancel`, run banner) | implemented in `0.6.0` |
 | React screens (onboarding, dashboard, crawl, logs, tasks, portfolio, settings, configuration, reports, recommendations, integrations, diagnostics, backup) | implemented |
 | Bundled onedir sidecar | all four targets built in CI and by the release workflow; the Windows x64 pin records the reviewed `0.13.1` build, Linux/macOS reviewed pins remain `null` and are covered by rebuild-aware CI checksum reports |
