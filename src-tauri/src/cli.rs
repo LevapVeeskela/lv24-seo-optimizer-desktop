@@ -35,6 +35,8 @@ const MAX_TASK_PAYLOAD_BYTES: usize = 16 * 1024;
 const MAX_TASKS_LIMIT: u32 = 500;
 /// `portfolio list` returns a bounded roll-up; the shell keeps the same cap.
 const MAX_PORTFOLIO_LIMIT: u32 = 50;
+/// `indexing status`/`indexing history` rows per provider (engine max 1000).
+const MAX_INDEXING_ROWS: u32 = 1_000;
 /// One Bing submit is split into provider batches by the engine; the shell
 /// still caps the webview-supplied list so argv cannot grow without bound.
 const MAX_BING_SUBMIT_URLS: usize = 10_000;
@@ -131,6 +133,12 @@ pub enum CliCommandId {
     CwvAudits,
     /// Read-only CrUX weekly p75 history for one URL or origin.
     CwvHistory,
+    /// Read-only indexing queue, per-provider counts and quota snapshot.
+    IndexingStatus,
+    /// Read-only record of past indexing runs.
+    IndexingHistory,
+    /// Read-only host scheduler state for one job kind; installs nothing.
+    ScheduleStatus,
     /// Internal commands used by dedicated auth commands; they are deliberately
     /// absent from the generic `cli_run` allow-list.
     AuthSet,
@@ -197,6 +205,9 @@ impl CliCommandId {
             "metrika_bytime" => Ok(Self::MetrikaBytime),
             "cwv_audits" => Ok(Self::CwvAudits),
             "cwv_history" => Ok(Self::CwvHistory),
+            "indexing_status" => Ok(Self::IndexingStatus),
+            "indexing_history" => Ok(Self::IndexingHistory),
+            "schedule_status" => Ok(Self::ScheduleStatus),
             other => Err(AppError::new(
                 "INVALID_COMMAND",
                 format!("command {other:?} is not in the desktop allow-list"),
@@ -214,7 +225,8 @@ impl CliCommandId {
                     "bing_pages", "bing_traffic", "bing_crawl", "bing_urlinfo",
                     "bing_joins", "metrika_pages", "metrika_goals",
                     "metrika_devices", "metrika_countries", "metrika_engagement",
-                    "metrika_bytime", "cwv_audits", "cwv_history"
+                    "metrika_bytime", "cwv_audits", "cwv_history",
+                    "indexing_status", "indexing_history", "schedule_status"
                 ]
             }))),
         }
@@ -266,6 +278,9 @@ impl CliCommandId {
             Self::MetrikaBytime => "metrika_bytime",
             Self::CwvAudits => "cwv_audits",
             Self::CwvHistory => "cwv_history",
+            Self::IndexingStatus => "indexing_status",
+            Self::IndexingHistory => "indexing_history",
+            Self::ScheduleStatus => "schedule_status",
             Self::AuthSet => "auth_set",
             Self::AuthLogout => "auth_delete",
         }
@@ -340,6 +355,9 @@ impl CliCommandId {
                 | Self::MetrikaBytime
                 | Self::CwvAudits
                 | Self::CwvHistory
+                | Self::IndexingStatus
+                | Self::IndexingHistory
+                | Self::ScheduleStatus
         )
     }
 
@@ -377,6 +395,10 @@ impl CliCommandId {
             | Self::SitemapSubmit
             | Self::IndexNowSubmit
             | Self::BingSubmit
+            // The indexing card reads the queue, history and host job state.
+            | Self::IndexingStatus
+            | Self::IndexingHistory
+            | Self::ScheduleStatus
             // A Lighthouse run (PSI) can take longer than a plain provider read.
             | Self::CwvAudits => Duration::from_secs(120),
             // Onboarding may create a directory tree on a slow disk.
@@ -539,6 +561,9 @@ pub struct CliArgs {
     pub weeks: Option<u32>,
     /// `cwv_history` only: origin URL (mutually exclusive with `url`).
     pub origin: Option<String>,
+    /// `indexing_status` only: read Bing/Yandex quotas live instead of the
+    /// stored snapshot. Read-only; the engine never submits anything.
+    pub live: Option<bool>,
 }
 
 impl CliArgs {
@@ -1216,6 +1241,46 @@ pub fn build_argv(command: CliCommandId, args: &CliArgs) -> AppResult<Vec<String
             argv.push("--json".into());
             argv
         }
+        CliCommandId::IndexingStatus => {
+            let provider =
+                normalize_indexing_status_provider(args.provider.as_deref().unwrap_or("all"))?;
+            let mut argv = vec![
+                "indexing".into(),
+                "status".into(),
+                "--provider".into(),
+                provider,
+            ];
+            if let Some(limit) = args.limit {
+                validate_range(limit, 1, MAX_INDEXING_ROWS, "limit")?;
+                argv.push("--limit".into());
+                argv.push(limit.to_string());
+            }
+            if args.live == Some(true) {
+                argv.push("--live".into());
+            }
+            argv.push("--json".into());
+            argv
+        }
+        CliCommandId::IndexingHistory => {
+            let mut argv = vec!["indexing".into(), "history".into()];
+            if let Some(limit) = args.limit {
+                validate_range(limit, 1, MAX_INDEXING_ROWS, "limit")?;
+                argv.push("--limit".into());
+                argv.push(limit.to_string());
+            }
+            argv.push("--json".into());
+            argv
+        }
+        CliCommandId::ScheduleStatus => {
+            let kind = normalize_schedule_status_kind(args.kind.as_deref().unwrap_or(""))?;
+            let mut argv = vec!["schedule".into(), "status".into(), "--kind".into(), kind];
+            if let Some(target) = args.target.as_deref() {
+                argv.push("--target".into());
+                argv.push(normalize_schedule_target(target)?);
+            }
+            argv.push("--json".into());
+            argv
+        }
     };
     Ok(argv)
 }
@@ -1502,6 +1567,7 @@ fn set_arg_fields(args: &CliArgs) -> BTreeSet<&'static str> {
     add("device", args.device.is_some());
     add("weeks", args.weeks.is_some());
     add("origin", args.origin.is_some());
+    add("live", args.live.is_some());
     fields
 }
 
@@ -1553,6 +1619,23 @@ fn normalize_indexing_provider(raw: &str) -> AppResult<String> {
             format!("provider {raw:?} is not supported for Bing indexing"),
         )
         .with_details(serde_json::json!({ "allowed": ["bing"] })))
+    }
+}
+
+/// `indexing status` reads every provider the engine knows. The card asks for
+/// `all`; a narrower value is still a read-only filter.
+const INDEXING_STATUS_PROVIDERS: &[&str] = &["all", "bing", "yandex", "gsc", "indexnow"];
+
+fn normalize_indexing_status_provider(raw: &str) -> AppResult<String> {
+    let value = raw.trim().to_ascii_lowercase();
+    if INDEXING_STATUS_PROVIDERS.contains(&value.as_str()) {
+        Ok(value)
+    } else {
+        Err(AppError::new(
+            "INVALID_ARGUMENT",
+            format!("provider {raw:?} is not an indexing provider"),
+        )
+        .with_details(serde_json::json!({ "allowed": INDEXING_STATUS_PROVIDERS })))
     }
 }
 
@@ -2303,6 +2386,29 @@ fn validate_args(command: CliCommandId, args: &CliArgs) -> AppResult<()> {
             })?;
             validate_config_path(config)?;
         }
+        CliCommandId::IndexingStatus => {
+            reject_unexpected_args(command, args, &["provider", "limit", "live"])?;
+            if let Some(provider) = args.provider.as_deref() {
+                normalize_indexing_status_provider(provider)?;
+            }
+            if let Some(limit) = args.limit {
+                validate_range(limit, 1, MAX_INDEXING_ROWS, "limit")?;
+            }
+        }
+        CliCommandId::IndexingHistory => {
+            reject_unexpected_args(command, args, &["limit"])?;
+            if let Some(limit) = args.limit {
+                validate_range(limit, 1, MAX_INDEXING_ROWS, "limit")?;
+            }
+        }
+        CliCommandId::ScheduleStatus => {
+            reject_unexpected_args(command, args, &["kind", "target"])?;
+            let kind = required_arg(args.kind.as_deref(), "kind")?;
+            normalize_schedule_status_kind(kind)?;
+            if let Some(target) = args.target.as_deref() {
+                normalize_schedule_target(target)?;
+            }
+        }
         // Every diagnostics command returned through `validate_diagnostics_args`
         // above; listing them here keeps this match exhaustive without a
         // catch-all that would hide a future variant.
@@ -2841,6 +2947,23 @@ fn normalize_schedule_kind(raw: &str) -> AppResult<String> {
             format!("schedule kind {raw:?} is not supported"),
         )
         .with_details(serde_json::json!({ "allowed": SCHEDULE_KINDS })))
+    }
+}
+
+/// `schedule status` also reports the read-only indexing job. It is absent
+/// from [`SCHEDULE_KINDS`] on purpose: the desktop has no install path for it.
+const SCHEDULE_STATUS_KINDS: &[&str] = &["weekly", "daily", "indexing"];
+
+fn normalize_schedule_status_kind(raw: &str) -> AppResult<String> {
+    let value = raw.trim().to_ascii_lowercase();
+    if SCHEDULE_STATUS_KINDS.contains(&value.as_str()) {
+        Ok(value)
+    } else {
+        Err(AppError::new(
+            "INVALID_ARGUMENT",
+            format!("schedule kind {raw:?} is not supported for status"),
+        )
+        .with_details(serde_json::json!({ "allowed": SCHEDULE_STATUS_KINDS })))
     }
 }
 
@@ -4214,6 +4337,9 @@ mod tests {
             "metrika_bytime",
             "cwv_audits",
             "cwv_history",
+            "indexing_status",
+            "indexing_history",
+            "schedule_status",
         ] {
             assert_eq!(CliCommandId::parse(id).unwrap().id(), id);
         }
@@ -7293,6 +7419,199 @@ mod tests {
     }
 
     #[test]
+    fn indexing_status_and_history_are_read_only() {
+        assert_eq!(
+            build_argv(CliCommandId::IndexingStatus, &CliArgs::default()).unwrap(),
+            vec!["indexing", "status", "--provider", "all", "--json"]
+        );
+        assert_eq!(
+            build_argv(
+                CliCommandId::IndexingStatus,
+                &CliArgs {
+                    provider: Some("GSC".into()),
+                    limit: Some(50),
+                    live: Some(true),
+                    ..CliArgs::default()
+                }
+            )
+            .unwrap(),
+            vec![
+                "indexing",
+                "status",
+                "--provider",
+                "gsc",
+                "--limit",
+                "50",
+                "--live",
+                "--json"
+            ]
+        );
+        assert_eq!(
+            build_argv(
+                CliCommandId::IndexingHistory,
+                &CliArgs {
+                    limit: Some(30),
+                    ..CliArgs::default()
+                }
+            )
+            .unwrap(),
+            vec!["indexing", "history", "--limit", "30", "--json"]
+        );
+        assert_eq!(
+            build_argv(CliCommandId::IndexingHistory, &CliArgs::default()).unwrap(),
+            vec!["indexing", "history", "--json"]
+        );
+
+        for command in [CliCommandId::IndexingStatus, CliCommandId::IndexingHistory] {
+            assert!(command.requires_config(), "{}", command.id());
+            assert_eq!(command.write_kind(), WriteKind::None, "{}", command.id());
+            assert!(!command.cancellable(), "{}", command.id());
+            // The card is read-only: a write opt-in or token never reaches it.
+            for args in [
+                CliArgs {
+                    allow_write: Some(true),
+                    ..CliArgs::default()
+                },
+                CliArgs {
+                    confirm: Some("1700000000:abcdef".into()),
+                    ..CliArgs::default()
+                },
+            ] {
+                assert_eq!(
+                    build_argv(command, &args).unwrap_err().code(),
+                    "INVALID_ARGUMENT",
+                    "{}",
+                    command.id()
+                );
+            }
+        }
+
+        // Unknown providers, out-of-range limits and cross-command fields are
+        // refused before the engine is spawned.
+        for args in [
+            CliArgs {
+                provider: Some("metrika".into()),
+                ..CliArgs::default()
+            },
+            CliArgs {
+                limit: Some(0),
+                ..CliArgs::default()
+            },
+            CliArgs {
+                limit: Some(1_001),
+                ..CliArgs::default()
+            },
+            CliArgs {
+                kind: Some("indexing".into()),
+                ..CliArgs::default()
+            },
+            CliArgs {
+                target: Some("windows".into()),
+                ..CliArgs::default()
+            },
+        ] {
+            assert_eq!(
+                build_argv(CliCommandId::IndexingStatus, &args)
+                    .unwrap_err()
+                    .code(),
+                "INVALID_ARGUMENT"
+            );
+        }
+        assert_eq!(
+            build_argv(
+                CliCommandId::IndexingHistory,
+                &CliArgs {
+                    provider: Some("bing".into()),
+                    ..CliArgs::default()
+                }
+            )
+            .unwrap_err()
+            .code(),
+            "INVALID_ARGUMENT"
+        );
+        assert_eq!(
+            build_argv(
+                CliCommandId::IndexingHistory,
+                &CliArgs {
+                    limit: Some(0),
+                    ..CliArgs::default()
+                }
+            )
+            .unwrap_err()
+            .code(),
+            "INVALID_ARGUMENT"
+        );
+    }
+
+    #[test]
+    fn schedule_status_is_read_only_and_kind_aware() {
+        assert_eq!(
+            build_argv(
+                CliCommandId::ScheduleStatus,
+                &CliArgs {
+                    kind: Some("indexing".into()),
+                    target: Some("windows".into()),
+                    ..CliArgs::default()
+                }
+            )
+            .unwrap(),
+            vec!["schedule", "status", "--kind", "indexing", "--target", "windows", "--json"]
+        );
+        // The target is optional; the engine picks the host default.
+        assert_eq!(
+            build_argv(
+                CliCommandId::ScheduleStatus,
+                &CliArgs {
+                    kind: Some("Indexing".into()),
+                    ..CliArgs::default()
+                }
+            )
+            .unwrap(),
+            vec!["schedule", "status", "--kind", "indexing", "--json"]
+        );
+        assert!(CliCommandId::ScheduleStatus.requires_config());
+        assert_eq!(CliCommandId::ScheduleStatus.write_kind(), WriteKind::None);
+        assert!(!CliCommandId::ScheduleStatus.cancellable());
+
+        // Kind is required; unknown kinds/targets and every write or foreign
+        // field are refused.
+        for args in [
+            CliArgs::default(),
+            CliArgs {
+                kind: Some("hourly".into()),
+                ..CliArgs::default()
+            },
+            CliArgs {
+                kind: Some("indexing".into()),
+                target: Some("launchd".into()),
+                ..CliArgs::default()
+            },
+            CliArgs {
+                kind: Some("indexing".into()),
+                limit: Some(30),
+                ..CliArgs::default()
+            },
+            CliArgs {
+                kind: Some("indexing".into()),
+                allow_write: Some(true),
+                ..CliArgs::default()
+            },
+            CliArgs {
+                kind: Some("indexing".into()),
+                confirm: Some("1700000000:abcdef".into()),
+                ..CliArgs::default()
+            },
+        ] {
+            assert_eq!(
+                build_argv(CliCommandId::ScheduleStatus, &args)
+                    .unwrap_err()
+                    .code(),
+                "INVALID_ARGUMENT"
+            );
+        }
+    }
+
+    #[test]
     fn only_local_state_commands_write() {
         for command in [
             CliCommandId::Init,
@@ -7340,6 +7659,9 @@ mod tests {
             CliCommandId::BingSitemaps,
             CliCommandId::BingIssues,
             CliCommandId::BingQuota,
+            CliCommandId::IndexingStatus,
+            CliCommandId::IndexingHistory,
+            CliCommandId::ScheduleStatus,
         ] {
             assert_eq!(command.write_kind(), WriteKind::None, "{}", command.id());
         }

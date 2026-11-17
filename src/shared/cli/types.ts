@@ -44,6 +44,9 @@ export const CLI_COMMAND_IDS = [
   "metrika_bytime",
   "cwv_audits",
   "cwv_history",
+  "indexing_status",
+  "indexing_history",
+  "schedule_status",
 ] as const;
 
 export type CliCommandId = (typeof CLI_COMMAND_IDS)[number];
@@ -101,7 +104,10 @@ export interface CliArgs {
   kind?: string;
   /** `tasks_list` filter / `tasks_update` target state. */
   state?: "open" | "in_progress" | "verified" | "dismissed";
-  /** `tasks_list` rows (1..500) / `portfolio_list` projects (1..50). */
+  /**
+   * `tasks_list`, `portfolio_list`, `indexing_status` and `indexing_history`
+   * rows; the shell bounds each command to its own engine maximum.
+   */
   limit?: number;
   /** `tasks_add` only: absolute or site-relative URL. */
   url?: string;
@@ -114,8 +120,9 @@ export interface CliArgs {
   /**
    * `sitemap_submit` and `bing_submit` only: must be `bing`.
    * `auth_login` only: `gsc`, `yandex` or `metrika`.
+   * `indexing_status` only: `all`, `bing`, `yandex`, `gsc` or `indexnow`.
    */
-  provider?: "bing" | "gsc" | "yandex" | "metrika";
+  provider?: "all" | "bing" | "gsc" | "yandex" | "metrika" | "indexnow";
   /** `auth_login` only: print the authorization URL instead of opening it. */
   noBrowser?: boolean;
   /** `auth_login` only: GSC loopback callback port (0 = auto). */
@@ -175,6 +182,11 @@ export interface CliArgs {
   weeks?: number;
   /** `cwv_history` only: origin URL (mutually exclusive with `url`). */
   origin?: string;
+  /**
+   * `indexing_status` only: read Bing/Yandex quotas live instead of the stored
+   * snapshot. The call stays read-only and never submits a URL.
+   */
+  live?: boolean;
 }
 
 export interface CliRunOptions {
