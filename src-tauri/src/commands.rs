@@ -22,6 +22,11 @@ use crate::settings::{Settings, SettingsPatch, SettingsStore};
 /// made `schedule install` plan-only by default and the write opt-in mandatory, so an older
 /// sidecar would reject the flag. It also uses `backup restore`, `portfolio list` and renders
 /// the `cwv` report section (engine 0.7.0). Report anything older as incompatible.
+///
+/// The `sitemap_submit`/`indexnow_submit` commands in this tree require engine 0.9.0, but the
+/// unchanged 0.6.0 bundle still ships 0.8.0: the release that includes them must raise this gate
+/// together with the engine pin. Until then the panel explains the resulting CLI error instead of
+/// claiming a write succeeded.
 pub const MIN_ENGINE_VERSION: &str = "0.8.0";
 
 /// Progress event emitted by the Rust updater while it downloads a release.
@@ -33,6 +38,11 @@ const UPDATE_CANCEL_POLL: Duration = Duration::from_millis(100);
 const PATH_RESOLVE_TIMEOUT: Duration = Duration::from_secs(10);
 const SETTINGS_WRITE_TIMEOUT: Duration = Duration::from_secs(10);
 const EXPORT_WRITE_TIMEOUT: Duration = Duration::from_secs(30);
+/// Bing Site Scan has no public API. The desktop may only open this exact page;
+/// the user starts the scan there.
+const BING_SITE_SCAN_URL: &str = "https://www.bing.com/webmasters/sitescan";
+const BING_SITE_SCAN_QUERY: &str = "?siteUrl=";
+const MAX_SITE_URL_LEN: usize = 2048;
 
 pub struct AppState {
     pub paths: paths::AppPaths,
@@ -1011,6 +1021,35 @@ pub async fn cli_run(
         }
         args.config_path = Some(active.display().to_string());
     }
+    if matches!(
+        command,
+        CliCommandId::SitemapSubmit | CliCommandId::IndexNowSubmit
+    ) {
+        // The indexing write gate is bound to the selected workspace: the
+        // engine opens the ledger next to this config, so a webview-supplied
+        // path must never redirect it. The plan phase carries no token; the
+        // apply phase carries both flags only after the confirmation dialog.
+        let active = config_path.as_ref().ok_or_else(|| {
+            AppError::new(
+                "CONFIG_PATH_REQUIRED",
+                format!("{} requires an absolute config path", command.id()),
+            )
+        })?;
+        if let Some(requested) = args.config_path.as_deref() {
+            let requested = paths::validate_config_path(requested)?;
+            if !same_path(&requested, active) {
+                return Err(AppError::new(
+                    "PATH_NOT_ALLOWED",
+                    "the requested config is not the active project config selected in Settings",
+                )
+                .with_details(serde_json::json!({
+                    "requested": requested.display().to_string(),
+                    "active": active.display().to_string(),
+                })));
+            }
+        }
+        args.config_path = Some(active.display().to_string());
+    }
     if command == CliCommandId::PortfolioList {
         let root = args.root.as_deref().ok_or_else(|| {
             AppError::new("INVALID_ARGUMENT", "root is required for portfolio_list")
@@ -1019,14 +1058,16 @@ pub async fn cli_run(
         args.root = Some(allowed.display().to_string());
     }
 
-    // `init`, the schedule commands and `backup_restore` carry `--config` in
-    // argv; every other command gets it appended by the runner. `logs analyze`
-    // and `portfolio list` have no `--config` option at all.
+    // `init`, the schedule commands, `backup_restore` and the indexing commands
+    // carry `--config` in argv; every other command gets it appended by the
+    // runner. `logs analyze` and `portfolio list` have no `--config` option.
     let engine_config = match command {
         CliCommandId::Init
         | CliCommandId::SchedulePrint
         | CliCommandId::ScheduleInstall
         | CliCommandId::BackupRestore
+        | CliCommandId::SitemapSubmit
+        | CliCommandId::IndexNowSubmit
         | CliCommandId::LogsAnalyze
         | CliCommandId::PortfolioList => None,
         _ => config_path.as_deref(),
@@ -1562,6 +1603,118 @@ fn opener_path(path: &Path) -> PathBuf {
     {
         path.to_path_buf()
     }
+}
+
+/// Open Bing Site Scan in the default browser.
+///
+/// Bing exposes no public API for starting a Site Scan, so this command never
+/// claims to start one. The destination host and path are hard-coded; the only
+/// variable is an absolute `https://` site URL placed in the `siteUrl` query
+/// parameter. The webview cannot pass a destination URL.
+#[tauri::command(rename_all = "camelCase")]
+pub fn open_bing_sitescan(app: AppHandle, site_url: String) -> Result<String, AppError> {
+    let url = bing_sitescan_url(&site_url)?;
+    app.opener()
+        .open_url(url.clone(), None::<&str>)
+        .map_err(|err| {
+            AppError::new(
+                "OPEN_URL",
+                format!("cannot open the Bing Site Scan page: {err}"),
+            )
+        })?;
+    Ok(url)
+}
+
+/// Build the only URL this command may open. `siteUrl` is percent-encoded with
+/// the RFC 3986 unreserved set, so no extra query parameter, fragment or path
+/// can be injected through the site URL.
+fn bing_sitescan_url(site_url: &str) -> AppResult<String> {
+    let site = validate_bing_site_url(site_url)?;
+    let url = format!(
+        "{BING_SITE_SCAN_URL}{BING_SITE_SCAN_QUERY}{}",
+        encode_query_component(site)
+    );
+    ensure_bing_sitescan_destination(&url)?;
+    Ok(url)
+}
+
+fn validate_bing_site_url(raw: &str) -> AppResult<&str> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Err(AppError::new("INVALID_ARGUMENT", "siteUrl is empty"));
+    }
+    if trimmed.len() > MAX_SITE_URL_LEN {
+        return Err(AppError::new(
+            "INVALID_ARGUMENT",
+            format!("siteUrl is longer than {MAX_SITE_URL_LEN} characters"),
+        ));
+    }
+    if trimmed
+        .chars()
+        .any(|ch| ch.is_control() || ch.is_whitespace())
+    {
+        return Err(AppError::new(
+            "INVALID_ARGUMENT",
+            "siteUrl must not contain whitespace or control characters",
+        ));
+    }
+    let rest = trimmed.strip_prefix("https://").ok_or_else(|| {
+        AppError::new(
+            "INVALID_ARGUMENT",
+            format!("siteUrl must be an absolute https URL, got {trimmed:?}"),
+        )
+    })?;
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or("");
+    if authority.is_empty()
+        || authority.starts_with(':')
+        || authority.contains('@')
+        || authority.contains('\\')
+    {
+        return Err(AppError::new(
+            "INVALID_ARGUMENT",
+            format!("siteUrl has an invalid host: {trimmed:?}"),
+        ));
+    }
+    Ok(trimmed)
+}
+
+/// Percent-encode one query value. Only unreserved characters survive, so a
+/// site URL cannot add `&`, `#`, `?` or a path segment to the destination.
+fn encode_query_component(value: &str) -> String {
+    let mut encoded = String::with_capacity(value.len());
+    for byte in value.bytes() {
+        match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' => {
+                encoded.push(byte as char);
+            }
+            _ => encoded.push_str(&format!("%{byte:02X}")),
+        }
+    }
+    encoded
+}
+
+/// Defense in depth: the opener is only ever handed the hard-coded Bing page
+/// with exactly one `siteUrl` parameter.
+fn ensure_bing_sitescan_destination(url: &str) -> AppResult<()> {
+    let prefix = format!("{BING_SITE_SCAN_URL}{BING_SITE_SCAN_QUERY}");
+    let Some(query) = url.strip_prefix(&prefix) else {
+        return Err(AppError::new(
+            "INVALID_ARGUMENT",
+            "refusing to open a URL outside the Bing Site Scan page",
+        ));
+    };
+    if query.is_empty()
+        || query.contains('&')
+        || query.contains('#')
+        || query.contains('?')
+        || query.contains('\\')
+    {
+        return Err(AppError::new(
+            "INVALID_ARGUMENT",
+            "refusing to open a malformed Bing Site Scan URL",
+        ));
+    }
+    Ok(())
 }
 
 /// SEC-05: a config path may only become active when it equals the current one,
@@ -2306,6 +2459,64 @@ mod tests {
         let redacted = redacted_syntax_error(&error);
         assert!(!redacted.contains("sk-live-123"), "{redacted}");
         assert_eq!(error.code(), "CONFIG_TOML_INVALID");
+    }
+
+    #[test]
+    fn bing_sitescan_url_is_hard_coded_and_percent_encodes_the_site() {
+        assert_eq!(
+            bing_sitescan_url("https://example.com/").unwrap(),
+            "https://www.bing.com/webmasters/sitescan?siteUrl=https%3A%2F%2Fexample.com%2F"
+        );
+        assert_eq!(
+            bing_sitescan_url("https://example.com/a?x=1&y=2#top").unwrap(),
+            "https://www.bing.com/webmasters/sitescan?siteUrl=https%3A%2F%2Fexample.com%2Fa%3Fx%3D1%26y%3D2%23top"
+        );
+    }
+
+    #[test]
+    fn bing_sitescan_rejects_non_https_and_malformed_site_urls() {
+        for site in [
+            "",
+            "http://example.com/",
+            "ftp://example.com/",
+            "javascript:alert(1)",
+            "example.com",
+            "https://",
+            "https:///path",
+            "https://user@example.com/",
+            "https://:443/",
+            "https://example.com/a b",
+        ] {
+            assert_eq!(
+                bing_sitescan_url(site).unwrap_err().code(),
+                "INVALID_ARGUMENT",
+                "{site:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn bing_sitescan_destination_allowlist_rejects_other_hosts_paths_and_params() {
+        assert!(ensure_bing_sitescan_destination(
+            "https://www.bing.com/webmasters/sitescan?siteUrl=https%3A%2F%2Fexample.com%2F"
+        )
+        .is_ok());
+        for url in [
+            "https://evil.test/webmasters/sitescan?siteUrl=x",
+            "http://www.bing.com/webmasters/sitescan?siteUrl=x",
+            "https://www.bing.com/webmasters/other?siteUrl=x",
+            "https://www.bing.com/webmasters/sitescan?siteUrl=x&next=https://evil.test",
+            "https://www.bing.com/webmasters/sitescan?siteUrl=x#fragment",
+            "https://www.bing.com/webmasters/sitescan?siteUrl=",
+            "https://www.bing.com/webmasters/sitescan?siteUrl=x?y",
+            "https://www.bing.com.evil.test/webmasters/sitescan?siteUrl=x",
+        ] {
+            assert_eq!(
+                ensure_bing_sitescan_destination(url).unwrap_err().code(),
+                "INVALID_ARGUMENT",
+                "{url}"
+            );
+        }
     }
 
     #[test]

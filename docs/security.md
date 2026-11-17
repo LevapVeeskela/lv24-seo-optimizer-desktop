@@ -6,7 +6,8 @@ enforce and the residual risks accepted for the pre-1.0 line; where a control is
 says so.
 `0.6.0` adds exact-process cancellation for the six long local jobs (`run_cancel`) and makes
 `schedule install` append `--allow-write` only after the confirmation dialog, matching engine
-`0.8.0`. `0.5.0` added a native archive picker whose result is the only arbitrary backup path
+`0.8.0`. The `wave/bing-indexing` working tree adds the gated `sitemap_submit` and `indexnow_submit`
+commands (engine `0.9.0`) and one external-URL allow-list for `open_bing_sitescan`. `0.5.0` added a native archive picker whose result is the only arbitrary backup path
 `backup restore` may read, a portfolio root that must be a dialog-picked folder, and a two-phase
 restore that writes only with `--allow-write` plus the plan token. `0.4.0` added a native log-file
 picker whose result is the only arbitrary log path `logs analyze` may read, a backup output folder
@@ -113,7 +114,17 @@ opt-in file. The desktop must show which source is active.
 - `--out` and export paths come from a native folder picker or an approved root; they are
   canonicalized before use.
 - Write flags (`--send`, `--allow-write`, confirmation tokens) are never accepted from a read
-  command and require an explicit confirmation dialog naming the target.
+  command and require an explicit confirmation dialog naming the target. `sitemap_submit` and
+  `indexnow_submit` accept exactly two shapes: a plan with neither flag nor token, or an apply with
+  both. A half-gated call (`allowWrite` without `confirm`, or a token without the opt-in) is refused
+  before the engine is spawned.
+- **External URL allow-list.** `open_bing_sitescan` is the only command that opens a remote URL. It
+  accepts only an absolute `https://` site URL, rejects whitespace, control characters, userinfo and
+  malformed hosts, and percent-encodes the value with the RFC 3986 unreserved set. The destination is
+  hard-coded as `https://www.bing.com/webmasters/sitescan?siteUrl=<encoded>` and checked again before
+  the opener is called, so the value cannot add a host, path, extra parameter or fragment. The
+  webview cannot pass a destination URL. Bing has no public API for starting a Site Scan; the UI
+  never claims that the desktop started one.
 - A timeout or dropped child handle kills the exact child process handle/PID. It never uses a
   wildcard process name; several LV24 applications can run concurrently. On Unix the engine is
   started in its own process group so a PyInstaller bootloader's interpreter child is killed with it
@@ -293,8 +304,9 @@ These require an explicit confirmation naming the target and action:
 | Install scheduler job | writes a host cron/systemd/Task Scheduler entry |
 | Install MCP client entry | merges host client configuration |
 | Export skills/tools | writes files to a chosen directory |
-| IndexNow submit | network write, idempotency ledger |
-| Sitemap submit | currently `WRITE_DISABLED` in the engine |
+| IndexNow submit | network write to Bing/IndexNow; two-phase plan token and idempotency ledger |
+| Bing sitemap submit | network write to Bing Webmaster; two-phase plan token and idempotency ledger |
+| Bing Site Scan | no public API; opens the official Bing page only and never reports a started scan |
 | Yandex recrawl | currently `WRITE_DISABLED` in the engine |
 
 `WRITE_DISABLED` and `CONFIRM_REQUIRED` are shown honestly. The desktop never fakes success, never
@@ -380,6 +392,8 @@ paid certificate, notarization or paid runner without explicit owner approval.
 - [ ] Backup retention matches only app-written `…bak-<stamp>` names.
 - [ ] CSP is production-safe, and report HTML opens externally through `open_path` (approved root
       plus extension allow-list) instead of being embedded in the webview.
+- [ ] `open_bing_sitescan` opens only the hard-coded Bing Site Scan page, accepts only an absolute
+      https site URL and never claims a scan was started.
 - [ ] Write actions require confirmation and preserve engine `WRITE_DISABLED` semantics.
 - [ ] A timeout kills only the exact child process; no wildcard process cleanup exists.
 - [ ] Sidecar version is verified before release, and the rebuild-aware checksum report exists for

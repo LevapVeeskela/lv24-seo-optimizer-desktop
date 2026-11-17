@@ -47,6 +47,11 @@ not want to remember flags:
 - **Portable workspace backups:** a `.zip` with a manifest, a redacted `seo.toml` and a consistent
   SQLite copy; tokens are never included. **Restore** is two-phase — review the plan, confirm, then
   apply — and keeps pre-restore copies of the database and config.
+- **Bing indexing actions:** a two-phase Bing sitemap submit and an IndexNow batch built from the
+  sitemap. Review the engine plan, confirm, then apply; a missing Bing key is reported as
+  `AUTH_REQUIRED` with a Settings hint. **Bing Site Scan** has no public API in the official
+  Webmaster method list, so the desktop only opens the official page in your default browser — it
+  never claims to start a scan.
 - **A report view** for the weekly digest: headline, the sections the engine returns, limitations,
   warnings and the generated local HTML report, which opens in your default browser. It also compares
   the two newest stored snapshots, renders the attributed change digest, shows Core Web Vitals by URL
@@ -59,8 +64,9 @@ not want to remember flags:
 - **A recommendations-to-agent workflow**: review findings, search and sort them, copy a bounded
   Markdown prompt, bulk-export or queue the visible set, hand it to a coding agent, then re-run the
   report to verify the fix.
-- **Integrations:** MCP snippets for Claude Desktop, OpenCode, VS Code and Cursor, plus a schedule
-  card that previews a cron/systemd/Windows artifact or installs the host job after confirmation.
+- **Integrations:** MCP snippets for Claude Desktop, OpenCode, VS Code and Cursor, two-phase Bing
+  sitemap/IndexNow actions, a Site Scan opener, plus a schedule card that previews a
+  cron/systemd/Windows artifact or installs the host job after confirmation.
 - **A per-workspace reporting window** (7/28/90 days, 2- or 3-day provider lag) and honest run status:
   elapsed time, last run, truncation and limitations.
 - **Cancellable background runs:** crawl, weekly report, log analysis, backup create/restore and host
@@ -79,7 +85,7 @@ The desktop is one surface over the same engine. These are the tools the engine 
 
 | Surface | What you get |
 |---|---|
-| Desktop | Project wizard, dashboard with properties and reporting window, crawl screen, log analysis, task lifecycle, portfolio, weekly report with snapshot comparison, attributed digest and CWV, config editor/diff/validation, recommendations with search/bulk, integrations snippets, backup create/restore, host schedule install, agent task queue, signed updates |
+| Desktop | Project wizard, dashboard with properties and reporting window, crawl screen, log analysis, task lifecycle, portfolio, weekly report with snapshot comparison, attributed digest and CWV, config editor/diff/validation, recommendations with search/bulk, integrations snippets, Bing sitemap/IndexNow actions, Site Scan opener, backup create/restore, host schedule install, agent task queue, signed updates |
 | CLI | 22 top-level commands (15 groups + 7 commands): `version`, `doctor`, `init`, `properties`, `stats`, `crawl`, `install`, `auth`, `config`, `gsc`, `yandex`, `sitemap`, `indexnow`, `report`, `cwv`, `schedule`, `export`, `logs`, `tasks`, `backup`, `portfolio`, `mcp` |
 | MCP | 12 tools, 3 resources, 3 prompts; no provider writes by default |
 | Skills | `seo-weekly`, `seo-indexing-triage`, `seo-technical-audit` |
@@ -350,7 +356,7 @@ settings, health status and presentation; it does not add provider adapters.
 | Google Search Console | yes (OAuth token or service-account file) | queries, pages, countries, devices, URL inspection | sitemap submit is disabled in the engine |
 | Yandex Webmaster | yes (OAuth) | queries, indexing history, diagnostics, richer indicators | recrawl is disabled in the engine |
 | Yandex Metrika | yes | sessions and users | none |
-| Bing Webmaster + IndexNow | yes | queries, crawl issues, instant URL ping | IndexNow submit, explicitly gated |
+| Bing Webmaster + IndexNow | yes | queries, crawl issues, sitemap submit, IndexNow URL ping | Bing sitemap submit and IndexNow from sitemap, both two-phase and explicitly gated. Site Scan has no public API; the desktop only opens the official Bing page |
 | Chrome UX Report | yes (API key) | URL + device field Core Web Vitals (`cwv collect`) | none |
 | PageSpeed Insights | yes | lab audits per URL | none |
 | Your own site | — | crawl, robots, sitemap, JSON-LD, hreflang, links | none |
@@ -472,6 +478,11 @@ action. The desktop does not apply site edits itself.
   SMB authentication. Open/export paths are restricted to approved roots and `open_path` opens the
   canonical path that passed the check, not the raw request. Windows reserved device names are
   rejected in every path component.
+- **One external URL allow-list.** `open_bing_sitescan` can open exactly
+  `https://www.bing.com/webmasters/sitescan?siteUrl=<encoded>`; the host and path are hard-coded and
+  the webview supplies only an absolute `https://` site URL, percent-encoded into the single query
+  parameter. It cannot open an arbitrary URL, and because Bing has no API for starting a Site Scan
+  the UI never reports that one was started.
 - **Durable, private writes.** Config and settings writes are atomic and fsynced (file and parent
   directory); temp drafts and backups are `0600` on POSIX and get an owner-only DACL on Windows
   before any bytes are written; config reads are bounded at 8 MiB. Backup retention only deletes
@@ -516,7 +527,8 @@ build from source and sign it with your own certificate. See [`docs/release.md`]
 | Contracts (`config.schema.json`, CLI fixtures incl. `stats`) | generated from `lv24-seo 0.8.0`; drift check in CI |
 | CI (web, Rust matrix, contract check) | active on pull requests and `main`; standard runners only |
 | Manual desktop build workflow (NSIS, DMG, AppImage, deb, rpm) | available; owner-triggered; publish requires the updater key |
-| Tauri command bridge (config read/validate/write/patch, CLI runner incl. `init`, `schedule_print`, `logs_analyze`, `tasks_*`, `backup_create`, `backup_restore`, `portfolio_list` and `schedule_install`, file and directory pickers, known configs, secrets, diagnostics) | implemented |
+| Tauri command bridge (config read/validate/write/patch, CLI runner incl. `init`, `schedule_print`, `logs_analyze`, `tasks_*`, `backup_create`, `backup_restore`, `portfolio_list`, `schedule_install`, `sitemap_submit` and `indexnow_submit`, file and directory pickers, known configs, secrets, diagnostics, `open_bing_sitescan`) | implemented |
+| Bing indexing actions (sitemap submit, IndexNow from sitemap, Site Scan opener) | implemented on `wave/bing-indexing`; needs engine `0.9.0`; Site Scan only opens the official page |
 | Cancellable background runs (`run_cancel`, run banner) | implemented in `0.6.0` |
 | React screens (onboarding, dashboard, crawl, logs, tasks, portfolio, settings, configuration, reports, recommendations, integrations, backup) | implemented |
 | Bundled onedir sidecar | all four targets built in CI and by the release workflow; the Windows x64 pin records the reviewed `0.8.0` build, Linux/macOS reviewed pins remain `null` and are covered by rebuild-aware CI checksum reports |

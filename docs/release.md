@@ -63,6 +63,37 @@ Release preconditions (as used for `0.6.0`; update the version pins for the next
   `npm run typecheck`, `npm run build`, `npm run test:release`, `cargo fmt --check` and
   `cargo clippy --all-targets -- -D warnings`.
 
+### Unreleased: Bing indexing actions (`wave/bing-indexing`)
+
+This branch does not bump the desktop version, tag, push or publish. It adds the desktop surface for
+two engine `0.9.0` commands and one external opener:
+
+- `sitemap_submit` builds
+  `sitemap submit --provider bing --config <path> [--url <abs>] --json`. The plan call omits
+  `--allow-write`/`--confirm`; the apply call includes both and the plan token. Without `--url` the
+  engine uses `{project.base_url}/sitemap.xml`. Only `--provider bing` is accepted.
+- `indexnow_submit` builds
+  `indexnow submit --from-sitemap --config <path> [--sitemap-url <abs>] --json`, with the same
+  two-phase gate. The engine reads the sitemap and extracts its URLs.
+- Both commands pin `--config` to the active workspace because the engine opens its write ledger
+  there. A token without the opt-in, an opt-in without a token, a non-Bing provider or a relative
+  URL is rejected by the shell before the engine starts.
+- A missing Bing key is shown as `AUTH_REQUIRED` with a Settings hint. A pre-`0.9.0` engine returns
+  `CLI_INVALID_JSON`; the panel says the action needs engine `0.9.0` instead of showing a success.
+  The branch keeps `MIN_ENGINE_VERSION` at `0.8.0` so it does not invalidate the shipped `0.6.0`
+  bundle; the release that ships these actions must bump the engine pin and `MIN_ENGINE_VERSION`
+  together.
+- `open_bing_sitescan` only opens
+  `https://www.bing.com/webmasters/sitescan?siteUrl=<percent-encoded>` in the default browser. Bing
+  has no public API for starting a Site Scan; the desktop does not start, poll or import a scan, and
+  the UI says so. The destination host/path are hard-coded and re-checked before the opener runs.
+
+Limitations: the result card shows the engine's status/details and, for IndexNow, the submitted URL
+count; it does not import scan results, retry a failed write automatically, or replay a consumed
+token. A changed sitemap URL invalidates both plans and requires a fresh review. Verification:
+`cargo test --all-targets`, `npm run typecheck`, `npm test`, `npm run build`,
+`npm run test:release`, `cargo fmt --check` and `cargo clippy --all-targets -- -D warnings`.
+
 ## 2. Versioning
 
 The desktop follows [Semantic Versioning 2.0.0](https://semver.org/):

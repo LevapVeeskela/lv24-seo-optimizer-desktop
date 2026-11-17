@@ -4,7 +4,10 @@ Status: **implementation contract for `0.6.0` (latest published line, 2026-11-16
 bridge and product screens are implemented in this repository. Where this document describes a
 control, it is the requirement that implementation must satisfy. The pinned engine is
 `lv24-seo 0.8.0`. `0.6.0` adds cancellable background runs (`run_cancel`), a window-wide run banner
-and the schedule-install `--allow-write` opt-in that engine `0.8.0` requires.
+and the schedule-install `--allow-write` opt-in that engine `0.8.0` requires. The `wave/bing-indexing`
+working tree adds two gated provider-write commands (`sitemap_submit`, `indexnow_submit`) and the
+`open_bing_sitescan` opener; they require engine `0.9.0` and are not part of the shipped `0.6.0`
+bundle until the engine and desktop versions are bumped together.
 
 ## 1. Shape
 
@@ -118,12 +121,14 @@ The command surface is fixed. The generic `cli_run` allow-list is:
 | `backup_restore` | `backup restore --file <zip> --config <path> [--allow-write --confirm <token>] --json` | local write (gated) |
 | `portfolio_list` | `portfolio list --root <dir> [--limit <n>] --json` | read |
 | `schedule_install` | `schedule install --kind weekly\|daily [--cron <expr>] --config <path> --allow-write --json` | host write (gated) |
+| `sitemap_submit` | `sitemap submit --provider bing --config <path> [--url <abs>] [--allow-write --confirm <token>] --json` | provider write (gated) |
+| `indexnow_submit` | `indexnow submit --from-sitemap --config <path> [--sitemap-url <abs>] [--allow-write --confirm <token>] --json` | provider write (gated) |
 
 Dedicated Tauri commands cover the rest: `shell_status`, `config_read`, `config_validate`,
 `config_write`, `config_patch`, `auth_set` (secret over stdin), `auth_delete`, `write_text_file`,
 `settings_get`, `settings_set`, `pick_config`, `pick_directory`, `pick_log_file`,
-`pick_backup_archive`, `open_path`, `prepare_update`, `update_install`, `update_cancel` and
-`run_cancel`. The webview cannot add a command at runtime.
+`pick_backup_archive`, `open_path`, `open_bing_sitescan`, `prepare_update`, `update_install`,
+`update_cancel` and `run_cancel`. The webview cannot add a command at runtime.
 
 `cli_run` accepts an optional `runId` only for the six long local jobs listed in
 `CliCommandId::cancellable` (`crawl`, `report_weekly`, `logs_analyze`, `backup_create`,
@@ -160,6 +165,21 @@ and the token must come from the plan. `pick_directory` also approves the portfo
 config and a confirmed `allowWrite=true`; the UI asks for confirmation first, and the shell appends
 `--allow-write` only then. Without that opt-in the call is refused with `CONFIRM_REQUIRED` before
 the engine is spawned, so a plan-only engine default cannot be bypassed by the webview.
+
+`sitemap_submit` and `indexnow_submit` are provider writes with the same two-shape gate. The plan
+call omits `--allow-write` and `--confirm`; the apply call includes both, and the shell rejects a
+half-gated call before the engine sees it. `--url` / `--sitemap-url` are optional, so the engine
+defaults to `{project.base_url}/sitemap.xml`; when supplied they must be absolute http(s) URLs. The
+shell pins `--config` to the active workspace because the engine opens its write ledger next to that
+config. `sitemap_submit` accepts only `--provider bing`; `indexnow_submit` takes no provider and no
+per-URL list.
+
+`open_bing_sitescan` is not an engine command. It accepts only an absolute `https://` site URL,
+percent-encodes it with the RFC 3986 unreserved set and opens exactly
+`https://www.bing.com/webmasters/sitescan?siteUrl=<encoded>` in the OS default browser. The host and
+path are hard-coded; the webview cannot supply a destination. The official Bing Webmaster API method
+list has no Site Scan method, so the command returns the opened URL and the UI states that the user
+starts the scan on the Bing page.
 
 `update_install` and `update_cancel` exist because the webview holds only `updater:allow-check`. The
 Rust side re-checks the endpoint, refuses a version that differs from the announced one, serializes
@@ -247,9 +267,9 @@ file. Values are never displayed.
 ## 7. Long-running calls and failure model
 
 Engine calls are synchronous from the UI's perspective. Each command has a fixed timeout: `crawl`
-600 seconds; `stats`, `report weekly` and `report diff` 120 seconds; `version`, `config show`,
-`doctor`, `properties` and `auth status` 30 seconds; `auth set`/`auth delete` 120 seconds. A timeout
-kills the exact child process and returns a typed error.
+600 seconds; `stats`, `report weekly`, `report diff` and the two indexing commands 120 seconds;
+`version`, `config show`, `doctor`, `properties` and `auth status` 30 seconds; `auth set`/`auth delete`
+120 seconds. A timeout kills the exact child process and returns a typed error.
 
 - **Cancellable long jobs.** `crawl`, `report weekly`, `logs analyze`, `backup create`,
   `backup restore` and `schedule install` may carry a stable run id. The Rust runner registers
@@ -288,7 +308,7 @@ Feature-Sliced Design, dependencies pointing downward:
 ```
 app/        root store, providers, router, layout, styles
 pages/      dashboard, reports, settings, configuration, recommendations, not-found
-features/   save-config, secret-set, update, agent-task, backup, schedule
+features/   save-config, secret-set, update, agent-task, backup, schedule, indexing
 entities/   config, engine, report, stats, recommendation, update, crawl, logs, workspace
 shared/     CLI transport, desktop settings/files, i18n, UI primitives, formatting, run registry
 ```

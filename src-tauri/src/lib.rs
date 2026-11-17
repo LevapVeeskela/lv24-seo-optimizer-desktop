@@ -39,6 +39,7 @@ pub fn run() {
             commands::pick_log_file,
             commands::pick_backup_archive,
             commands::open_path,
+            commands::open_bing_sitescan,
             commands::prepare_update,
             commands::update_install,
             commands::update_cancel,

@@ -77,20 +77,27 @@ pub enum CliCommandId {
     PortfolioList,
     /// Install the weekly/daily report job in the host scheduler.
     ScheduleInstall,
+    /// Two-phase Bing sitemap submit; plan without a token, apply with one.
+    SitemapSubmit,
+    /// Two-phase IndexNow submit built from the project sitemap.
+    IndexNowSubmit,
     /// Internal commands used by dedicated auth commands; they are deliberately
     /// absent from the generic `cli_run` allow-list.
     AuthSet,
     AuthLogout,
 }
 
-/// How a command changes state. `init` writes local files only; no command in
-/// the allow-list spends provider quota or changes remote provider state.
+/// How a command changes state. `init`, the task lifecycle, backups and the
+/// host scheduler write local state only; `sitemap_submit` and `indexnow_submit`
+/// change remote provider state and are gated by a reviewed plan plus token.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum WriteKind {
     /// Read-only: no file or provider state changes.
     None,
     /// Creates local files under a user-approved directory (`init`).
     LocalState,
+    /// Changes remote provider state after a confirmed write gate.
+    ProviderState,
 }
 
 impl CliCommandId {
@@ -115,6 +122,8 @@ impl CliCommandId {
             "backup_restore" => Ok(Self::BackupRestore),
             "portfolio_list" => Ok(Self::PortfolioList),
             "schedule_install" => Ok(Self::ScheduleInstall),
+            "sitemap_submit" => Ok(Self::SitemapSubmit),
+            "indexnow_submit" => Ok(Self::IndexNowSubmit),
             other => Err(AppError::new(
                 "INVALID_COMMAND",
                 format!("command {other:?} is not in the desktop allow-list"),
@@ -125,7 +134,8 @@ impl CliCommandId {
                     "auth_status", "report_weekly", "report_diff", "crawl",
                     "init", "schedule_print", "logs_analyze", "tasks_list",
                     "tasks_add", "tasks_update", "backup_create", "backup_restore",
-                    "portfolio_list", "schedule_install"
+                    "portfolio_list", "schedule_install", "sitemap_submit",
+                    "indexnow_submit"
                 ]
             }))),
         }
@@ -152,6 +162,8 @@ impl CliCommandId {
             Self::BackupRestore => "backup_restore",
             Self::PortfolioList => "portfolio_list",
             Self::ScheduleInstall => "schedule_install",
+            Self::SitemapSubmit => "sitemap_submit",
+            Self::IndexNowSubmit => "indexnow_submit",
             Self::AuthSet => "auth_set",
             Self::AuthLogout => "auth_delete",
         }
@@ -175,12 +187,14 @@ impl CliCommandId {
                 | Self::TasksUpdate
                 | Self::BackupCreate
                 | Self::BackupRestore
+                | Self::SitemapSubmit
+                | Self::IndexNowSubmit
         )
     }
 
     /// How the command changes state. `init`, the task lifecycle, backups and
-    /// the host scheduler write local state only; no command in the allow-list
-    /// spends provider quota or changes remote provider state.
+    /// the host scheduler write local state only; the indexing commands change
+    /// remote provider state and never pass without a confirmed write gate.
     pub fn write_kind(self) -> WriteKind {
         match self {
             Self::Init
@@ -189,6 +203,7 @@ impl CliCommandId {
             | Self::BackupCreate
             | Self::BackupRestore
             | Self::ScheduleInstall => WriteKind::LocalState,
+            Self::SitemapSubmit | Self::IndexNowSubmit => WriteKind::ProviderState,
             _ => WriteKind::None,
         }
     }
@@ -199,9 +214,12 @@ impl CliCommandId {
             Self::AuthSet | Self::AuthLogout => Duration::from_secs(120),
             // A restore copies a whole database and may replace large files.
             Self::BackupRestore => Duration::from_secs(300),
-            Self::Stats | Self::ReportWeekly | Self::ReportDiff | Self::BackupCreate => {
-                Duration::from_secs(120)
-            }
+            Self::Stats
+            | Self::ReportWeekly
+            | Self::ReportDiff
+            | Self::BackupCreate
+            | Self::SitemapSubmit
+            | Self::IndexNowSubmit => Duration::from_secs(120),
             // Onboarding may create a directory tree on a slow disk.
             Self::Init => Duration::from_secs(60),
             // A cold PyInstaller sidecar can spend well over ten seconds on
@@ -254,7 +272,8 @@ pub struct CliArgs {
     /// resolves the default and checks that any webview value stays under the
     /// app export directory.
     pub out: Option<String>,
-    /// Used only by the dedicated auth commands; never contains a secret.
+    /// Used by the dedicated auth commands; never contains a secret.
+    /// `sitemap_submit` only: must be `bing`.
     pub provider: Option<String>,
     /// `init` only: site URL or GSC property (`sc-domain:example.com`).
     pub property: Option<String>,
@@ -278,8 +297,13 @@ pub struct CliArgs {
     pub state: Option<String>,
     /// `tasks_list` only: 1..=500 rows.
     pub limit: Option<u32>,
-    /// `tasks_add` only: affected URL (absolute or site-relative).
+    /// `tasks_add`: affected URL (absolute or site-relative).
+    /// `sitemap_submit`: optional absolute sitemap URL; the engine uses
+    /// `{project.base_url}/sitemap.xml` when it is absent.
     pub url: Option<String>,
+    /// `indexnow_submit` only: optional absolute sitemap URL; the engine uses
+    /// `{project.base_url}/sitemap.xml` when it is absent.
+    pub sitemap_url: Option<String>,
     /// `tasks_add` only: rule/finding id that produced the task.
     pub rule: Option<String>,
     /// `tasks_add` only: evidence object, encoded as compact JSON (16 KiB cap).
@@ -342,6 +366,12 @@ impl CliArgs {
     /// Write-gate arguments that only `backup_restore` accepts.
     fn has_restore_args(&self) -> bool {
         self.allow_write.is_some() || self.confirm.is_some()
+    }
+
+    /// IndexNow's sitemap option is only valid for `indexnow_submit`; every
+    /// other command rejects it instead of silently ignoring a URL.
+    fn has_indexing_args(&self) -> bool {
+        self.sitemap_url.is_some()
     }
 }
 
@@ -650,8 +680,72 @@ pub fn build_argv(command: CliCommandId, args: &CliArgs) -> AppResult<Vec<String
             argv.push("--json".into());
             argv
         }
+        CliCommandId::SitemapSubmit => {
+            let provider = normalize_indexing_provider(args.provider.as_deref().unwrap_or(""))?;
+            let config = validate_config_path(args.config_path.as_deref().unwrap_or(""))?;
+            let mut argv = vec![
+                "sitemap".into(),
+                "submit".into(),
+                "--provider".into(),
+                provider,
+                "--config".into(),
+                config.display().to_string(),
+            ];
+            if let Some(url) = args.url.as_deref() {
+                argv.push("--url".into());
+                argv.push(validate_http_url(url, "sitemap URL")?.to_string());
+            }
+            append_write_gate(&mut argv, args)?;
+            argv.push("--json".into());
+            argv
+        }
+        CliCommandId::IndexNowSubmit => {
+            let config = validate_config_path(args.config_path.as_deref().unwrap_or(""))?;
+            let mut argv = vec![
+                "indexnow".into(),
+                "submit".into(),
+                "--from-sitemap".into(),
+                "--config".into(),
+                config.display().to_string(),
+            ];
+            if let Some(url) = args.sitemap_url.as_deref() {
+                argv.push("--sitemap-url".into());
+                argv.push(validate_http_url(url, "sitemap URL")?.to_string());
+            }
+            append_write_gate(&mut argv, args)?;
+            argv.push("--json".into());
+            argv
+        }
     };
     Ok(argv)
+}
+
+/// The write opt-in and token are appended only when the UI confirmed the
+/// reviewed plan. A token without the opt-in is rejected by `validate_args`.
+fn append_write_gate(argv: &mut Vec<String>, args: &CliArgs) -> AppResult<()> {
+    if args.allow_write == Some(true) {
+        argv.push("--allow-write".into());
+    }
+    if let Some(token) = args.confirm.as_deref() {
+        argv.push("--confirm".into());
+        argv.push(validate_confirm_token(token)?);
+    }
+    Ok(())
+}
+
+/// Only Bing exposes a sitemap submit endpoint in the desktop contract. The
+/// engine may grow other providers later; until then the shell refuses them.
+fn normalize_indexing_provider(raw: &str) -> AppResult<String> {
+    let value = raw.trim().to_ascii_lowercase();
+    if value == "bing" {
+        Ok(value)
+    } else {
+        Err(AppError::new(
+            "INVALID_ARGUMENT",
+            format!("provider {raw:?} is not supported for sitemap_submit"),
+        )
+        .with_details(serde_json::json!({ "allowed": ["bing"] })))
+    }
 }
 
 fn validate_args(command: CliCommandId, args: &CliArgs) -> AppResult<()> {
@@ -673,6 +767,7 @@ fn validate_args(command: CliCommandId, args: &CliArgs) -> AppResult<()> {
                 || args.has_init_or_schedule_args()
                 || args.has_log_or_task_args()
                 || args.has_restore_args()
+                || args.has_indexing_args()
                 || args.root.is_some()
             {
                 return reject("base/head/start/maxUrls/provider/out/init/schedule");
@@ -689,6 +784,7 @@ fn validate_args(command: CliCommandId, args: &CliArgs) -> AppResult<()> {
                 || args.has_init_or_schedule_args()
                 || args.has_log_or_task_args()
                 || args.has_restore_args()
+                || args.has_indexing_args()
                 || args.root.is_some()
             {
                 return reject("base/head/start/maxUrls/provider/init/schedule");
@@ -709,6 +805,7 @@ fn validate_args(command: CliCommandId, args: &CliArgs) -> AppResult<()> {
                 || args.has_init_or_schedule_args()
                 || args.has_log_or_task_args()
                 || args.has_restore_args()
+                || args.has_indexing_args()
                 || args.root.is_some()
             {
                 return reject("days/lagDays/start/maxUrls/provider/out/init/schedule");
@@ -730,6 +827,7 @@ fn validate_args(command: CliCommandId, args: &CliArgs) -> AppResult<()> {
                 || args.has_init_or_schedule_args()
                 || args.has_log_or_task_args()
                 || args.has_restore_args()
+                || args.has_indexing_args()
                 || args.root.is_some()
             {
                 return reject("days/lagDays/base/head/provider/out/init/schedule");
@@ -757,6 +855,7 @@ fn validate_args(command: CliCommandId, args: &CliArgs) -> AppResult<()> {
                 || args.has_init_or_schedule_args()
                 || args.has_log_or_task_args()
                 || args.has_restore_args()
+                || args.has_indexing_args()
                 || args.root.is_some()
             {
                 return reject("all arguments");
@@ -773,6 +872,7 @@ fn validate_args(command: CliCommandId, args: &CliArgs) -> AppResult<()> {
                 || args.has_init_or_schedule_args()
                 || args.has_log_or_task_args()
                 || args.has_restore_args()
+                || args.has_indexing_args()
                 || args.root.is_some()
             {
                 return reject("days/lagDays/base/head/start/maxUrls/out/init/schedule");
@@ -797,6 +897,7 @@ fn validate_args(command: CliCommandId, args: &CliArgs) -> AppResult<()> {
                 || args.target.is_some()
                 || args.has_log_or_task_args()
                 || args.has_restore_args()
+                || args.has_indexing_args()
                 || args.root.is_some()
             {
                 return reject("an argument other than property/configPath/dataDir");
@@ -828,6 +929,7 @@ fn validate_args(command: CliCommandId, args: &CliArgs) -> AppResult<()> {
                 || args.data_dir.is_some()
                 || args.has_log_or_task_args()
                 || args.has_restore_args()
+                || args.has_indexing_args()
                 || args.root.is_some()
             {
                 return reject(
@@ -858,6 +960,7 @@ fn validate_args(command: CliCommandId, args: &CliArgs) -> AppResult<()> {
                 || args.id.is_some()
                 || args.force.is_some()
                 || args.has_restore_args()
+                || args.has_indexing_args()
                 || args.root.is_some()
             {
                 return reject("an argument other than file/bot");
@@ -879,6 +982,7 @@ fn validate_args(command: CliCommandId, args: &CliArgs) -> AppResult<()> {
                 || args.id.is_some()
                 || args.force.is_some()
                 || args.has_restore_args()
+                || args.has_indexing_args()
                 || args.root.is_some()
             {
                 return reject("an argument other than property/kind/state/limit");
@@ -906,6 +1010,7 @@ fn validate_args(command: CliCommandId, args: &CliArgs) -> AppResult<()> {
                 || args.id.is_some()
                 || args.force.is_some()
                 || args.has_restore_args()
+                || args.has_indexing_args()
                 || args.root.is_some()
             {
                 return reject("an argument other than kind/url/rule/property/payload");
@@ -941,6 +1046,7 @@ fn validate_args(command: CliCommandId, args: &CliArgs) -> AppResult<()> {
                 || args.payload.is_some()
                 || args.force.is_some()
                 || args.has_restore_args()
+                || args.has_indexing_args()
                 || args.root.is_some()
             {
                 return reject("an argument other than id/state");
@@ -975,6 +1081,7 @@ fn validate_args(command: CliCommandId, args: &CliArgs) -> AppResult<()> {
                 || args.payload.is_some()
                 || args.id.is_some()
                 || args.has_restore_args()
+                || args.has_indexing_args()
                 || args.root.is_some()
             {
                 return reject("an argument other than out/force");
@@ -1012,6 +1119,7 @@ fn validate_args(command: CliCommandId, args: &CliArgs) -> AppResult<()> {
                 || args.payload.is_some()
                 || args.id.is_some()
                 || args.force.is_some()
+                || args.has_indexing_args()
                 || args.root.is_some()
             {
                 return reject("an argument other than file/configPath/allowWrite/confirm");
@@ -1063,6 +1171,7 @@ fn validate_args(command: CliCommandId, args: &CliArgs) -> AppResult<()> {
                 || args.id.is_some()
                 || args.force.is_some()
                 || args.has_restore_args()
+                || args.has_indexing_args()
             {
                 return reject("an argument other than root/limit");
             }
@@ -1096,6 +1205,7 @@ fn validate_args(command: CliCommandId, args: &CliArgs) -> AppResult<()> {
                 || args.id.is_some()
                 || args.force.is_some()
                 || args.confirm.is_some()
+                || args.has_indexing_args()
                 || args.root.is_some()
             {
                 return reject("an argument other than kind/cron/configPath/allowWrite");
@@ -1127,8 +1237,117 @@ fn validate_args(command: CliCommandId, args: &CliArgs) -> AppResult<()> {
                 })));
             }
         }
+        CliCommandId::SitemapSubmit => {
+            if args.days.is_some()
+                || args.lag_days.is_some()
+                || args.base.is_some()
+                || args.head.is_some()
+                || args.start.is_some()
+                || args.max_urls.is_some()
+                || args.out.is_some()
+                || args.property.is_some()
+                || args.data_dir.is_some()
+                || args.cron.is_some()
+                || args.target.is_some()
+                || args.file.is_some()
+                || args.bot.is_some()
+                || args.kind.is_some()
+                || args.state.is_some()
+                || args.limit.is_some()
+                || args.rule.is_some()
+                || args.payload.is_some()
+                || args.id.is_some()
+                || args.force.is_some()
+                || args.sitemap_url.is_some()
+                || args.root.is_some()
+            {
+                return reject("an argument other than provider/url/configPath/allowWrite/confirm");
+            }
+            let provider = args.provider.as_deref().ok_or_else(|| {
+                AppError::new(
+                    "INVALID_ARGUMENT",
+                    "provider is required for sitemap_submit",
+                )
+            })?;
+            normalize_indexing_provider(provider)?;
+            let config = args.config_path.as_deref().ok_or_else(|| {
+                AppError::new(
+                    "INVALID_ARGUMENT",
+                    "configPath is required for sitemap_submit",
+                )
+            })?;
+            validate_config_path(config)?;
+            if let Some(url) = args.url.as_deref() {
+                validate_http_url(url, "sitemap URL")?;
+            }
+            validate_indexing_write(command, args)?;
+        }
+        CliCommandId::IndexNowSubmit => {
+            if args.days.is_some()
+                || args.lag_days.is_some()
+                || args.base.is_some()
+                || args.head.is_some()
+                || args.start.is_some()
+                || args.max_urls.is_some()
+                || args.out.is_some()
+                || args.provider.is_some()
+                || args.property.is_some()
+                || args.data_dir.is_some()
+                || args.cron.is_some()
+                || args.target.is_some()
+                || args.file.is_some()
+                || args.bot.is_some()
+                || args.kind.is_some()
+                || args.state.is_some()
+                || args.limit.is_some()
+                || args.url.is_some()
+                || args.rule.is_some()
+                || args.payload.is_some()
+                || args.id.is_some()
+                || args.force.is_some()
+                || args.root.is_some()
+            {
+                return reject("an argument other than sitemapUrl/configPath/allowWrite/confirm");
+            }
+            let config = args.config_path.as_deref().ok_or_else(|| {
+                AppError::new(
+                    "INVALID_ARGUMENT",
+                    "configPath is required for indexnow_submit",
+                )
+            })?;
+            validate_config_path(config)?;
+            if let Some(url) = args.sitemap_url.as_deref() {
+                validate_http_url(url, "sitemap URL")?;
+            }
+            validate_indexing_write(command, args)?;
+        }
     }
     Ok(())
+}
+
+/// The indexing commands have exactly two shapes: a plan with neither write
+/// flag nor token, or an apply with both. A half-gated call never reaches the
+/// engine, and a token is checked for charset/length before it reaches argv.
+fn validate_indexing_write(command: CliCommandId, args: &CliArgs) -> AppResult<()> {
+    match (args.allow_write, args.confirm.as_deref()) {
+        (None | Some(false), None) => Ok(()),
+        (Some(true), Some(token)) => {
+            validate_confirm_token(token)?;
+            Ok(())
+        }
+        (Some(true), None) => Err(AppError::new(
+            "INVALID_ARGUMENT",
+            format!("confirm is required for {} apply", command.id()),
+        )
+        .with_details(serde_json::json!({
+            "command": command.id(),
+            "requires": "confirm",
+        }))),
+        (_, Some(_)) => Err(AppError::new(
+            "INVALID_ARGUMENT",
+            "confirm requires allowWrite=true",
+        )),
+    }
 }
 
 fn validate_range(value: u32, min: u32, max: u32, label: &str) -> AppResult<()> {
@@ -2740,6 +2959,8 @@ mod tests {
             "backup_restore",
             "portfolio_list",
             "schedule_install",
+            "sitemap_submit",
+            "indexnow_submit",
         ] {
             assert_eq!(CliCommandId::parse(id).unwrap().id(), id);
         }
@@ -4605,6 +4826,14 @@ mod tests {
             CliCommandId::ScheduleInstall.timeout(),
             Duration::from_secs(60)
         );
+        assert_eq!(
+            CliCommandId::SitemapSubmit.timeout(),
+            Duration::from_secs(120)
+        );
+        assert_eq!(
+            CliCommandId::IndexNowSubmit.timeout(),
+            Duration::from_secs(120)
+        );
     }
 
     #[test]
@@ -4635,6 +4864,8 @@ mod tests {
             CliCommandId::PortfolioList,
             CliCommandId::AuthSet,
             CliCommandId::AuthLogout,
+            CliCommandId::SitemapSubmit,
+            CliCommandId::IndexNowSubmit,
         ] {
             assert!(!id.cancellable(), "{}", id.id());
         }
@@ -4952,6 +5183,337 @@ mod tests {
     }
 
     #[test]
+    fn sitemap_submit_argv_plans_then_applies_for_bing() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = dir.path().join("seo.toml");
+        let config_text = config.display().to_string();
+        let plan = |url: Option<&str>| CliArgs {
+            provider: Some("bing".into()),
+            url: url.map(str::to_string),
+            config_path: Some(config_text.clone()),
+            ..CliArgs::default()
+        };
+
+        // Default sitemap URL: the engine resolves {project.base_url}/sitemap.xml.
+        assert_eq!(
+            build_argv(CliCommandId::SitemapSubmit, &plan(None)).unwrap(),
+            vec![
+                "sitemap",
+                "submit",
+                "--provider",
+                "bing",
+                "--config",
+                config_text.as_str(),
+                "--json"
+            ]
+        );
+
+        // Explicit sitemap URL and a case-insensitive provider.
+        let explicit = CliArgs {
+            provider: Some("Bing".into()),
+            url: Some("https://example.com/sitemap.xml".into()),
+            config_path: Some(config_text.clone()),
+            ..CliArgs::default()
+        };
+        assert_eq!(
+            build_argv(CliCommandId::SitemapSubmit, &explicit).unwrap(),
+            vec![
+                "sitemap",
+                "submit",
+                "--provider",
+                "bing",
+                "--config",
+                config_text.as_str(),
+                "--url",
+                "https://example.com/sitemap.xml",
+                "--json"
+            ]
+        );
+
+        // Apply: both the opt-in and the reviewed plan token.
+        let apply = CliArgs {
+            provider: Some("bing".into()),
+            url: Some("https://example.com/sitemap.xml".into()),
+            config_path: Some(config_text.clone()),
+            allow_write: Some(true),
+            confirm: Some("1700000000:abcdef0123".into()),
+            ..CliArgs::default()
+        };
+        assert_eq!(
+            build_argv(CliCommandId::SitemapSubmit, &apply).unwrap(),
+            vec![
+                "sitemap",
+                "submit",
+                "--provider",
+                "bing",
+                "--config",
+                config_text.as_str(),
+                "--url",
+                "https://example.com/sitemap.xml",
+                "--allow-write",
+                "--confirm",
+                "1700000000:abcdef0123",
+                "--json"
+            ]
+        );
+
+        // `allowWrite=false` behaves like a plan, and a token alone is refused.
+        assert_eq!(
+            build_argv(
+                CliCommandId::SitemapSubmit,
+                &CliArgs {
+                    provider: Some("bing".into()),
+                    config_path: Some(config_text.clone()),
+                    allow_write: Some(false),
+                    ..CliArgs::default()
+                }
+            )
+            .unwrap(),
+            vec![
+                "sitemap",
+                "submit",
+                "--provider",
+                "bing",
+                "--config",
+                config_text.as_str(),
+                "--json"
+            ]
+        );
+        for args in [
+            CliArgs {
+                provider: Some("bing".into()),
+                config_path: Some(config_text.clone()),
+                confirm: Some("1700000000:abcdef".into()),
+                ..CliArgs::default()
+            },
+            CliArgs {
+                provider: Some("bing".into()),
+                config_path: Some(config_text.clone()),
+                allow_write: Some(true),
+                ..CliArgs::default()
+            },
+        ] {
+            assert_eq!(
+                build_argv(CliCommandId::SitemapSubmit, &args)
+                    .unwrap_err()
+                    .code(),
+                "INVALID_ARGUMENT"
+            );
+        }
+
+        // Only Bing is accepted; the token and sitemap URL stay narrow.
+        for provider in ["", "gsc", "yandex"] {
+            assert_eq!(
+                build_argv(
+                    CliCommandId::SitemapSubmit,
+                    &CliArgs {
+                        provider: Some(provider.into()),
+                        config_path: Some(config_text.clone()),
+                        ..CliArgs::default()
+                    }
+                )
+                .unwrap_err()
+                .code(),
+                "INVALID_ARGUMENT",
+                "{provider:?}"
+            );
+        }
+        for url in [
+            "sitemap.xml",
+            "ftp://example.com/sitemap.xml",
+            "https:///sitemap.xml",
+            "https://user@example.com/sitemap.xml",
+            "https://example.com/a b.xml",
+        ] {
+            assert_eq!(
+                build_argv(
+                    CliCommandId::SitemapSubmit,
+                    &CliArgs {
+                        provider: Some("bing".into()),
+                        url: Some(url.into()),
+                        config_path: Some(config_text.clone()),
+                        ..CliArgs::default()
+                    }
+                )
+                .unwrap_err()
+                .code(),
+                "INVALID_ARGUMENT",
+                "{url:?}"
+            );
+        }
+        // `--sitemap-url` belongs to IndexNow and is rejected here, as is any
+        // unrelated report argument.
+        assert_eq!(
+            build_argv(
+                CliCommandId::SitemapSubmit,
+                &CliArgs {
+                    provider: Some("bing".into()),
+                    sitemap_url: Some("https://example.com/sitemap.xml".into()),
+                    config_path: Some(config_text.clone()),
+                    ..CliArgs::default()
+                }
+            )
+            .unwrap_err()
+            .code(),
+            "INVALID_ARGUMENT"
+        );
+        assert_eq!(
+            build_argv(
+                CliCommandId::SitemapSubmit,
+                &CliArgs {
+                    provider: Some("bing".into()),
+                    days: Some(7),
+                    config_path: Some(config_text.clone()),
+                    ..CliArgs::default()
+                }
+            )
+            .unwrap_err()
+            .code(),
+            "INVALID_ARGUMENT"
+        );
+        assert!(CliCommandId::SitemapSubmit.requires_config());
+        assert_eq!(
+            CliCommandId::SitemapSubmit.write_kind(),
+            WriteKind::ProviderState
+        );
+    }
+
+    #[test]
+    fn indexnow_submit_argv_reads_the_sitemap_then_applies() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = dir.path().join("seo.toml");
+        let config_text = config.display().to_string();
+        let plan = |sitemap_url: Option<&str>| CliArgs {
+            sitemap_url: sitemap_url.map(str::to_string),
+            config_path: Some(config_text.clone()),
+            ..CliArgs::default()
+        };
+
+        assert_eq!(
+            build_argv(CliCommandId::IndexNowSubmit, &plan(None)).unwrap(),
+            vec![
+                "indexnow",
+                "submit",
+                "--from-sitemap",
+                "--config",
+                config_text.as_str(),
+                "--json"
+            ]
+        );
+        assert_eq!(
+            build_argv(
+                CliCommandId::IndexNowSubmit,
+                &plan(Some("https://example.com/sitemap.xml"))
+            )
+            .unwrap(),
+            vec![
+                "indexnow",
+                "submit",
+                "--from-sitemap",
+                "--config",
+                config_text.as_str(),
+                "--sitemap-url",
+                "https://example.com/sitemap.xml",
+                "--json"
+            ]
+        );
+        assert_eq!(
+            build_argv(
+                CliCommandId::IndexNowSubmit,
+                &CliArgs {
+                    sitemap_url: Some("https://example.com/sitemap.xml".into()),
+                    config_path: Some(config_text.clone()),
+                    allow_write: Some(true),
+                    confirm: Some("1700000000:abcdef0123".into()),
+                    ..CliArgs::default()
+                }
+            )
+            .unwrap(),
+            vec![
+                "indexnow",
+                "submit",
+                "--from-sitemap",
+                "--config",
+                config_text.as_str(),
+                "--sitemap-url",
+                "https://example.com/sitemap.xml",
+                "--allow-write",
+                "--confirm",
+                "1700000000:abcdef0123",
+                "--json"
+            ]
+        );
+
+        // IndexNow derives its host from the sitemap and takes no provider or
+        // per-URL list; both are rejected instead of ignored.
+        for args in [
+            CliArgs {
+                provider: Some("bing".into()),
+                config_path: Some(config_text.clone()),
+                ..CliArgs::default()
+            },
+            CliArgs {
+                url: Some("https://example.com/".into()),
+                config_path: Some(config_text.clone()),
+                ..CliArgs::default()
+            },
+            CliArgs {
+                sitemap_url: Some("https://example.com/sitemap.xml".into()),
+                config_path: Some(config_text.clone()),
+                allow_write: Some(true),
+                ..CliArgs::default()
+            },
+            CliArgs {
+                sitemap_url: Some("https://example.com/sitemap.xml".into()),
+                config_path: Some(config_text.clone()),
+                confirm: Some("1700000000:abcdef".into()),
+                ..CliArgs::default()
+            },
+        ] {
+            assert_eq!(
+                build_argv(CliCommandId::IndexNowSubmit, &args)
+                    .unwrap_err()
+                    .code(),
+                "INVALID_ARGUMENT"
+            );
+        }
+        for url in ["sitemap.xml", "ftp://example.com/sitemap.xml", "https://"] {
+            assert_eq!(
+                build_argv(
+                    CliCommandId::IndexNowSubmit,
+                    &CliArgs {
+                        sitemap_url: Some(url.into()),
+                        config_path: Some(config_text.clone()),
+                        ..CliArgs::default()
+                    }
+                )
+                .unwrap_err()
+                .code(),
+                "INVALID_ARGUMENT",
+                "{url:?}"
+            );
+        }
+        // A sitemap URL must not silently appear on commands that cannot use it.
+        assert_eq!(
+            build_argv(
+                CliCommandId::Stats,
+                &CliArgs {
+                    sitemap_url: Some("https://example.com/sitemap.xml".into()),
+                    ..CliArgs::default()
+                }
+            )
+            .unwrap_err()
+            .code(),
+            "INVALID_ARGUMENT"
+        );
+        assert!(CliCommandId::IndexNowSubmit.requires_config());
+        assert_eq!(
+            CliCommandId::IndexNowSubmit.write_kind(),
+            WriteKind::ProviderState
+        );
+    }
+
+    #[test]
     fn only_local_state_commands_write() {
         for command in [
             CliCommandId::Init,
@@ -4964,6 +5526,14 @@ mod tests {
             assert_eq!(
                 command.write_kind(),
                 WriteKind::LocalState,
+                "{}",
+                command.id()
+            );
+        }
+        for command in [CliCommandId::SitemapSubmit, CliCommandId::IndexNowSubmit] {
+            assert_eq!(
+                command.write_kind(),
+                WriteKind::ProviderState,
                 "{}",
                 command.id()
             );
