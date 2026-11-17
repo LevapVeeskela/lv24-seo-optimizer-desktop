@@ -18,14 +18,14 @@ use crate::error::{AppError, AppResult, ErrorInfo};
 use crate::paths;
 use crate::settings::{Settings, SettingsPatch, SettingsStore};
 
-/// 0.9.0 ships engine 0.11.0 and adds the read-only diagnostics screen: GSC URL inspection and
-/// sitemaps, Yandex events/sitemaps/queue, Bing page/traffic/crawl/URL/join reads, organic Metrika
-/// pages/goals/dimensions and CWV audits/history. Those commands were introduced in engine 0.11.0;
-/// an older sidecar would answer `CLI_INVALID_JSON`, so report anything older as incompatible.
-/// The bundle also relies on the 0.10.0 `bing submit` write, the 0.9.0 `sitemap submit` (Bing only)
-/// and `indexnow submit --from-sitemap`, the 0.8.0 `schedule install --allow-write` opt-in and on
-/// `backup restore`, `portfolio list` and the `cwv` report section (engine 0.7.0).
-pub const MIN_ENGINE_VERSION: &str = "0.11.0";
+/// 0.9.1 ships engine 0.13.1 and adds the OAuth Connect card (Google Search Console,
+/// Yandex Webmaster and Metrika `auth login`). The card needs engine 0.13.1; an older
+/// sidecar returns a typed command error instead of a fake success. The bundle also relies
+/// on the 0.12.0 indexing reads, the 0.11.0 diagnostics screen, the 0.10.0 `bing submit`
+/// write, the 0.9.0 `sitemap submit` (Bing only) and `indexnow submit --from-sitemap`, the
+/// 0.8.0 `schedule install --allow-write` opt-in and on `backup restore`, `portfolio list`
+/// and the `cwv` report section (engine 0.7.0).
+pub const MIN_ENGINE_VERSION: &str = "0.13.1";
 
 /// Progress event emitted by the Rust updater while it downloads a release.
 pub const UPDATE_PROGRESS_EVENT: &str = "update://progress";
@@ -2778,11 +2778,11 @@ mod tests {
 
     #[test]
     fn engine_version_comparison_is_numeric() {
-        assert_eq!(MIN_ENGINE_VERSION, "0.11.0");
+        assert_eq!(MIN_ENGINE_VERSION, "0.13.1");
         assert!(version_at_least(MIN_ENGINE_VERSION, MIN_ENGINE_VERSION));
-        assert!(version_at_least("0.11.1", MIN_ENGINE_VERSION));
-        assert!(!version_at_least("0.10.0", MIN_ENGINE_VERSION));
-        assert!(!version_at_least("0.9.0", MIN_ENGINE_VERSION));
+        assert!(version_at_least("0.13.2", MIN_ENGINE_VERSION));
+        assert!(!version_at_least("0.13.0", MIN_ENGINE_VERSION));
+        assert!(!version_at_least("0.12.2", MIN_ENGINE_VERSION));
         assert!(version_at_least("0.4.0", "0.4.0"));
         assert!(version_at_least("0.4.1", "0.4.0"));
         assert!(version_at_least("0.10.0", "0.4.0"));

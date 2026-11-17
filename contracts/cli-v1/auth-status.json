@@ -2,8 +2,13 @@
   "data": {
     "missing": [
       "gsc",
+      "gsc_oauth",
+      "gsc_oauth_secret",
       "yandex",
+      "yandex_oauth",
+      "yandex_oauth_secret",
       "metrika",
+      "metrika_oauth",
       "bing",
       "crux",
       "psi",
@@ -22,6 +27,20 @@
       {
         "expires_at": null,
         "present": false,
+        "provider": "gsc_oauth",
+        "secret": "gsc_refresh_token",
+        "source": "missing"
+      },
+      {
+        "expires_at": null,
+        "present": false,
+        "provider": "gsc_oauth_secret",
+        "secret": "gsc_oauth_client_secret",
+        "source": "missing"
+      },
+      {
+        "expires_at": null,
+        "present": false,
         "provider": "yandex",
         "secret": "yandex_webmaster_token",
         "source": "missing"
@@ -29,8 +48,29 @@
       {
         "expires_at": null,
         "present": false,
+        "provider": "yandex_oauth",
+        "secret": "yandex_refresh_token",
+        "source": "missing"
+      },
+      {
+        "expires_at": null,
+        "present": false,
+        "provider": "yandex_oauth_secret",
+        "secret": "yandex_oauth_client_secret",
+        "source": "missing"
+      },
+      {
+        "expires_at": null,
+        "present": false,
         "provider": "metrika",
         "secret": "yandex_metrika_token",
+        "source": "missing"
+      },
+      {
+        "expires_at": null,
+        "present": false,
+        "provider": "metrika_oauth",
+        "secret": "yandex_metrika_refresh_token",
         "source": "missing"
       },
       {
@@ -71,7 +111,7 @@
     ]
   },
   "meta": {
-    "version": "0.11.0"
+    "version": "0.13.1"
   },
   "ok": true,
   "warnings": []

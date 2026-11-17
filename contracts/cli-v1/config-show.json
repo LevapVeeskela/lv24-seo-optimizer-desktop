@@ -1,11 +1,43 @@
 {
   "data": {
     "config": {
+      "auth": {
+        "gsc": {
+          "client_id": "",
+          "redirect_uri": "",
+          "scopes": [
+            "https://www.googleapis.com/auth/webmasters.readonly"
+          ]
+        },
+        "yandex": {
+          "client_id": "",
+          "redirect_uri": "",
+          "scopes": [
+            "webmaster:hostinfo",
+            "metrika:read"
+          ]
+        }
+      },
       "crawl": {
         "concurrency": 4,
         "max_urls": 500,
         "respect_robots": true,
         "user_agent": "lv24-seo/0.1"
+      },
+      "indexing": {
+        "check_interval_days": 7,
+        "enabled": false,
+        "gsc_inspect_daily_limit": 2000,
+        "indexnow_daily_limit": 1000,
+        "max_inspect_per_run": 20,
+        "max_submit_per_run": 500,
+        "providers": [
+          "bing",
+          "yandex",
+          "gsc",
+          "indexnow"
+        ],
+        "stale_days": 7
       },
       "project": {
         "base_url": "",
@@ -54,7 +86,7 @@
   },
   "meta": {
     "redacted": true,
-    "version": "0.11.0"
+    "version": "0.13.1"
   },
   "ok": true,
   "warnings": []

@@ -1,17 +1,17 @@
 # Architecture
 
-Status: **implementation contract for `0.9.0` (current release, 2026-11-17; `0.8.0` is the previous
+Status: **implementation contract for `0.9.1` (current release, 2026-11-18; `0.9.0` is the previous
 published line).** The Rust command bridge and product screens are implemented in this repository.
 Where this document describes a control, it is the requirement that implementation must satisfy. The
-pinned engine is `lv24-seo 0.11.0`. `0.9.0` adds the read-only diagnostics commands (Google, Yandex,
-Bing, Metrika and Core Web Vitals) and raises `MIN_ENGINE_VERSION` to `0.11.0`. It keeps the `0.8.0`
-gated `bing_submit` and read-only `bing_sitemaps`/`bing_issues`/`bing_quota`, the `0.7.0` gated
-`sitemap_submit`/`indexnow_submit` and the `open_bing_sitescan` opener, the `0.6.0` cancellable
-background runs (`run_cancel`), window-wide run banner and the schedule-install `--allow-write`
-opt-in that engine `0.8.0` requires.
+pinned engine is `lv24-seo 0.13.1`. `0.9.1` adds the OAuth Connect card (Google Search Console,
+Yandex Webmaster and Metrika) and raises `MIN_ENGINE_VERSION` to `0.13.1`. It keeps the `0.9.0`
+read-only diagnostics commands, the `0.8.0` gated `bing_submit` and read-only
+`bing_sitemaps`/`bing_issues`/`bing_quota`, the `0.7.0` gated `sitemap_submit`/`indexnow_submit` and
+the `open_bing_sitescan` opener, the `0.6.0` cancellable background runs (`run_cancel`),
+window-wide run banner and the schedule-install `--allow-write` opt-in that engine `0.8.0` requires.
 
 The read-only diagnostics commands listed in section 4 are implemented in `0.9.0` and require engine
-`lv24-seo 0.11.0`.
+`lv24-seo 0.11.0`; the bundle requires `0.13.1` for the OAuth connectors.
 
 ## 1. Shape
 
@@ -280,7 +280,7 @@ The AppImage step is the fallback that keeps an AppImage build from silently dro
 `resource_dir()` points somewhere other than the mounted engine tree.
 
 Nothing is downloaded automatically. The shell runs `lv24-seo version --json`, records the path,
-source and version, and compares the version with `MIN_ENGINE_VERSION` (`0.11.0`). An older engine is
+source and version, and compares the version with `MIN_ENGINE_VERSION` (`0.13.1`). An older engine is
 marked `compatible: false`; the UI treats the engine as offline and shows the standard offline
 notice. It does not silently downgrade or run the command. A newer engine passes the gate but is not
 the release-tested pin.

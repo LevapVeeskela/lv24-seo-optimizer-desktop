@@ -1,6 +1,20 @@
 {
-  "$comment": "Generated from lv24-seo 0.11.0 SeoConfig.model_json_schema(). Do not edit by hand.",
+  "$comment": "Generated from lv24-seo 0.13.1 SeoConfig.model_json_schema(). Do not edit by hand.",
   "$defs": {
+    "AuthConfig": {
+      "additionalProperties": false,
+      "description": "OAuth client registrations used by ``lv24-seo auth login`` (``[auth]``).",
+      "properties": {
+        "gsc": {
+          "$ref": "#/$defs/OAuthClientConfig"
+        },
+        "yandex": {
+          "$ref": "#/$defs/OAuthClientConfig"
+        }
+      },
+      "title": "AuthConfig",
+      "type": "object"
+    },
     "BingConfig": {
       "additionalProperties": false,
       "description": "Bing Webmaster Tools site and the public IndexNow identifiers.\n\n``indexnow_key`` and ``indexnow_key_location`` are public identifiers, not secrets: the\nkey file is served openly at ``key_location`` (or ``https://<host>/<key>.txt``) and the\nsame value is sent in every IndexNow request. They are safe to keep in ``seo.toml``.\nThe Bing Webmaster API key is a secret and stays in the secret store.",
@@ -135,6 +149,99 @@
         }
       },
       "title": "GscConfig",
+      "type": "object"
+    },
+    "IndexingConfig": {
+      "additionalProperties": false,
+      "description": "Quota-aware submission and index-check automation (``[indexing]``).\n\nDisabled by default: provider writes are an explicit opt-in. ``providers`` selects which\nengines participate; a provider that is not configured is reported, never guessed.\n``max_submit_per_run`` bounds one run globally, ``max_inspect_per_run`` bounds the\nread-only URL checks (GSC URL Inspection and Bing ``GetUrlInfo``), and the two daily\nlimits are local caps because those providers expose no remaining-count endpoint.\n``stale_days`` marks stored state older than the threshold in ``indexing status``;\n``check_interval_days`` is the re-check cadence used by the planner.",
+      "properties": {
+        "check_interval_days": {
+          "default": 7,
+          "maximum": 3660,
+          "minimum": 0,
+          "title": "Check Interval Days",
+          "type": "integer"
+        },
+        "enabled": {
+          "default": false,
+          "title": "Enabled",
+          "type": "boolean"
+        },
+        "gsc_inspect_daily_limit": {
+          "default": 2000,
+          "maximum": 50000,
+          "minimum": 0,
+          "title": "Gsc Inspect Daily Limit",
+          "type": "integer"
+        },
+        "indexnow_daily_limit": {
+          "default": 1000,
+          "maximum": 10000,
+          "minimum": 0,
+          "title": "Indexnow Daily Limit",
+          "type": "integer"
+        },
+        "max_inspect_per_run": {
+          "default": 20,
+          "maximum": 1000,
+          "minimum": 0,
+          "title": "Max Inspect Per Run",
+          "type": "integer"
+        },
+        "max_submit_per_run": {
+          "default": 500,
+          "maximum": 10000,
+          "minimum": 0,
+          "title": "Max Submit Per Run",
+          "type": "integer"
+        },
+        "providers": {
+          "items": {
+            "enum": [
+              "bing",
+              "yandex",
+              "gsc",
+              "indexnow"
+            ],
+            "type": "string"
+          },
+          "title": "Providers",
+          "type": "array"
+        },
+        "stale_days": {
+          "default": 7,
+          "maximum": 3660,
+          "minimum": 0,
+          "title": "Stale Days",
+          "type": "integer"
+        }
+      },
+      "title": "IndexingConfig",
+      "type": "object"
+    },
+    "OAuthClientConfig": {
+      "additionalProperties": false,
+      "description": "Public OAuth client settings for one provider.\n\n``client_id`` is public and may live in ``seo.toml``. The client secret is **not**\npart of this model: it is stored in the OS keychain (``<provider>_oauth_client_secret``)\nand never serialized into the config or an envelope.",
+      "properties": {
+        "client_id": {
+          "default": "",
+          "title": "Client Id",
+          "type": "string"
+        },
+        "redirect_uri": {
+          "default": "",
+          "title": "Redirect Uri",
+          "type": "string"
+        },
+        "scopes": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Scopes",
+          "type": "array"
+        }
+      },
+      "title": "OAuthClientConfig",
       "type": "object"
     },
     "ProjectConfig": {
@@ -408,8 +515,14 @@
   "additionalProperties": false,
   "description": "Validated, fully-defaulted configuration for one SEO workspace.",
   "properties": {
+    "auth": {
+      "$ref": "#/$defs/AuthConfig"
+    },
     "crawl": {
       "$ref": "#/$defs/CrawlConfig"
+    },
+    "indexing": {
+      "$ref": "#/$defs/IndexingConfig"
     },
     "project": {
       "$ref": "#/$defs/ProjectConfig"
