@@ -22,6 +22,11 @@ use crate::settings::{Settings, SettingsPatch, SettingsStore};
 /// made `schedule install` plan-only by default and the write opt-in mandatory, so an older
 /// sidecar would reject the flag. It also uses `backup restore`, `portfolio list` and renders
 /// the `cwv` report section (engine 0.7.0). Report anything older as incompatible.
+///
+/// The `sitemap_submit`/`indexnow_submit` commands in this tree require engine 0.9.0, but the
+/// unchanged 0.6.0 bundle still ships 0.8.0: the release that includes them must raise this gate
+/// together with the engine pin. Until then the panel explains the resulting CLI error instead of
+/// claiming a write succeeded.
 pub const MIN_ENGINE_VERSION: &str = "0.8.0";
 
 /// Progress event emitted by the Rust updater while it downloads a release.
@@ -33,6 +38,31 @@ const UPDATE_CANCEL_POLL: Duration = Duration::from_millis(100);
 const PATH_RESOLVE_TIMEOUT: Duration = Duration::from_secs(10);
 const SETTINGS_WRITE_TIMEOUT: Duration = Duration::from_secs(10);
 const EXPORT_WRITE_TIMEOUT: Duration = Duration::from_secs(30);
+/// Bing Site Scan has no public API. The desktop may only open this exact page;
+/// the user starts the scan there.
+const BING_SITE_SCAN_URL: &str = "https://www.bing.com/webmasters/sitescan";
+const BING_SITE_SCAN_QUERY: &str = "?siteUrl=";
+const MAX_SITE_URL_LEN: usize = 2048;
+
+/// 32 random bytes rendered as 64 lowercase hex characters. `getrandom` uses
+/// the OS CSPRNG (BCryptGenRandom, getrandom(2), SecRandomCopyBytes).
+fn generate_write_secret() -> AppResult<String> {
+    use std::fmt::Write as _;
+
+    let mut bytes = [0u8; 32];
+    getrandom::fill(&mut bytes).map_err(|err| {
+        AppError::new(
+            "WRITE_SECRET",
+            format!("cannot generate the session write secret: {err}"),
+        )
+    })?;
+    let mut secret = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        // Writing to a String cannot fail.
+        let _ = write!(secret, "{byte:02x}");
+    }
+    Ok(secret)
+}
 
 pub struct AppState {
     pub paths: paths::AppPaths,
@@ -49,20 +79,32 @@ pub struct AppState {
     /// Backup archives the user picked in the native file dialog.
     /// `backup_restore` reads only one of these.
     approved_backup_archives: Mutex<HashSet<PathBuf>>,
+    /// Per-app-session write-gate secret. Generated from the OS CSPRNG at
+    /// startup, kept in memory only and passed to engine children as
+    /// `LV24_SEO_WRITE_SECRET`; never persisted, logged or returned to the
+    /// webview. A new session intentionally invalidates old plan tokens.
+    write_secret: Zeroizing<String>,
     update: UpdateGate,
 }
 
 impl AppState {
-    pub fn new(paths: paths::AppPaths, settings: SettingsStore) -> Self {
-        Self {
+    pub fn new(paths: paths::AppPaths, settings: SettingsStore) -> AppResult<Self> {
+        Ok(Self {
             paths,
             settings: Arc::new(settings),
             approved_configs: Mutex::new(HashSet::new()),
             approved_directories: Mutex::new(HashSet::new()),
             approved_log_files: Mutex::new(HashSet::new()),
             approved_backup_archives: Mutex::new(HashSet::new()),
+            write_secret: Zeroizing::new(generate_write_secret()?),
             update: UpdateGate::default(),
-        }
+        })
+    }
+
+    /// Secret handed to every engine child for the write gate. Borrowed only
+    /// for the spawn; it is never serialized into a status or result type.
+    pub fn write_secret(&self) -> &str {
+        self.write_secret.as_str()
     }
 
     fn approved_configs(&self) -> MutexGuard<'_, HashSet<PathBuf>> {
@@ -804,7 +846,7 @@ pub async fn shell_status(
             engine.found = true;
             engine.path = Some(location.display_path());
             engine.source = Some(location.source.clone());
-            match cli::probe_version(&location).await {
+            match cli::probe_version(&location, state.write_secret()).await {
                 Ok(version) => {
                     engine.compatible = version_at_least(&version, MIN_ENGINE_VERSION);
                     engine.version = Some(version);
@@ -1011,6 +1053,35 @@ pub async fn cli_run(
         }
         args.config_path = Some(active.display().to_string());
     }
+    if matches!(
+        command,
+        CliCommandId::SitemapSubmit | CliCommandId::IndexNowSubmit
+    ) {
+        // The indexing write gate is bound to the selected workspace: the
+        // engine opens the ledger next to this config, so a webview-supplied
+        // path must never redirect it. The plan phase carries no token; the
+        // apply phase carries both flags only after the confirmation dialog.
+        let active = config_path.as_ref().ok_or_else(|| {
+            AppError::new(
+                "CONFIG_PATH_REQUIRED",
+                format!("{} requires an absolute config path", command.id()),
+            )
+        })?;
+        if let Some(requested) = args.config_path.as_deref() {
+            let requested = paths::validate_config_path(requested)?;
+            if !same_path(&requested, active) {
+                return Err(AppError::new(
+                    "PATH_NOT_ALLOWED",
+                    "the requested config is not the active project config selected in Settings",
+                )
+                .with_details(serde_json::json!({
+                    "requested": requested.display().to_string(),
+                    "active": active.display().to_string(),
+                })));
+            }
+        }
+        args.config_path = Some(active.display().to_string());
+    }
     if command == CliCommandId::PortfolioList {
         let root = args.root.as_deref().ok_or_else(|| {
             AppError::new("INVALID_ARGUMENT", "root is required for portfolio_list")
@@ -1019,25 +1090,38 @@ pub async fn cli_run(
         args.root = Some(allowed.display().to_string());
     }
 
-    // `init`, the schedule commands and `backup_restore` carry `--config` in
-    // argv; every other command gets it appended by the runner. `logs analyze`
-    // and `portfolio list` have no `--config` option at all.
+    // `init`, the schedule commands, `backup_restore` and the indexing commands
+    // carry `--config` in argv; every other command gets it appended by the
+    // runner. `logs analyze` and `portfolio list` have no `--config` option.
     let engine_config = match command {
         CliCommandId::Init
         | CliCommandId::SchedulePrint
         | CliCommandId::ScheduleInstall
         | CliCommandId::BackupRestore
+        | CliCommandId::SitemapSubmit
+        | CliCommandId::IndexNowSubmit
         | CliCommandId::LogsAnalyze
         | CliCommandId::PortfolioList => None,
         _ => config_path.as_deref(),
     };
     let location = paths::locate_engine(&app)?;
+    let write_secret = state.inner().write_secret();
     let result = match run_id.as_deref() {
         // A run id is the webview's cancellation handle. It is only accepted
         // for long local jobs (`CliCommandId::cancellable`); a short read keeps
         // the plain synchronous path.
-        Some(run_id) => cli::run_tracked(&location, engine_config, command, &args, run_id).await?,
-        None => cli::run(&location, engine_config, command, &args).await?,
+        Some(run_id) => {
+            cli::run_tracked(
+                &location,
+                engine_config,
+                command,
+                &args,
+                run_id,
+                write_secret,
+            )
+            .await?
+        }
+        None => cli::run(&location, engine_config, command, &args, write_secret).await?,
     };
     if let Some(target) = init_target {
         // `init` created the file: approve it now so the wizard can call
@@ -1114,6 +1198,7 @@ pub async fn auth_set(
         CliCommandId::AuthSet,
         &args,
         Some(secret.as_bytes()),
+        state.inner().write_secret(),
     )
     .await
 }
@@ -1138,6 +1223,7 @@ pub async fn auth_delete(
         Some(&config_path),
         CliCommandId::AuthLogout,
         &args,
+        state.inner().write_secret(),
     )
     .await
 }
@@ -1174,7 +1260,9 @@ pub async fn config_patch(
     }
 
     let location = paths::locate_engine(&app)?;
-    let validation = config::validate_with_engine(&location, &target, &new_raw).await?;
+    let validation =
+        config::validate_with_engine(&location, &target, &new_raw, state.inner().write_secret())
+            .await?;
     if !validation.valid {
         return Err(AppError::new(
             "CONFIG_INVALID",
@@ -1227,6 +1315,7 @@ pub async fn config_patch(
         Some(&target),
         CliCommandId::ConfigShow,
         &CliArgs::default(),
+        state.inner().write_secret(),
     )
     .await
     {
@@ -1345,6 +1434,7 @@ pub async fn config_read(
                 Some(&config_path),
                 CliCommandId::ConfigShow,
                 &CliArgs::default(),
+                state.inner().write_secret(),
             )
             .await
             {
@@ -1422,9 +1512,14 @@ pub async fn config_validate(
 
     let location = paths::locate_engine(&app)?;
     let fallback_dir = state.paths.config_dir.clone();
-    let outcome =
-        config::validate_with_engine_in(&location, &target, &content, Some(fallback_dir.as_path()))
-            .await?;
+    let outcome = config::validate_with_engine_in(
+        &location,
+        &target,
+        &content,
+        Some(fallback_dir.as_path()),
+        state.inner().write_secret(),
+    )
+    .await?;
     Ok(ConfigValidateResult {
         path: target.display().to_string(),
         valid: outcome.valid,
@@ -1457,7 +1552,9 @@ pub async fn config_write(
     ensure_local_data_dir(&document, &target)?;
 
     let location = paths::locate_engine(&app)?;
-    let validation = config::validate_with_engine(&location, &target, &content).await?;
+    let validation =
+        config::validate_with_engine(&location, &target, &content, state.inner().write_secret())
+            .await?;
     if !validation.valid {
         return Err(AppError::new(
             "CONFIG_INVALID",
@@ -1562,6 +1659,118 @@ fn opener_path(path: &Path) -> PathBuf {
     {
         path.to_path_buf()
     }
+}
+
+/// Open Bing Site Scan in the default browser.
+///
+/// Bing exposes no public API for starting a Site Scan, so this command never
+/// claims to start one. The destination host and path are hard-coded; the only
+/// variable is an absolute `https://` site URL placed in the `siteUrl` query
+/// parameter. The webview cannot pass a destination URL.
+#[tauri::command(rename_all = "camelCase")]
+pub fn open_bing_sitescan(app: AppHandle, site_url: String) -> Result<String, AppError> {
+    let url = bing_sitescan_url(&site_url)?;
+    app.opener()
+        .open_url(url.clone(), None::<&str>)
+        .map_err(|err| {
+            AppError::new(
+                "OPEN_URL",
+                format!("cannot open the Bing Site Scan page: {err}"),
+            )
+        })?;
+    Ok(url)
+}
+
+/// Build the only URL this command may open. `siteUrl` is percent-encoded with
+/// the RFC 3986 unreserved set, so no extra query parameter, fragment or path
+/// can be injected through the site URL.
+fn bing_sitescan_url(site_url: &str) -> AppResult<String> {
+    let site = validate_bing_site_url(site_url)?;
+    let url = format!(
+        "{BING_SITE_SCAN_URL}{BING_SITE_SCAN_QUERY}{}",
+        encode_query_component(site)
+    );
+    ensure_bing_sitescan_destination(&url)?;
+    Ok(url)
+}
+
+fn validate_bing_site_url(raw: &str) -> AppResult<&str> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Err(AppError::new("INVALID_ARGUMENT", "siteUrl is empty"));
+    }
+    if trimmed.len() > MAX_SITE_URL_LEN {
+        return Err(AppError::new(
+            "INVALID_ARGUMENT",
+            format!("siteUrl is longer than {MAX_SITE_URL_LEN} characters"),
+        ));
+    }
+    if trimmed
+        .chars()
+        .any(|ch| ch.is_control() || ch.is_whitespace())
+    {
+        return Err(AppError::new(
+            "INVALID_ARGUMENT",
+            "siteUrl must not contain whitespace or control characters",
+        ));
+    }
+    let rest = trimmed.strip_prefix("https://").ok_or_else(|| {
+        AppError::new(
+            "INVALID_ARGUMENT",
+            format!("siteUrl must be an absolute https URL, got {trimmed:?}"),
+        )
+    })?;
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or("");
+    if authority.is_empty()
+        || authority.starts_with(':')
+        || authority.contains('@')
+        || authority.contains('\\')
+    {
+        return Err(AppError::new(
+            "INVALID_ARGUMENT",
+            format!("siteUrl has an invalid host: {trimmed:?}"),
+        ));
+    }
+    Ok(trimmed)
+}
+
+/// Percent-encode one query value. Only unreserved characters survive, so a
+/// site URL cannot add `&`, `#`, `?` or a path segment to the destination.
+fn encode_query_component(value: &str) -> String {
+    let mut encoded = String::with_capacity(value.len());
+    for byte in value.bytes() {
+        match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' => {
+                encoded.push(byte as char);
+            }
+            _ => encoded.push_str(&format!("%{byte:02X}")),
+        }
+    }
+    encoded
+}
+
+/// Defense in depth: the opener is only ever handed the hard-coded Bing page
+/// with exactly one `siteUrl` parameter.
+fn ensure_bing_sitescan_destination(url: &str) -> AppResult<()> {
+    let prefix = format!("{BING_SITE_SCAN_URL}{BING_SITE_SCAN_QUERY}");
+    let Some(query) = url.strip_prefix(&prefix) else {
+        return Err(AppError::new(
+            "INVALID_ARGUMENT",
+            "refusing to open a URL outside the Bing Site Scan page",
+        ));
+    };
+    if query.is_empty()
+        || query.contains('&')
+        || query.contains('#')
+        || query.contains('?')
+        || query.contains('\\')
+    {
+        return Err(AppError::new(
+            "INVALID_ARGUMENT",
+            "refusing to open a malformed Bing Site Scan URL",
+        ));
+    }
+    Ok(())
 }
 
 /// SEC-05: a config path may only become active when it equals the current one,
@@ -1933,7 +2142,7 @@ mod tests {
         let mut current = settings.get();
         current.config_path = active.map(|path| path.display().to_string());
         settings.set(current).unwrap();
-        let state = AppState::new(paths, settings);
+        let state = AppState::new(paths, settings).unwrap();
         if let Some(active) = active {
             state.approve_config(active).unwrap();
         }
@@ -2306,6 +2515,80 @@ mod tests {
         let redacted = redacted_syntax_error(&error);
         assert!(!redacted.contains("sk-live-123"), "{redacted}");
         assert_eq!(error.code(), "CONFIG_TOML_INVALID");
+    }
+
+    #[test]
+    fn a_session_write_secret_is_random_and_hex_encoded() {
+        let first = generate_write_secret().unwrap();
+        assert_eq!(first.len(), 64);
+        assert!(first
+            .chars()
+            .all(|ch| ch.is_ascii_hexdigit() && !ch.is_ascii_uppercase()));
+        let second = generate_write_secret().unwrap();
+        assert_ne!(first, second);
+
+        let dir = tempfile::tempdir().unwrap();
+        let state = app_state(dir.path(), None);
+        assert_eq!(state.write_secret().len(), 64);
+        assert!(!state.write_secret().is_empty());
+    }
+
+    #[test]
+    fn bing_sitescan_url_is_hard_coded_and_percent_encodes_the_site() {
+        assert_eq!(
+            bing_sitescan_url("https://example.com/").unwrap(),
+            "https://www.bing.com/webmasters/sitescan?siteUrl=https%3A%2F%2Fexample.com%2F"
+        );
+        assert_eq!(
+            bing_sitescan_url("https://example.com/a?x=1&y=2#top").unwrap(),
+            "https://www.bing.com/webmasters/sitescan?siteUrl=https%3A%2F%2Fexample.com%2Fa%3Fx%3D1%26y%3D2%23top"
+        );
+    }
+
+    #[test]
+    fn bing_sitescan_rejects_non_https_and_malformed_site_urls() {
+        for site in [
+            "",
+            "http://example.com/",
+            "ftp://example.com/",
+            "javascript:alert(1)",
+            "example.com",
+            "https://",
+            "https:///path",
+            "https://user@example.com/",
+            "https://:443/",
+            "https://example.com/a b",
+        ] {
+            assert_eq!(
+                bing_sitescan_url(site).unwrap_err().code(),
+                "INVALID_ARGUMENT",
+                "{site:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn bing_sitescan_destination_allowlist_rejects_other_hosts_paths_and_params() {
+        assert!(ensure_bing_sitescan_destination(
+            "https://www.bing.com/webmasters/sitescan?siteUrl=https%3A%2F%2Fexample.com%2F"
+        )
+        .is_ok());
+        for url in [
+            "https://evil.test/webmasters/sitescan?siteUrl=x",
+            "http://www.bing.com/webmasters/sitescan?siteUrl=x",
+            "https://www.bing.com/webmasters/other?siteUrl=x",
+            "https://www.bing.com/webmasters/sitescan?siteUrl=x&next=https://evil.test",
+            "https://www.bing.com/webmasters/sitescan?siteUrl=x#fragment",
+            "https://www.bing.com/webmasters/sitescan?siteUrl=",
+            "https://www.bing.com/webmasters/sitescan?siteUrl=x?y",
+            "https://www.bing.com.evil.test/webmasters/sitescan?siteUrl=x",
+        ] {
+            assert_eq!(
+                ensure_bing_sitescan_destination(url).unwrap_err().code(),
+                "INVALID_ARGUMENT",
+                "{url}"
+            );
+        }
     }
 
     #[test]

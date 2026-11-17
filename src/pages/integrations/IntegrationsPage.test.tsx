@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from "vitest";
 import { StoreProvider } from "@/app/providers/StoreProvider";
 import type { RootStore } from "@/app/model/RootStore";
 import { BackupStore } from "@/features/backup/model/BackupStore";
+import { IndexingStore } from "@/features/indexing/model/IndexingStore";
 import { ScheduleStore } from "@/features/schedule/model/ScheduleStore";
 import { RunStore } from "@/shared/run/model/RunStore";
 import { I18nProvider } from "@/shared/i18n";
@@ -28,6 +29,7 @@ function renderPage(offline = false): string {
             engine,
             backup: new BackupStore(),
             schedule: new ScheduleStore(),
+            indexing: new IndexingStore(),
             runs: new RunStore(),
           } as unknown as RootStore
         }

@@ -19,6 +19,8 @@ export const CLI_COMMAND_IDS = [
   "backup_restore",
   "portfolio_list",
   "schedule_install",
+  "sitemap_submit",
+  "indexnow_submit",
 ] as const;
 
 export type CliCommandId = (typeof CLI_COMMAND_IDS)[number];
@@ -80,6 +82,10 @@ export interface CliArgs {
   limit?: number;
   /** `tasks_add` only: absolute or site-relative URL. */
   url?: string;
+  /** `indexnow_submit` only: optional absolute sitemap URL. */
+  sitemapUrl?: string;
+  /** `sitemap_submit` only: must be `bing`. */
+  provider?: "bing";
   /** `tasks_add` only: rule/finding id that produced the task. */
   rule?: string;
   /** `tasks_add` only: evidence object, JSON-encoded (16 KiB cap). */
@@ -89,11 +95,12 @@ export interface CliArgs {
   /** `backup_create` only: replace a same-second archive. */
   force?: boolean;
   /**
-   * `backup_restore` apply phase and `schedule_install` write opt-in. The plan
-   * and preview phases must omit it; `schedule_install` is refused without it.
+   * `backup_restore` and the indexing apply phases, plus the indexing plan
+   * phases (the engine requires the opt-in to mint a token), and
+   * `schedule_install`. The plan/preview phases omit `confirm`, not this flag.
    */
   allowWrite?: boolean;
-  /** `backup_restore` only: `confirmToken` returned by the plan phase. */
+  /** Apply-phase `confirmToken` from the plan; never set on a plan call. */
   confirm?: string;
   /** `portfolio_list` only: absolute projects directory from `pick_directory`. */
   root?: string;

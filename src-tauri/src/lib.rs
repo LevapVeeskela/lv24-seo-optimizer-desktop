@@ -18,7 +18,7 @@ pub fn run() {
             let paths = paths::AppPaths::resolve(app.handle())?;
             let settings =
                 settings::SettingsStore::load(paths.config_dir.join(settings::SETTINGS_FILE))?;
-            app.manage(commands::AppState::new(paths, settings));
+            app.manage(commands::AppState::new(paths, settings)?);
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -39,6 +39,7 @@ pub fn run() {
             commands::pick_log_file,
             commands::pick_backup_archive,
             commands::open_path,
+            commands::open_bing_sitescan,
             commands::prepare_update,
             commands::update_install,
             commands::update_cancel,
