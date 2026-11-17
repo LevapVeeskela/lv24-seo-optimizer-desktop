@@ -1051,12 +1051,18 @@ pub async fn cli_run(
     }
     if matches!(
         command,
-        CliCommandId::SitemapSubmit | CliCommandId::IndexNowSubmit
+        CliCommandId::SitemapSubmit
+            | CliCommandId::IndexNowSubmit
+            | CliCommandId::BingSubmit
+            | CliCommandId::BingSitemaps
+            | CliCommandId::BingIssues
+            | CliCommandId::BingQuota
     ) {
-        // The indexing write gate is bound to the selected workspace: the
-        // engine opens the ledger next to this config, so a webview-supplied
-        // path must never redirect it. The plan phase carries no token; the
-        // apply phase carries both flags only after the confirmation dialog.
+        // The Bing write gate is bound to the selected workspace: the engine
+        // opens the ledger next to this config, so a webview-supplied path must
+        // never redirect it. The read-only Bing views read the same project.
+        // The plan phase carries no token; the apply phase carries both flags
+        // only after the confirmation dialog.
         let active = config_path.as_ref().ok_or_else(|| {
             AppError::new(
                 "CONFIG_PATH_REQUIRED",
@@ -1096,6 +1102,10 @@ pub async fn cli_run(
         | CliCommandId::BackupRestore
         | CliCommandId::SitemapSubmit
         | CliCommandId::IndexNowSubmit
+        | CliCommandId::BingSubmit
+        | CliCommandId::BingSitemaps
+        | CliCommandId::BingIssues
+        | CliCommandId::BingQuota
         | CliCommandId::LogsAnalyze
         | CliCommandId::PortfolioList => None,
         _ => config_path.as_deref(),

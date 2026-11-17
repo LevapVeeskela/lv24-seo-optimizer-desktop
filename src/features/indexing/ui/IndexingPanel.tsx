@@ -4,7 +4,7 @@ import { Link } from "react-router-dom";
 import { useRootStore } from "@/app/providers/StoreProvider";
 import { useI18n, type MessageKey } from "@/shared/i18n";
 import { appErrorText, type AppError } from "@/shared/lib/errors";
-import { formatNumber } from "@/shared/lib/format";
+import { formatDateTime, formatNumber } from "@/shared/lib/format";
 import { Badge } from "@/shared/ui/Badge";
 import { Button } from "@/shared/ui/Button";
 import { Card } from "@/shared/ui/Card";
@@ -12,11 +12,16 @@ import { ConfirmDialog } from "@/shared/ui/ConfirmDialog";
 import { EmptyState } from "@/shared/ui/EmptyState";
 import { Field } from "@/shared/ui/Field";
 import { Input } from "@/shared/ui/Input";
+import { InlineError } from "@/shared/ui/InlineError";
 import { Loading } from "@/shared/ui/Loading";
 import { Notice } from "@/shared/ui/Notice";
 import { Table } from "@/shared/ui/Table";
+import { Textarea } from "@/shared/ui/Textarea";
 import {
   indexingErrorHint,
+  type BingIssueRow,
+  type BingQuotaReport,
+  type BingSubmitCounts,
   type IndexingDetail,
   type IndexingOutcome,
   type IndexingOutcomeStatus,
@@ -63,9 +68,11 @@ function DetailTable({
 function IndexingPlanCard({
   title,
   plan,
+  showDetails = true,
 }: {
   title: string;
   plan: IndexingPlan;
+  showDetails?: boolean;
 }) {
   const { t } = useI18n();
   return (
@@ -98,7 +105,7 @@ function IndexingPlanCard({
         ) : null}
       </div>
 
-      {plan.details.length ? (
+      {showDetails && plan.details.length ? (
         <>
           <h4>{t("indexing.plan.payload")}</h4>
           <DetailTable caption={t("indexing.plan.payload")} details={plan.details} />
@@ -135,10 +142,14 @@ function IndexingOutcomeCard({
   title,
   outcome,
   counting = false,
+  showDetails = true,
+  appliedLabel,
 }: {
   title: string;
   outcome: IndexingOutcome;
   counting?: boolean;
+  showDetails?: boolean;
+  appliedLabel?: MessageKey;
 }) {
   const { t, locale } = useI18n();
   const tone =
@@ -147,11 +158,15 @@ function IndexingOutcomeCard({
       : outcome.status === "skipped"
         ? "warning"
         : "neutral";
+  const badgeKey =
+    outcome.status === "applied" && appliedLabel
+      ? appliedLabel
+      : STATUS_KEYS[outcome.status];
   return (
     <div className="stack indexing-outcome">
       <div className="card-header">
         <h4>{title}</h4>
-        <Badge tone={tone}>{t(STATUS_KEYS[outcome.status])}</Badge>
+        <Badge tone={tone}>{t(badgeKey)}</Badge>
       </div>
 
       <div className="indexing-facts">
@@ -181,7 +196,7 @@ function IndexingOutcomeCard({
         ) : null}
       </div>
 
-      {outcome.details.length ? (
+      {showDetails && outcome.details.length ? (
         <>
           <h4>{t("indexing.plan.details")}</h4>
           <DetailTable
@@ -241,39 +256,242 @@ function Warnings({ items }: { items: string[] }) {
   );
 }
 
+function Limitations({ items }: { items: string[] }) {
+  const { t } = useI18n();
+  const limitations = [...new Set(items.filter((item) => item.trim() !== ""))];
+  if (!limitations.length) {
+    return null;
+  }
+  return (
+    <div>
+      <h4>{t("indexing.readOnly.limitations")}</h4>
+      <ul className="report-notes">
+        {limitations.map((item) => (
+          <li key={item}>{item}</li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+function Fact({ label, value }: { label: string; value: ReactNode }) {
+  return (
+    <div className="indexing-fact">
+      <span className="muted small">{label}</span>
+      <strong>{value}</strong>
+    </div>
+  );
+}
+
+/**
+ * `GetUrlSubmissionQuota` returns remaining counts. Daily and monthly are
+ * shown separately and never converted to a "used" or "total" number.
+ */
+function QuotaFacts({
+  title,
+  report,
+}: {
+  title?: string;
+  report: BingQuotaReport;
+}) {
+  const { t, locale } = useI18n();
+  const remaining = (value: number | null): string =>
+    value === null ? t("indexing.quota.unknown") : formatNumber(value, locale);
+  return (
+    <div className="stack">
+      {title ? <h4>{title}</h4> : null}
+      <div className="indexing-facts">
+        <Fact
+          label={t("indexing.quota.daily")}
+          value={remaining(report.dailyRemaining)}
+        />
+        <Fact
+          label={t("indexing.quota.monthly")}
+          value={remaining(report.monthlyRemaining)}
+        />
+      </div>
+      <p className="muted small">{t("indexing.quota.limitHint")}</p>
+    </div>
+  );
+}
+
+function BingSubmitCountsCard({
+  title,
+  counts,
+  phase,
+  applied = true,
+}: {
+  title: string;
+  counts: BingSubmitCounts | null;
+  phase: "plan" | "result";
+  applied?: boolean;
+}) {
+  const { t, locale } = useI18n();
+  if (!counts) {
+    return null;
+  }
+  const numberText = (value: number | null): string =>
+    value === null
+      ? t("indexing.bing.countUnknown")
+      : formatNumber(value, locale);
+  return (
+    <div className="stack">
+      <h4>{title}</h4>
+      <div className="indexing-facts">
+        {phase === "plan" ? (
+          <Fact
+            label={t("indexing.bing.planUrls")}
+            value={numberText(counts.urls)}
+          />
+        ) : (
+          <Fact
+            label={t("indexing.bing.acceptedLabel")}
+            value={
+              counts.accepted === null
+                ? t("indexing.bing.acceptedUnknown")
+                : t("indexing.bing.accepted", {
+                    count: formatNumber(counts.accepted, locale),
+                  })
+            }
+          />
+        )}
+        <Fact
+          label={t("indexing.bing.planBatches")}
+          value={numberText(counts.batches)}
+        />
+      </div>
+      {phase === "result" && applied && counts.accepted !== null ? (
+        <p className="muted small">{t("indexing.bing.acceptedNote")}</p>
+      ) : null}
+      <QuotaFacts
+        title={
+          phase === "plan"
+            ? t("indexing.bing.quotaCurrent")
+            : t("indexing.bing.quotaAfter")
+        }
+        report={counts.quota}
+      />
+    </div>
+  );
+}
+
+const BING_ISSUE_FLAGS: Array<[number, MessageKey]> = [
+  [1, "indexing.issues.flag.301"],
+  [2, "indexing.issues.flag.302"],
+  [4, "indexing.issues.flag.4xx"],
+  [8, "indexing.issues.flag.5xx"],
+  [16, "indexing.issues.flag.robots"],
+  [32, "indexing.issues.flag.malware"],
+  [64, "indexing.issues.flag.importantRobots"],
+  [128, "indexing.issues.flag.dns"],
+  [256, "indexing.issues.flag.timeout"],
+];
+
+/** Decode the `GetCrawlIssues` bitmask; unknown bits stay visible. */
+function BingIssueLabels({ mask }: { mask: number | null }) {
+  const { t } = useI18n();
+  if (mask === null) {
+    return <>{t("common.notAvailable")}</>;
+  }
+  if (mask === 0) {
+    return <>{t("indexing.issues.noFlags")}</>;
+  }
+  const labels = BING_ISSUE_FLAGS.filter(
+    ([bit]) => (mask & bit) !== 0,
+  ).map(([, key]) => t(key));
+  const known = BING_ISSUE_FLAGS.reduce((total, [bit]) => total | bit, 0);
+  const unknown = mask & ~known;
+  if (unknown) {
+    labels.push(t("indexing.issues.unknownFlag", { bit: unknown }));
+  }
+  return <>{labels.join(", ")}</>;
+}
+
 /**
  * Bing indexing actions: two-phase sitemap submit and IndexNow-from-sitemap,
  * plus an opener for the official Site Scan page. Bing has no public API for
  * starting a Site Scan, so the last action never claims to start one.
  */
 export const IndexingPanel = observer(function IndexingPanel() {
-  const { t } = useI18n();
+  const { t, locale } = useI18n();
   const { engine, indexing: store } = useRootStore();
   const [sitemapConfirmOpen, setSitemapConfirmOpen] = useState(false);
   const [indexNowConfirmOpen, setIndexNowConfirmOpen] = useState(false);
+  const [bingConfirmOpen, setBingConfirmOpen] = useState(false);
 
   useEffect(
     () => () => {
       // Leaving the page must not leave a confirmation armed.
       store.cancelSitemapApply();
       store.cancelIndexNowApply();
+      store.cancelBingApply();
     },
     [store],
   );
 
   const configPath = engine.status?.configPath ?? null;
   const blocked = engine.offline || engine.loading || !configPath;
+
+  // Read-only status views load once per workspace and can be refreshed.
+  useEffect(() => {
+    if (!configPath || engine.offline || engine.loading) {
+      return;
+    }
+    void store.loadBingSitemaps(configPath);
+    void store.loadBingIssues(configPath);
+    void store.loadBingQuota(configPath);
+  }, [configPath, engine.offline, engine.loading, store]);
+
   const sitemapBusy = store.sitemapPlanning || store.sitemapApplying;
   const indexNowBusy = store.indexNowPlanning || store.indexNowApplying;
+  const bingBusy = store.bingPlanning || store.bingApplying;
   const sitemapValue = store.sitemapRequestUrl;
   const sitemapError = store.sitemapUrlInvalid
     ? t("indexing.sitemap.urlInvalid")
     : undefined;
+  const bingUrlInvalid = store.bingInvalidUrls.length > 0;
+  const bingUrlError = bingUrlInvalid
+    ? t("indexing.bing.urlsInvalid", {
+        count: store.bingInvalidUrls.length,
+      })
+    : undefined;
+  const bingSourceSummary = store.bingFromSitemap
+    ? store.bingUrls.length
+      ? t("indexing.bing.sourceMixed", { count: store.bingUrls.length })
+      : t("indexing.bing.sourceSitemap")
+    : store.bingUrls.length
+      ? t("indexing.bing.sourceUrls", { count: store.bingUrls.length })
+      : t("indexing.bing.noSource");
   const siteUrlInvalid =
     store.siteUrl.trim() !== "" && !store.siteUrlValid;
   const sitemapPlan = store.sitemapPlan;
   const indexNowPlan = store.indexNowPlan;
+  const bingPlan = store.bingPlan;
+  const sitemapsReport = store.sitemapsReport;
+  const issuesReport = store.issuesReport;
+  const quotaReport = store.quotaReport;
   const defaultSitemap = t("indexing.defaultSitemap");
+
+  const planBing = () => {
+    if (
+      blocked ||
+      bingBusy ||
+      !store.bingCanPlan ||
+      (store.bingFromSitemap && store.sitemapUrlInvalid)
+    ) {
+      return;
+    }
+    void store.planBing(configPath);
+  };
+
+  const requestBingApply = () => {
+    if (blocked || store.bingApplying) {
+      return;
+    }
+    if (store.requestBingApply()) {
+      setBingConfirmOpen(true);
+    }
+  };
 
   const planSitemap = () => {
     if (blocked || sitemapBusy || store.sitemapUrlInvalid) {
@@ -344,6 +562,206 @@ export const IndexingPanel = observer(function IndexingPanel() {
           <span>{t("indexing.noWorkspaceHint")}</span>
         </Notice>
       ) : null}
+
+      <section
+        className="indexing-section"
+        aria-labelledby="indexing-bing-title"
+      >
+        <div className="card-header">
+          <div>
+            <h3 id="indexing-bing-title">{t("indexing.bing.title")}</h3>
+            <p className="muted small">{t("indexing.bing.hint")}</p>
+          </div>
+          <Badge tone="info">{t("indexing.twoPhaseBadge")}</Badge>
+        </div>
+
+        <div className="form-grid indexing-form">
+          <Field
+            id="indexing-bing-urls"
+            label={t("indexing.bing.urlsLabel")}
+            hint={t("indexing.bing.urlsHint")}
+            error={bingUrlError}
+          >
+            <Textarea
+              id="indexing-bing-urls"
+              className="indexing-urls"
+              value={store.bingUrlInput}
+              rows={5}
+              spellCheck={false}
+              autoComplete="off"
+              disabled={bingBusy}
+              placeholder={t("indexing.bing.urlsPlaceholder")}
+              aria-invalid={bingUrlInvalid}
+              aria-describedby={
+                bingUrlError
+                  ? "indexing-bing-urls-hint indexing-bing-urls-error"
+                  : "indexing-bing-urls-hint"
+              }
+              onChange={(event) => store.setBingUrls(event.target.value)}
+            />
+          </Field>
+        </div>
+
+        <label className="indexing-check" htmlFor="indexing-bing-from-sitemap">
+          <input
+            id="indexing-bing-from-sitemap"
+            type="checkbox"
+            checked={store.bingFromSitemap}
+            disabled={bingBusy}
+            onChange={(event) =>
+              store.setBingFromSitemap(event.target.checked)
+            }
+          />
+          <span>
+            <strong>{t("indexing.bing.fromSitemap")}</strong>
+            <small className="muted">
+              {t("indexing.bing.fromSitemapHint")}
+            </small>
+          </span>
+        </label>
+
+        {store.bingFromSitemap && store.sitemapUrlInvalid ? (
+          <InlineError>{t("indexing.sitemap.urlInvalid")}</InlineError>
+        ) : null}
+
+        <p className="muted small indexing-limit">{bingSourceSummary}</p>
+        <p className="muted small">{t("indexing.bing.engineErrorHint")}</p>
+
+        <div className="form-actions">
+          <Button
+            variant="secondary"
+            loading={store.bingPlanning}
+            disabled={
+              blocked ||
+              bingBusy ||
+              !store.bingCanPlan ||
+              (store.bingFromSitemap && store.sitemapUrlInvalid)
+            }
+            onClick={planBing}
+          >
+            {store.bingPlanning
+              ? t("indexing.bing.reviewing")
+              : t("indexing.bing.review")}
+          </Button>
+          <Button
+            variant="danger"
+            loading={store.bingApplying}
+            disabled={blocked || !store.bingReady || bingBusy}
+            onClick={requestBingApply}
+          >
+            {store.bingApplying
+              ? t("indexing.bing.applying")
+              : t("indexing.bing.apply")}
+          </Button>
+        </div>
+
+        {store.bingError ? (
+          <IndexingErrorNotice
+            title={t("indexing.bing.errorTitle")}
+            error={store.bingError}
+            action={
+              <Button
+                variant="secondary"
+                disabled={blocked || bingBusy || !store.bingCanPlan}
+                onClick={planBing}
+              >
+                {t("common.retry")}
+              </Button>
+            }
+          />
+        ) : null}
+
+        {store.bingPlanning ? (
+          <Loading label={t("indexing.bing.reviewing")} />
+        ) : null}
+
+        {store.bingState === "cancelled" ? (
+          <Notice variant="info">
+            <strong>{t("runStatus.cancelled")}</strong>
+            <span>{t("indexing.bing.cancelled")}</span>
+          </Notice>
+        ) : null}
+
+        {!bingPlan &&
+        store.bingState === "idle" &&
+        !store.bingError &&
+        !blocked ? (
+          <EmptyState
+            title={t("indexing.bing.emptyTitle")}
+            hint={t("indexing.bing.emptyHint")}
+          />
+        ) : null}
+
+        {bingPlan ? (
+          <>
+            <IndexingPlanCard
+              title={t("indexing.bing.planTitle")}
+              plan={bingPlan}
+              showDetails={false}
+            />
+            <BingSubmitCountsCard
+              title={t("indexing.bing.planCounts")}
+              counts={store.bingPlanCounts}
+              phase="plan"
+            />
+          </>
+        ) : null}
+
+        {store.bingApplying ? (
+          <Loading label={t("indexing.bing.applying")} />
+        ) : null}
+
+        {store.bingOutcome ? (
+          <>
+            <IndexingOutcomeCard
+              title={t("indexing.bing.resultTitle")}
+              outcome={store.bingOutcome}
+              showDetails={false}
+              appliedLabel="indexing.status.accepted"
+            />
+            <BingSubmitCountsCard
+              title={t("indexing.bing.resultCounts")}
+              counts={store.bingOutcomeCounts}
+              phase="result"
+              applied={store.bingOutcome?.status === "applied"}
+            />
+          </>
+        ) : null}
+
+        <Warnings items={store.bingWarnings} />
+
+        <ConfirmDialog
+          open={bingConfirmOpen}
+          title={t("indexing.bing.confirmTitle")}
+          confirmLabel={t("indexing.bing.confirmAction")}
+          cancelLabel={t("common.cancel")}
+          danger
+          busy={store.bingApplying}
+          onCancel={() => {
+            setBingConfirmOpen(false);
+            store.cancelBingApply();
+          }}
+          onConfirm={() => {
+            setBingConfirmOpen(false);
+            void store.confirmBing(configPath);
+          }}
+        >
+          <p>
+            {t(
+              store.bingFromSitemap && store.bingUrls.length
+                ? "indexing.bing.confirmBodyMixed"
+                : store.bingFromSitemap
+                  ? "indexing.bing.confirmBodySitemap"
+                  : "indexing.bing.confirmBody",
+              {
+                count: store.bingUrls.length,
+                sitemap: sitemapValue ?? defaultSitemap,
+                seconds: bingPlan?.ttlSeconds ?? 300,
+              },
+            )}
+          </p>
+        </ConfirmDialog>
+      </section>
 
       <section className="indexing-section" aria-labelledby="indexing-sitemap-title">
         <div className="card-header">
@@ -613,6 +1031,264 @@ export const IndexingPanel = observer(function IndexingPanel() {
             })}
           </p>
         </ConfirmDialog>
+      </section>
+
+      <section
+        className="indexing-section"
+        aria-labelledby="indexing-sitemaps-title"
+      >
+        <div className="card-header">
+          <div>
+            <h3 id="indexing-sitemaps-title">
+              {t("indexing.sitemaps.title")}
+            </h3>
+            <p className="muted small">{t("indexing.sitemaps.hint")}</p>
+          </div>
+          <div className="form-actions">
+            <Badge tone="neutral">{t("indexing.readOnly.badge")}</Badge>
+            <Button
+              variant="secondary"
+              loading={store.sitemapsLoading}
+              disabled={blocked || store.sitemapsLoading}
+              onClick={() => void store.loadBingSitemaps(configPath)}
+            >
+              {store.sitemapsLoading
+                ? t("indexing.sitemaps.refreshing")
+                : t("indexing.sitemaps.refresh")}
+            </Button>
+          </div>
+        </div>
+
+        {store.sitemapsError ? (
+          <IndexingErrorNotice
+            title={t("indexing.sitemaps.errorTitle")}
+            error={store.sitemapsError}
+            action={
+              <Button
+                variant="secondary"
+                disabled={blocked || store.sitemapsLoading}
+                onClick={() => void store.loadBingSitemaps(configPath)}
+              >
+                {t("common.retry")}
+              </Button>
+            }
+          />
+        ) : null}
+
+        {store.sitemapsLoading ? (
+          <Loading label={t("indexing.sitemaps.refreshing")} />
+        ) : null}
+
+        {!store.sitemapsLoading &&
+        sitemapsReport &&
+        sitemapsReport.rows.length ? (
+          <Table caption={t("indexing.sitemaps.title")}>
+            <thead>
+              <tr>
+                <th scope="col">{t("indexing.sitemaps.columnUrl")}</th>
+                <th scope="col">{t("indexing.sitemaps.columnStatus")}</th>
+                <th scope="col">
+                  {t("indexing.sitemaps.columnLastCrawled")}
+                </th>
+                <th scope="col">{t("indexing.sitemaps.columnUrlCount")}</th>
+              </tr>
+            </thead>
+            <tbody>
+              {sitemapsReport.rows.map((row, index) => (
+                <tr key={`${row.url}-${index}`}>
+                  <td>
+                    <code>{row.url || t("common.notAvailable")}</code>
+                  </td>
+                  <td>{row.status ?? t("common.notAvailable")}</td>
+                  <td>
+                    {row.lastCrawled
+                      ? formatDateTime(row.lastCrawled, locale)
+                      : t("common.notAvailable")}
+                  </td>
+                  <td>{formatNumber(row.urlCount, locale)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </Table>
+        ) : null}
+
+        {!store.sitemapsLoading &&
+        sitemapsReport &&
+        !sitemapsReport.rows.length ? (
+          <EmptyState
+            title={t("indexing.sitemaps.emptyTitle")}
+            hint={t("indexing.sitemaps.emptyHint")}
+          />
+        ) : null}
+
+        {!store.sitemapsLoading &&
+        !sitemapsReport &&
+        !store.sitemapsError &&
+        !blocked ? (
+          <EmptyState
+            title={t("indexing.sitemaps.emptyTitle")}
+            hint={t("indexing.sitemaps.emptyHint")}
+          />
+        ) : null}
+
+        <Notice variant="info">
+          <span>{t("indexing.sitemaps.limitation")}</span>
+        </Notice>
+        <p className="muted small">{t("indexing.sitemaps.indexNote")}</p>
+        <Warnings items={store.sitemapsWarnings} />
+        <Limitations items={sitemapsReport?.limitations ?? []} />
+      </section>
+
+      <section
+        className="indexing-section"
+        aria-labelledby="indexing-issues-title"
+      >
+        <div className="card-header">
+          <div>
+            <h3 id="indexing-issues-title">{t("indexing.issues.title")}</h3>
+            <p className="muted small">{t("indexing.issues.hint")}</p>
+          </div>
+          <div className="form-actions">
+            <Badge tone="neutral">{t("indexing.readOnly.badge")}</Badge>
+            <Button
+              variant="secondary"
+              loading={store.issuesLoading}
+              disabled={blocked || store.issuesLoading}
+              onClick={() => void store.loadBingIssues(configPath)}
+            >
+              {store.issuesLoading
+                ? t("indexing.issues.refreshing")
+                : t("indexing.issues.refresh")}
+            </Button>
+          </div>
+        </div>
+
+        {store.issuesError ? (
+          <IndexingErrorNotice
+            title={t("indexing.issues.errorTitle")}
+            error={store.issuesError}
+            action={
+              <Button
+                variant="secondary"
+                disabled={blocked || store.issuesLoading}
+                onClick={() => void store.loadBingIssues(configPath)}
+              >
+                {t("common.retry")}
+              </Button>
+            }
+          />
+        ) : null}
+
+        {store.issuesLoading ? (
+          <Loading label={t("indexing.issues.refreshing")} />
+        ) : null}
+
+        {!store.issuesLoading && issuesReport && issuesReport.rows.length ? (
+          <Table caption={t("indexing.issues.title")}>
+            <thead>
+              <tr>
+                <th scope="col">{t("indexing.issues.columnUrl")}</th>
+                <th scope="col">{t("indexing.issues.columnHttp")}</th>
+                <th scope="col">{t("indexing.issues.columnIssues")}</th>
+                <th scope="col">{t("indexing.issues.columnInLinks")}</th>
+              </tr>
+            </thead>
+            <tbody>
+              {issuesReport.rows.map((row: BingIssueRow, index) => (
+                <tr key={`${row.url}-${index}`}>
+                  <td>
+                    <code>{row.url || t("common.notAvailable")}</code>
+                  </td>
+                  <td>{formatNumber(row.httpCode, locale)}</td>
+                  <td>
+                    <BingIssueLabels mask={row.issues} />
+                  </td>
+                  <td>{formatNumber(row.inLinks, locale)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </Table>
+        ) : null}
+
+        {!store.issuesLoading && issuesReport && !issuesReport.rows.length ? (
+          <EmptyState
+            title={t("indexing.issues.emptyTitle")}
+            hint={t("indexing.issues.emptyHint")}
+          />
+        ) : null}
+
+        {!store.issuesLoading &&
+        !issuesReport &&
+        !store.issuesError &&
+        !blocked ? (
+          <EmptyState
+            title={t("indexing.issues.emptyTitle")}
+            hint={t("indexing.issues.emptyHint")}
+          />
+        ) : null}
+
+        <p className="muted small">{t("indexing.issues.maskHint")}</p>
+        <Warnings items={store.issuesWarnings} />
+        <Limitations items={issuesReport?.limitations ?? []} />
+      </section>
+
+      <section
+        className="indexing-section"
+        aria-labelledby="indexing-quota-title"
+      >
+        <div className="card-header">
+          <div>
+            <h3 id="indexing-quota-title">{t("indexing.quota.title")}</h3>
+            <p className="muted small">{t("indexing.quota.hint")}</p>
+          </div>
+          <div className="form-actions">
+            <Badge tone="neutral">{t("indexing.readOnly.badge")}</Badge>
+            <Button
+              variant="secondary"
+              loading={store.quotaLoading}
+              disabled={blocked || store.quotaLoading}
+              onClick={() => void store.loadBingQuota(configPath)}
+            >
+              {store.quotaLoading
+                ? t("indexing.quota.refreshing")
+                : t("indexing.quota.refresh")}
+            </Button>
+          </div>
+        </div>
+
+        {store.quotaError ? (
+          <IndexingErrorNotice
+            title={t("indexing.quota.errorTitle")}
+            error={store.quotaError}
+            action={
+              <Button
+                variant="secondary"
+                disabled={blocked || store.quotaLoading}
+                onClick={() => void store.loadBingQuota(configPath)}
+              >
+                {t("common.retry")}
+              </Button>
+            }
+          />
+        ) : null}
+
+        {store.quotaLoading ? (
+          <Loading label={t("indexing.quota.refreshing")} />
+        ) : null}
+
+        {!store.quotaLoading && quotaReport ? (
+          <QuotaFacts report={quotaReport} />
+        ) : null}
+
+        {!store.quotaLoading && !quotaReport && !store.quotaError && !blocked ? (
+          <EmptyState
+            title={t("indexing.quota.emptyTitle")}
+            hint={t("indexing.quota.emptyHint")}
+          />
+        ) : null}
+
+        <Warnings items={store.quotaWarnings} />
+        <Limitations items={quotaReport?.limitations ?? []} />
       </section>
 
       <section

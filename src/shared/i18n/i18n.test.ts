@@ -131,4 +131,24 @@ describe("i18n", () => {
       }
     }
   });
+
+  it("labels Bing quota as remaining and submission as accepted", () => {
+    expect(translate("en", "indexing.quota.daily")).toContain("remaining");
+    expect(translate("ru", "indexing.quota.daily")).toContain("Осталось");
+    expect(translate("zh", "indexing.quota.daily")).toContain("剩余");
+    expect(translate("en", "indexing.bing.acceptedNote")).toContain(
+      "not indexed",
+    );
+    expect(translate("ru", "indexing.bing.acceptedNote")).toContain(
+      "не индексация",
+    );
+    expect(translate("zh", "indexing.bing.acceptedNote")).toContain(
+      "不代表已收录",
+    );
+    for (const locale of LOCALES) {
+      expect(translate(locale, "indexing.quota.daily")).not.toBe(
+        translate(locale, "indexing.quota.monthly"),
+      );
+    }
+  });
 });

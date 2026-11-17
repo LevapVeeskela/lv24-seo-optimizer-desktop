@@ -15,6 +15,33 @@
   grid-template-columns: minmax(0, 1fr);
 }
 
+.indexing-urls {
+  min-height: 8rem;
+  resize: vertical;
+  font-family: var(--font-mono);
+}
+
+.indexing-check {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  padding: var(--space-2) 0;
+}
+
+.indexing-check input {
+  margin-top: 0.2rem;
+}
+
+.indexing-check span {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.indexing-limit {
+  margin: 0;
+}
+
 .indexing-facts {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));

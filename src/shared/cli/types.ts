@@ -21,6 +21,10 @@ export const CLI_COMMAND_IDS = [
   "schedule_install",
   "sitemap_submit",
   "indexnow_submit",
+  "bing_submit",
+  "bing_sitemaps",
+  "bing_issues",
+  "bing_quota",
 ] as const;
 
 export type CliCommandId = (typeof CLI_COMMAND_IDS)[number];
@@ -82,9 +86,13 @@ export interface CliArgs {
   limit?: number;
   /** `tasks_add` only: absolute or site-relative URL. */
   url?: string;
-  /** `indexnow_submit` only: optional absolute sitemap URL. */
+  /** `bing_submit` only: absolute http(s) URLs, one `--url` per entry. */
+  urls?: string[];
+  /** `bing_submit` only: read the URL list from the sitemap. */
+  fromSitemap?: boolean;
+  /** `indexnow_submit` and `bing_submit`: optional absolute sitemap URL. */
   sitemapUrl?: string;
-  /** `sitemap_submit` only: must be `bing`. */
+  /** `sitemap_submit` and `bing_submit` only: must be `bing`. */
   provider?: "bing";
   /** `tasks_add` only: rule/finding id that produced the task. */
   rule?: string;

@@ -87,9 +87,22 @@ function record(value: unknown): Record<string, unknown> {
   return isRecord(value) ? value : {};
 }
 
+/**
+ * The engine keeps coverage facts (`limitations`, `quota`, `total`, `truncated`)
+ * in the envelope `meta`, while the plan/result payload is under `data`. Merge
+ * them for the normalizers without changing the wire shape.
+ */
+export function withEnvelopeMeta(
+  value: unknown,
+  meta: Record<string, unknown>,
+): unknown {
+  return isRecord(value) ? { ...value, meta } : value;
+}
+
 export function normalizeIndexingPlan(value: unknown): IndexingPlan {
   const data = record(value);
   const plan = record(data.plan);
+  const meta = record(data.meta);
   return {
     status: stringValue(data.status),
     action: stringValue(plan.action),
@@ -107,6 +120,7 @@ export function normalizeIndexingPlan(value: unknown): IndexingPlan {
     limitations: unique([
       ...stringList(data.limitations),
       ...stringList(plan.limitations),
+      ...stringList(meta.limitations),
     ]),
   };
 }
@@ -183,4 +197,350 @@ export function indexingErrorHint(error: AppError | null): IndexingErrorHint {
     return "engine";
   }
   return null;
+}
+
+/** One row of `bing sitemaps` (`GetFeeds`). Status is a free engine string. */
+export interface BingSitemapRow {
+  url: string;
+  status: string | null;
+  lastCrawled: string | null;
+  urlCount: number | null;
+}
+
+export interface BingSitemapsReport {
+  rows: BingSitemapRow[];
+  limitations: string[];
+}
+
+/** One row of `bing issues` (`GetCrawlIssues`). `issues` is a bitmask. */
+export interface BingIssueRow {
+  url: string;
+  httpCode: number | null;
+  issues: number | null;
+  inLinks: number | null;
+}
+
+export interface BingIssuesReport {
+  rows: BingIssueRow[];
+  limitations: string[];
+}
+
+/**
+ * `GetUrlSubmissionQuota` returns remaining counts, never totals or usage.
+ * Daily and monthly are kept separate because the monthly bucket can bind
+ * first for a large site.
+ */
+export interface BingQuotaReport {
+  dailyRemaining: number | null;
+  monthlyRemaining: number | null;
+  limitations: string[];
+}
+
+/** Plan/apply counts for `bing submit`; success means accepted, not indexed. */
+export interface BingSubmitCounts {
+  urls: number | null;
+  batches: number | null;
+  accepted: number | null;
+  quota: BingQuotaReport;
+}
+
+function numberAt(
+  source: Record<string, unknown>,
+  keys: string[],
+): number | null {
+  for (const key of keys) {
+    const value = numberValue(source[key]);
+    if (value !== null) {
+      return value;
+    }
+  }
+  return null;
+}
+
+function recordsFrom(
+  value: unknown,
+  keys: string[],
+): Record<string, unknown>[] {
+  if (Array.isArray(value)) {
+    return value.filter(isRecord);
+  }
+  const data = record(value);
+  const result = record(data.result);
+  for (const source of [data, result]) {
+    for (const key of keys) {
+      const candidate = source[key];
+      if (Array.isArray(candidate)) {
+        return candidate.filter(isRecord);
+      }
+    }
+  }
+  return [];
+}
+
+function reportLimitations(value: unknown): string[] {
+  const data = record(value);
+  const result = record(data.result);
+  const meta = record(data.meta);
+  return unique([
+    ...stringList(data.limitations),
+    ...stringList(result.limitations),
+    ...stringList(meta.limitations),
+  ]);
+}
+
+function field(
+  source: Record<string, unknown>,
+  keys: string[],
+): unknown {
+  for (const key of keys) {
+    if (source[key] !== null && source[key] !== undefined) {
+      return source[key];
+    }
+  }
+  return null;
+}
+
+/** Normalize `bing sitemaps` (`GetFeeds`): URL, status, last crawl, URL count. */
+export function normalizeBingSitemaps(value: unknown): BingSitemapsReport {
+  const rows = recordsFrom(value, [
+    "sitemaps",
+    "feeds",
+    "items",
+    "rows",
+    "entries",
+    "results",
+  ])
+    .map((source) => {
+      const url = stringValue(
+        field(source, ["url", "Url", "sitemap_url", "sitemapUrl", "loc"]),
+      );
+      const status = stringValue(field(source, ["status", "Status"]));
+      const lastCrawled = stringValue(
+        field(source, [
+          "last_crawled",
+          "lastCrawled",
+          "LastCrawled",
+          "last_crawl",
+          "lastCrawl",
+        ]),
+      );
+      const urlCount = numberValue(
+        field(source, ["url_count", "urlCount", "UrlCount"]),
+      );
+      return {
+        url: url ?? "",
+        status,
+        lastCrawled,
+        urlCount,
+      };
+    })
+    .filter(
+      (row) =>
+        row.url !== "" ||
+        row.status !== null ||
+        row.lastCrawled !== null ||
+        row.urlCount !== null,
+    );
+  return { rows, limitations: reportLimitations(value) };
+}
+
+/** Normalize `bing issues` (`GetCrawlIssues`): URL, HTTP code, bitmask, in-links. */
+export function normalizeBingIssues(value: unknown): BingIssuesReport {
+  const rows = recordsFrom(value, [
+    "issues",
+    "crawl_issues",
+    "crawlIssues",
+    "items",
+    "rows",
+    "entries",
+    "results",
+  ])
+    .map((source) => {
+      const url = stringValue(
+        field(source, ["url", "Url", "page", "affected_url", "affectedUrl"]),
+      );
+      const httpCode = numberValue(
+        field(source, ["http_code", "httpCode", "HttpCode", "status_code"]),
+      );
+      const issues = numberValue(field(source, ["issues", "Issues", "issue"]));
+      const inLinks = numberValue(
+        field(source, ["in_links", "inLinks", "InLinks", "inlinks"]),
+      );
+      return {
+        url: url ?? "",
+        httpCode,
+        issues,
+        inLinks,
+      };
+    })
+    .filter(
+      (row) =>
+        row.url !== "" ||
+        row.httpCode !== null ||
+        row.issues !== null ||
+        row.inLinks !== null,
+    );
+  return { rows, limitations: reportLimitations(value) };
+}
+
+const REMAINING_KEYS = [
+  "remaining",
+  "remaining_count",
+  "remainingCount",
+  "left",
+];
+const DAILY_REMAINING_KEYS = [
+  "daily_remaining",
+  "dailyRemaining",
+  "daily_remaining_count",
+  "dailyRemainingCount",
+  "remaining_daily",
+  "remainingDaily",
+  "daily_left",
+  "dailyLeft",
+  "daily_quota_remaining",
+  "dailyQuotaRemaining",
+];
+const MONTHLY_REMAINING_KEYS = [
+  "monthly_remaining",
+  "monthlyRemaining",
+  "monthly_remaining_count",
+  "monthlyRemainingCount",
+  "remaining_monthly",
+  "remainingMonthly",
+  "monthly_left",
+  "monthlyLeft",
+  "monthly_quota_remaining",
+  "monthlyQuotaRemaining",
+];
+
+function remainingFor(
+  source: Record<string, unknown>,
+  period: "daily" | "monthly",
+): number | null {
+  const direct = numberAt(
+    source,
+    period === "daily" ? DAILY_REMAINING_KEYS : MONTHLY_REMAINING_KEYS,
+  );
+  if (direct !== null) {
+    return direct;
+  }
+  for (const key of [period, `${period}_quota`, `${period}Quota`]) {
+    const nested = record(source[key]);
+    const value = numberAt(nested, REMAINING_KEYS);
+    if (value !== null) {
+      return value;
+    }
+  }
+  for (const candidate of [
+    source.quotas,
+    source.items,
+    source.rows,
+    source.quota,
+  ]) {
+    if (!Array.isArray(candidate)) {
+      continue;
+    }
+    for (const item of candidate) {
+      const entry = record(item);
+      const label = (
+        stringValue(entry.period) ??
+        stringValue(entry.window) ??
+        stringValue(entry.kind) ??
+        ""
+      ).toLowerCase();
+      if (label === period) {
+        const value = numberAt(entry, REMAINING_KEYS);
+        if (value !== null) {
+          return value;
+        }
+      }
+    }
+  }
+  return null;
+}
+
+/** Normalize `bing quota` (`GetUrlSubmissionQuota`): remaining counts only. */
+export function normalizeBingQuota(value: unknown): BingQuotaReport {
+  const data = record(value);
+  const meta = record(data.meta);
+  const sources = [
+    record(data.quota),
+    data,
+    record(meta.quota),
+    record(data.quota_after),
+    record(data.quotaAfter),
+    record(data.result),
+  ].filter((source) => Object.keys(source).length > 0);
+  const find = (period: "daily" | "monthly"): number | null => {
+    for (const source of sources) {
+      const value = remainingFor(source, period);
+      if (value !== null) {
+        return value;
+      }
+    }
+    return null;
+  };
+  return {
+    dailyRemaining: find("daily"),
+    monthlyRemaining: find("monthly"),
+    limitations: reportLimitations(value),
+  };
+}
+
+/**
+ * Plan/apply counts for `bing submit`. The engine reports the planned URL
+ * count and batches, then the accepted count after apply. Quota is always the
+ * remaining daily/monthly value.
+ */
+export function normalizeBingSubmitCounts(
+  value: unknown,
+  phase: "plan" | "result",
+): BingSubmitCounts {
+  const data = record(value);
+  const meta = record(data.meta);
+  const payload = record(record(data.plan).payload);
+  const result = record(data.result);
+  const source = phase === "plan" ? payload : result;
+  const accepted =
+    phase === "result"
+      ? (submittedCount(result) ??
+        numberAt(source, [
+          "accepted",
+          "submitted",
+          "url_count",
+          "urlCount",
+        ]))
+      : null;
+  const urls =
+    numberAt(source, [
+      "url_count",
+      "urlCount",
+      "total_urls",
+      "totalUrls",
+      "urls_count",
+      "urlsCount",
+    ]) ??
+    (Array.isArray(source.urls) ? source.urls.length : null) ??
+    (phase === "result" ? accepted : null);
+  const batches =
+    numberAt(source, ["batches", "batch_count", "batchCount"]) ??
+    (Array.isArray(source.batches) ? source.batches.length : null) ??
+    (phase === "result" && Array.isArray(result.rows)
+      ? result.rows.length
+      : null);
+  const quotaSource =
+    source.quota ??
+    source.quota_after ??
+    source.quotaAfter ??
+    payload.quota ??
+    data.quota ??
+    result.quota ??
+    meta.quota;
+  return {
+    urls,
+    batches,
+    accepted,
+    quota: normalizeBingQuota(quotaSource),
+  };
 }
