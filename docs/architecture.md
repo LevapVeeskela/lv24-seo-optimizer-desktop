@@ -1,7 +1,7 @@
 # Architecture
 
-Status: **implementation contract for `0.8.0` (release candidate; `0.7.0` is the latest published
-line, 2026-11-17).** The Rust command bridge and product screens are implemented in this repository.
+Status: **implementation contract for `0.8.0` (current release, 2026-11-17; `0.7.0` is the previous
+published line).** The Rust command bridge and product screens are implemented in this repository.
 Where this document describes a control, it is the requirement that implementation must satisfy. The
 pinned engine is `lv24-seo 0.10.0`. `0.8.0` adds the gated `bing_submit` command and the read-only
 `bing_sitemaps`, `bing_issues` and `bing_quota` commands; `MIN_ENGINE_VERSION` is raised to `0.10.0`

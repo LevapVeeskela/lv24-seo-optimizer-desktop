@@ -9,7 +9,7 @@ scraping.
 [![Status: pre-release](https://img.shields.io/badge/status-pre--release-orange.svg)](#public-status)
 [![Engine: lv24-seo 0.10.0](https://img.shields.io/badge/engine-lv24--seo%200.10.0-informational.svg)](docs/releases/0.8.0.md)
 
-> **0.8.0 release candidate.** `0.7.0` (2026-11-17) is the latest published line; `0.6.0`, `0.5.0`,
+> **0.8.0 released (2026-11-17).** `0.8.0` is the latest published line; `0.7.0`, `0.6.0`, `0.5.0`,
 > `0.4.0` and `0.3.0` remain available for rollback. Windows NSIS, macOS `.app` and Linux AppImage can
 > auto-update from `0.2.0` onward; deb, rpm, MSI and the portable ZIP are manual-only. `0.1.0` has
 > no updater and must be upgraded manually once. `0.8.0` bundles `lv24-seo 0.10.0`, adds Bing URL
@@ -129,11 +129,10 @@ The full inputs, outputs and limits are in the engine's
 ## Install
 
 Download from [Releases](https://github.com/LevapVeeskela/lv24-seo-optimizer-desktop/releases).
-The latest published line is `0.7.0`; the `0.8.0` release candidate uses the same asset names with
-`0.8.0` in the version segment. Full notes, install steps and limitations:
-[`docs/releases/0.8.0.md`](docs/releases/0.8.0.md) for the current release candidate,
-[`docs/releases/0.7.0.md`](docs/releases/0.7.0.md) for the latest published line and
-[`docs/releases/0.6.0.md`](docs/releases/0.6.0.md) for the previous one. `0.7.0`, `0.6.0`, `0.5.0`
+The latest published line is `0.8.0`; full notes, install steps and limitations:
+[`docs/releases/0.8.0.md`](docs/releases/0.8.0.md) for the current release,
+[`docs/releases/0.7.0.md`](docs/releases/0.7.0.md) for the previous one and
+[`docs/releases/0.6.0.md`](docs/releases/0.6.0.md) for the one before that. `0.7.0`, `0.6.0`, `0.5.0`
 and `0.4.0` remain available for rollback.
 
 | Platform | Assets | Auto-update |
@@ -218,9 +217,9 @@ assets.
 
 ### Upgrading from 0.1.0
 
-`0.1.0` has no updater, endpoint or public key. Install `0.7.0` manually once (NSIS installer or
-portable ZIP), then update in place to `0.8.0` when it is published. Auto-update works from `0.2.0`
-onward when the installed bundle is Windows NSIS, macOS `.app` or Linux AppImage.
+`0.1.0` has no updater, endpoint or public key. Install `0.8.0` manually once (NSIS installer or
+portable ZIP); auto-update works from `0.2.0` onward when the installed bundle is Windows NSIS, macOS
+`.app` or Linux AppImage.
 
 ## Auto-update
 
@@ -542,13 +541,13 @@ build from source and sign it with your own certificate. See [`docs/release.md`]
 | Cancellable background runs (`run_cancel`, run banner) | implemented in `0.6.0` |
 | React screens (onboarding, dashboard, crawl, logs, tasks, portfolio, settings, configuration, reports, recommendations, integrations, backup) | implemented |
 | Bundled onedir sidecar | all four targets built in CI and by the release workflow; the Windows x64 pin records the reviewed `0.10.0` build, Linux/macOS reviewed pins remain `null` and are covered by rebuild-aware CI checksum reports |
-| Published installers | `0.7.0`: Windows x64, Linux x64, macOS arm64/x64; `0.8.0` is the release candidate; `0.6.0`, `0.5.0`, `0.4.0` and `0.3.0` remain available for rollback |
+| Published installers | `0.8.0`: Windows x64, Linux x64, macOS arm64/x64; `0.7.0`, `0.6.0`, `0.5.0`, `0.4.0` and `0.3.0` remain available for rollback |
 | Install checks | `0.2.2`: macOS 27.2 arm64 DMG installed and launched with engine `0.5.2`; deb and AppImage (FUSE mount and extract-and-run fallback) on Ubuntu 24.04 and rpm on Fedora 45 installed and launched with engine `0.5.2`; Linux updater signatures verified against the embedded key |
-| Auto-update | Windows NSIS, macOS `.app`, Linux AppImage; `0.2.0 → 0.2.1` through `0.6.0 → 0.7.0` verified end-to-end on Windows NSIS; the `0.7.0 → 0.8.0` update and the macOS/Linux update paths must be re-run before announcing `0.8.0`; deb/rpm/MSI/portable ZIP are manual |
+| Auto-update | Windows NSIS, macOS `.app`, Linux AppImage; `0.2.0 → 0.2.1` through `0.7.0 → 0.8.0` verified end-to-end on Windows NSIS; the macOS/Linux `0.8.0` update paths still need a re-run on a machine with the previous release installed; deb/rpm/MSI/portable ZIP are manual |
 | `lv24-seo stats --json` engine command | shipped since `lv24-seo 0.5.2`; bundled `0.10.0`; fixture committed |
 
-`0.1.0` remains available as a Windows-only preview. It has no updater; install `0.7.0` manually
-once, then update in place to `0.8.0` when it is published. Follow the [issues](https://github.com/LevapVeeskela/lv24-seo-optimizer-desktop/issues) for
+`0.1.0` remains available as a Windows-only preview. It has no updater; install `0.8.0` manually
+once. Follow the [issues](https://github.com/LevapVeeskela/lv24-seo-optimizer-desktop/issues) for
 progress, or read the implementation plan in the engine repository:
 [`docs/plans/2026-11-14-seo-desktop.md`](https://github.com/LevapVeeskela/lv24-seo-optimizer/blob/main/docs/plans/2026-11-14-seo-desktop.md).
 

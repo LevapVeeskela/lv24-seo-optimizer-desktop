@@ -1,7 +1,7 @@
 # Security model
 
-Status: **security contract for `0.8.0` (release candidate; `0.7.0` is the latest published line,
-2026-11-17).** The Rust bridge and screens are implemented in this repository. This page states the
+Status: **security contract for `0.8.0` (current release, 2026-11-17; `0.7.0` is the previous
+published line).** The Rust bridge and screens are implemented in this repository. This page states the
 controls the implementation must enforce and the residual risks accepted for the pre-1.0 line; where a
 control is future work, the text says so.
 `0.8.0` adds the gated `bing_submit` command (engine `0.10.0`) with the same write secret and
@@ -288,8 +288,8 @@ connect-src ipc: http://ipc.localhost
 - Windows NSIS, macOS `.app` and Linux AppImage update in place. deb, rpm, MSI and the portable ZIP
   are manual-only: the UI disables the in-app installer for those bundle types and links to the
   release page.
-- `0.1.0` has no updater, endpoint or public key. Its users must install `0.7.0` manually once, then
-  update in place to `0.8.0` when it is published; auto-update works from `0.2.0` onward.
+- `0.1.0` has no updater, endpoint or public key. Its users must install `0.8.0` manually once;
+  auto-update works from `0.2.0` onward.
 - OS code signing/notarization is separate. The default build is unsigned; see section 11.
 
 ## 9. No telemetry and diagnostics

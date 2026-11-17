@@ -10,8 +10,8 @@ its checksums, its updater signatures or its engine version does not ship.
 
 ## 1. Release state
 
-`0.2.0` was the first multi-platform release; `0.7.0` is the latest published release (2026-11-17),
-and `0.8.0` is the prepared release candidate. `0.6.0`, `0.5.0`, `0.4.0`, `0.3.0` and `0.2.3` are
+`0.2.0` was the first multi-platform release; `0.8.0` is the latest published release (2026-11-17),
+and `0.7.0` is the previous line. `0.6.0`, `0.5.0`, `0.4.0`, `0.3.0` and `0.2.3` are
 kept for rollback:
 
 - **Windows x64:** unsigned NSIS installer, signed updater `.exe`, portable ZIP.
@@ -19,9 +19,9 @@ kept for rollback:
 - **macOS arm64/x64:** DMG plus signed `.app.tar.gz` updater archives.
 - **Common:** `latest.json` and `SHA256SUMS.txt`.
 
-Release notes: [`docs/releases/0.8.0.md`](releases/0.8.0.md) for the release candidate,
-[`docs/releases/0.7.0.md`](releases/0.7.0.md) for the latest published line and
-[`docs/releases/0.6.0.md`](releases/0.6.0.md) for the previous one.
+Release notes: [`docs/releases/0.8.0.md`](releases/0.8.0.md) for the current release,
+[`docs/releases/0.7.0.md`](releases/0.7.0.md) for the previous line and
+[`docs/releases/0.6.0.md`](releases/0.6.0.md) for the one before that.
 
 Auto-update is enabled for Windows NSIS, macOS `.app` and Linux AppImage. deb, rpm, MSI and the
 portable ZIP are manual-only; the UI disables in-app installation for those bundle types and links
@@ -632,12 +632,13 @@ The release job:
 5. Verify the release page: asset names, checksums (including `*-portable.zip.sha256`), all four
    platforms, `latest.json` and notes.
 6. Verify the in-app update on a machine with the previous release installed. `0.2.0 → 0.2.1`
-   through `0.6.0 → 0.7.0` are verified end-to-end on Windows NSIS, including the Rust-side version
-   re-check and a running sidecar stopped before the installer. `0.7.0 → 0.8.0` is the next update
-   to verify on Windows NSIS. The macOS `.app` and Linux AppImage update paths were not re-run for
-   `0.7.0`; verify them on this release. Cancellation during
-   download and `UPDATE_ENGINE_BUSY` when cleanup is blocked are covered by unit tests. Do not
-   advertise auto-update for deb/rpm/MSI/portable.
+   through `0.7.0 → 0.8.0` are verified end-to-end on Windows NSIS, including the Rust-side version
+   re-check and a running sidecar stopped before the installer. The relaunched `0.8.0` build reports
+   Desktop `0.8.0`, Engine `0.10.0` and loads the real `lv24.by` workspace. The macOS `.app` and
+   Linux AppImage update paths were not re-run for `0.8.0`; verify them on a machine with `0.7.0`
+   installed before advertising those paths. Cancellation during download and `UPDATE_ENGINE_BUSY`
+   when cleanup is blocked are covered by unit tests. Do not advertise auto-update for
+   deb/rpm/MSI/portable.
 7. Announce with the unsigned-build instructions, the manual-only cases and the checksum file.
 
 ### Post-release

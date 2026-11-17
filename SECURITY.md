@@ -2,8 +2,8 @@
 
 ## Supported versions
 
-`lv24-seo-optimizer-desktop` is **pre-release**. `0.8.0` is the current release candidate; `0.7.0`
-is the latest published line (2026-11-17); `0.6.0`, `0.5.0` and `0.4.0` remain available for
+`lv24-seo-optimizer-desktop` is **pre-release**. `0.8.0` is the current release and the latest
+published line (2026-11-17); `0.7.0`, `0.6.0`, `0.5.0` and `0.4.0` remain available for
 rollback. `0.1.0` is a Windows-only preview with no updater and is upgraded manually. Security fixes
 are provided for the latest release line; older pre-1.0 lines are not maintained unless stated in the
 release notes.
