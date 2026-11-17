@@ -2,10 +2,10 @@
 
 ## Supported versions
 
-`lv24-seo-optimizer-desktop` is **pre-release**. `0.7.0` is the current release candidate; `0.6.0`
-is the latest published line (2026-11-16); `0.5.0` and `0.4.0` remain available for rollback. `0.1.0`
-is a Windows-only preview with no updater and is upgraded manually. Security fixes are provided for
-the latest release line; older pre-1.0 lines are not maintained unless stated in the release notes.
+`lv24-seo-optimizer-desktop` is **pre-release**. The latest published line is `0.7.0` (2026-11-17);
+`0.6.0`, `0.5.0` and `0.4.0` remain available for rollback. `0.1.0` is a Windows-only preview with no
+updater and is upgraded manually. Security fixes are provided for the latest release line; older
+pre-1.0 lines are not maintained unless stated in the release notes.
 
 The desktop is a shell around the pinned `lv24-seo` engine. A vulnerability in the engine should be
 reported to the engine repository as well; this policy covers the desktop shell, scripts, packaging,
@@ -148,7 +148,7 @@ Read [`docs/security.md`](docs/security.md) for the full model. The essentials:
   registered when it spawned them; nothing is matched by image name, so another installed copy or a
   terminal run is untouched. If a tracked sidecar cannot be stopped, the install is blocked with
   `UPDATE_ENGINE_BUSY` rather than starting an installer that would fail on a locked file.
-- `0.1.0` has no updater. Install `0.6.0` manually once; auto-update works from `0.2.0` onward.
+- `0.1.0` has no updater. Install `0.7.0` manually once; auto-update works from `0.2.0` onward.
 - A signature failure blocks the artifact and points to the release page. It is not treated as an
   offline error and the same artifact is not retried.
 

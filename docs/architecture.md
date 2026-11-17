@@ -1,9 +1,9 @@
 # Architecture
 
-Status: **implementation contract for `0.7.0` (release candidate; `0.6.0` is the latest published
-line, 2026-11-16).** The Rust command bridge and product screens are implemented in this repository.
-Where this document describes a control, it is the requirement that implementation must satisfy. The
-pinned engine is `lv24-seo 0.9.0`. `0.7.0` adds two gated provider-write commands (`sitemap_submit`,
+Status: **implementation contract for `0.7.0` (latest published line, 2026-11-17).** The Rust command
+bridge and product screens are implemented in this repository. Where this document describes a
+control, it is the requirement that implementation must satisfy. The pinned engine is
+`lv24-seo 0.9.0`. `0.7.0` adds two gated provider-write commands (`sitemap_submit`,
 `indexnow_submit`) and the `open_bing_sitescan` opener; `MIN_ENGINE_VERSION` is raised to `0.9.0` in
 the same release. It keeps the `0.6.0` cancellable background runs (`run_cancel`), window-wide run
 banner and the schedule-install `--allow-write` opt-in that engine `0.8.0` requires.

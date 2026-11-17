@@ -86,7 +86,7 @@ cd src-tauri && cargo fmt --check && cargo clippy --all-targets -- -D warnings &
   minutes, paid storage, paid signing or paid third-party services.
 - The desktop workflow is manual (`workflow_dispatch`) and owner-gated. Do not add push, tag or
   release triggers that spend minutes unexpectedly.
-- The latest published line is `0.6.0` (2026-11-16); older lines stay on Releases for rollback.
+- The latest published line is `0.7.0` (2026-11-17); older lines stay on Releases for rollback.
 - Artifact retention is 7 days.
 - Keep hard budgets and overage blocking enabled. A green local build is not proof that a remote
   pipeline ran.
