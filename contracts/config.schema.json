@@ -1,5 +1,5 @@
 {
-  "$comment": "Generated from lv24-seo 0.15.1 SeoConfig.model_json_schema(). Do not edit by hand.",
+  "$comment": "Generated from lv24-seo 0.15.2 SeoConfig.model_json_schema(). Do not edit by hand.",
   "$defs": {
     "AuthConfig": {
       "additionalProperties": false,
