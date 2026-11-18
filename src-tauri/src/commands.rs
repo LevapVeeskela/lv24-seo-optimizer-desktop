@@ -18,12 +18,11 @@ use crate::error::{AppError, AppResult, ErrorInfo};
 use crate::paths;
 use crate::settings::{Settings, SettingsPatch, SettingsStore};
 
-/// 0.9.4 ships engine 0.14.1, which runs Windows scheduled jobs through a hidden WScript
-/// launcher instead of a console executable, so the 04:00 indexing job no longer opens a
-/// terminal. The Indexing card needs engine 0.13.1 for `indexing status/history` and
-/// `schedule status`; the 0.14.0 OAuth readiness diagnostics are surfaced by `auth status`/
-/// `doctor`. An older sidecar returns a typed command error instead of a fake success.
-pub const MIN_ENGINE_VERSION: &str = "0.14.1";
+/// 0.9.5 ships engine 0.15.1, which adds the security-headers, tls-certificate,
+/// schema-required and a11y-basics crawl rules on top of the hidden Windows scheduled-job
+/// launcher (0.14.1), the OAuth readiness diagnostics (0.14.0) and the Indexing card
+/// (0.13.1). An older sidecar returns a typed command error instead of a fake success.
+pub const MIN_ENGINE_VERSION: &str = "0.15.1";
 
 /// Progress event emitted by the Rust updater while it downloads a release.
 pub const UPDATE_PROGRESS_EVENT: &str = "update://progress";
@@ -2776,11 +2775,11 @@ mod tests {
 
     #[test]
     fn engine_version_comparison_is_numeric() {
-        assert_eq!(MIN_ENGINE_VERSION, "0.14.1");
+        assert_eq!(MIN_ENGINE_VERSION, "0.15.1");
         assert!(version_at_least(MIN_ENGINE_VERSION, MIN_ENGINE_VERSION));
-        assert!(version_at_least("0.14.2", MIN_ENGINE_VERSION));
+        assert!(version_at_least("0.15.1", MIN_ENGINE_VERSION));
+        assert!(!version_at_least("0.14.1", MIN_ENGINE_VERSION));
         assert!(!version_at_least("0.14.0", MIN_ENGINE_VERSION));
-        assert!(!version_at_least("0.13.1", MIN_ENGINE_VERSION));
         assert!(version_at_least("0.4.0", "0.4.0"));
         assert!(version_at_least("0.4.1", "0.4.0"));
         assert!(version_at_least("0.10.0", "0.4.0"));
