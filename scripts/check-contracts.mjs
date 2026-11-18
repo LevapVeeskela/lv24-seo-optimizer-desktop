@@ -75,8 +75,7 @@ function runGenerator(mode) {
     command = "uv";
     commandArgs = [
       "run",
-      "--refresh-package",
-      "lv24-seo",
+      "--refresh",
       "--python",
       typeof pin.python === "string" && pin.python ? pin.python : "3.12",
       ...withArgs.flatMap((spec) => ["--with", spec]),
