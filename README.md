@@ -393,6 +393,18 @@ Yandex Webmaster and Yandex Metrika. Each row shows **Connected** / **Not connec
 `lv24-seo auth status --json` (`gsc_oauth`, `yandex_oauth`, `metrika_oauth`); a provider the engine
 did not report stays **Not checked** instead of being shown as missing.
 
+With engine `lv24-seo >= 0.14.0` each row also shows an OAuth readiness chip from the same answer's
+`data.oauth` (`gsc`, `yandex`, `metrika`). The eight engine states map to a localized short label:
+**Ready** (`oauth_ready`); a needs-action label for `oauth_client_missing`,
+`oauth_client_secret_missing`, `oauth_token_missing`, `oauth_scope_missing` and
+`oauth_redirect_invalid`; and a warning for `oauth_token_expired` (the engine `detail` says whether
+a refresh token can renew it) and `oauth_scope_unknown` (unknown scope coverage, not a failure).
+The row renders the engine's `detail` and `next_action` verbatim (English, URLs unchanged), the
+localized token expiry (`—` when the engine reports none), whether scopes were recorded, and the
+engine `limitations[]`. An engine without `data.oauth`, a provider the engine skipped, or an
+unrecognised state shows a neutral *Readiness unavailable* notice instead of a false **Ready**;
+the presence rows keep working. No token or secret value is read from the payload or rendered.
+
 - **Google Search Console:** **Connect** runs `lv24-seo auth login --provider gsc --json`. The
   engine opens the system browser, listens on a `127.0.0.1` loopback callback and returns a
   token-free summary after consent. The card says *Complete the sign-in in your browser* while the

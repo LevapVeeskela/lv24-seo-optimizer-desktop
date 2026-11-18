@@ -2,6 +2,7 @@ import { useEffect, useId, useRef } from "react";
 import { observer } from "mobx-react-lite";
 import { useI18n, type MessageKey } from "@/shared/i18n";
 import type { AppError } from "@/shared/lib/errors";
+import { formatDateTime } from "@/shared/lib/format";
 import { Badge } from "@/shared/ui/Badge";
 import { Button } from "@/shared/ui/Button";
 import { Card } from "@/shared/ui/Card";
@@ -15,6 +16,11 @@ import {
   type ConnectorPresence,
   type ConnectorsStore,
 } from "../model/ConnectorsStore";
+import {
+  readinessLabelKey,
+  readinessTone,
+  type OAuthReadiness,
+} from "../model/oauthReadiness";
 import "./connectors.css";
 
 const PROVIDERS: ReadonlyArray<{
@@ -83,6 +89,62 @@ function OAuthError({ error }: { error: AppError }) {
   );
 }
 
+/**
+ * Read-only OAuth readiness from engine >= 0.14.0. The engine's `detail` and
+ * `next_action` are English by design and are rendered verbatim; no token or
+ * secret value is ever part of this payload, and only these fields are read.
+ */
+function ReadinessDetails({ readiness }: { readiness: OAuthReadiness }) {
+  const { t, locale } = useI18n();
+  const scopesRecorded =
+    readiness.scopesRecorded === null
+      ? "—"
+      : readiness.scopesRecorded
+        ? t("common.yes")
+        : t("common.no");
+  return (
+    <div className="connectors-readiness">
+      {readiness.state === null ? (
+        <p className="muted small">{t("connectors.oauth.unavailableHint")}</p>
+      ) : null}
+      {readiness.detail ? (
+        <p className="muted small">{readiness.detail}</p>
+      ) : null}
+      {readiness.state === "oauth_token_expired" ? (
+        <p className="muted small">{t("connectors.oauth.expiredHint")}</p>
+      ) : null}
+      {readiness.nextAction ? (
+        <p className="small">
+          <strong>{t("connectors.oauth.nextAction")}:</strong>{" "}
+          <code className="callback">{readiness.nextAction}</code>
+        </p>
+      ) : null}
+      <dl className="connectors-facts">
+        <div>
+          <dt className="muted small">{t("connectors.oauth.expiresAt")}</dt>
+          <dd>{formatDateTime(readiness.expiresAt, locale)}</dd>
+        </div>
+        <div>
+          <dt className="muted small">{t("connectors.oauth.scopesRecorded")}</dt>
+          <dd>{scopesRecorded}</dd>
+        </div>
+      </dl>
+      {readiness.limitations.length ? (
+        <>
+          <p className="muted small">{t("connectors.oauth.limitations")}</p>
+          <ul className="service-list">
+            {readiness.limitations.map((item) => (
+              <li key={item}>
+                <span className="muted small">{item}</span>
+              </li>
+            ))}
+          </ul>
+        </>
+      ) : null}
+    </div>
+  );
+}
+
 export const ConnectorsCard = observer(function ConnectorsCard({
   store,
   configPath,
@@ -139,9 +201,18 @@ export const ConnectorsCard = observer(function ConnectorsCard({
         </Notice>
       ) : null}
 
+      {store.oauth && !store.oauth.available ? (
+        <Notice variant="info">
+          <strong>{t("connectors.oauth.unavailable")}</strong>
+          <span>{t("connectors.oauth.unavailableHint")}</span>
+        </Notice>
+      ) : null}
+
       <ul className="connectors-list">
         {PROVIDERS.map(({ id, label, hint }) => {
           const presence = store.presence(id);
+          const readiness = store.readiness(id);
+          const readinessReported = store.oauth?.available === true;
           const isActive = store.active === id;
           const phase = isActive ? store.phase : "idle";
           const showYandexPanel =
@@ -167,6 +238,11 @@ export const ConnectorsCard = observer(function ConnectorsCard({
                   <Badge tone={presenceTone(presence)}>
                     {t(presenceLabel(presence))}
                   </Badge>
+                  {readiness || readinessReported ? (
+                    <Badge tone={readinessTone(readiness)}>
+                      {t(readinessLabelKey(readiness))}
+                    </Badge>
+                  ) : null}
                   <Button
                     variant={presence === "connected" ? "secondary" : "primary"}
                     loading={phase === "starting"}
@@ -177,6 +253,14 @@ export const ConnectorsCard = observer(function ConnectorsCard({
                   </Button>
                 </div>
               </div>
+
+              {readiness ? (
+                <ReadinessDetails readiness={readiness} />
+              ) : readinessReported ? (
+                <p className="muted small">
+                  {t("connectors.oauth.unavailableHint")}
+                </p>
+              ) : null}
 
               {id === "gsc" && isActive && phase === "starting" ? (
                 <p className="muted small" role="status">

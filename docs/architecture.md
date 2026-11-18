@@ -176,6 +176,15 @@ by the engine process, so it never crosses this command. The Connectors card nee
 engine `0.13.1` or newer; an older engine answers with a typed command/parse error, and the card
 shows that message plus the engine auth guide instead of claiming a connection.
 
+The same `auth status` answer carries OAuth readiness diagnostics (`data.oauth`, engine
+`0.14.0`). The Connectors card parses `gsc`, `yandex` and `metrika` defensively: the eight engine
+states map to a localized short label and a severity (ready / needs action / warning), while the
+engine `detail` and `next_action` are rendered verbatim and `expires_at` is localized. A missing
+`oauth` object, a skipped provider or an unknown state degrades to a neutral *readiness
+unavailable* notice, never to **Ready**. Only `state`, `detail`, `next_action`, `expires_at`,
+`scopes_recorded` and `limitations` are read; token and secret values are not part of the payload
+and are never rendered.
+
 `cli_run` accepts an optional `runId` only for the six long local jobs listed in
 `CliCommandId::cancellable` (`crawl`, `report_weekly`, `logs_analyze`, `backup_create`,
 `backup_restore`, `schedule_install`). A run id for any other command is rejected with

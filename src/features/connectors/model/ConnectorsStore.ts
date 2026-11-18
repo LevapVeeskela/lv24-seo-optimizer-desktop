@@ -10,6 +10,11 @@ import {
   type AuthLoginData,
   type OAuthLoginProvider,
 } from "../lib/ipc";
+import {
+  normalizeOAuthReadiness,
+  type OAuthReadiness,
+  type OAuthReadinessReport,
+} from "./oauthReadiness";
 
 export { OAUTH_LOGIN_PROVIDERS, type OAuthLoginProvider };
 
@@ -83,6 +88,8 @@ function manualFlowError(data: AuthLoginData | null): AppError {
 export class ConnectorsStore {
   statusState: ConnectorsStatusState = "idle";
   entries: AuthProviderStatus[] = [];
+  /** `null` until `auth status` answers; `available: false` for engine < 0.14.0. */
+  oauth: OAuthReadinessReport | null = null;
   statusError: AppError | null = null;
   active: OAuthLoginProvider | null = null;
   phase: ConnectorPhase = "idle";
@@ -112,6 +119,11 @@ export class ConnectorsStore {
     return connectorPresence(this.entries, provider);
   }
 
+  /** OAuth readiness for one provider; `null` when the engine did not report it. */
+  readiness(provider: OAuthLoginProvider): OAuthReadiness | null {
+    return this.oauth?.entries[provider] ?? null;
+  }
+
   /** Drop the in-flight OAuth flow (workspace switch) but keep status entries. */
   resetFlow(): void {
     this.active = null;
@@ -127,6 +139,7 @@ export class ConnectorsStore {
     this.generation += 1;
     this.statusState = "idle";
     this.entries = [];
+    this.oauth = null;
     this.statusError = null;
     this.resetFlow();
   }
@@ -139,6 +152,7 @@ export class ConnectorsStore {
     const generation = ++this.generation;
     if (!configPath) {
       this.entries = [];
+      this.oauth = null;
       this.statusState = "idle";
       this.statusError = null;
       return false;
@@ -147,6 +161,7 @@ export class ConnectorsStore {
       this.statusState = "loading";
       this.statusError = null;
       this.entries = [];
+      this.oauth = null;
     }
     const result = await loadAuthStatus(configPath);
     if (generation !== this.generation) {
@@ -154,12 +169,14 @@ export class ConnectorsStore {
     }
     if (!result.ok) {
       this.entries = [];
+      this.oauth = null;
       this.statusError = toAppError(result.error, "AUTH_STATUS");
       this.statusState = "error";
       return false;
     }
     const data = result.data as AuthStatusData | null;
     this.entries = data?.providers ?? [];
+    this.oauth = normalizeOAuthReadiness(data);
     this.statusError = null;
     this.statusState = "ready";
     return true;
