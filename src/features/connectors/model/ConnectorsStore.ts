@@ -1,6 +1,5 @@
 import { makeAutoObservable } from "mobx";
-import type { AuthProviderStatus, AuthStatusData } from "@/entities/config";
-import { toAppError, type AppError } from "@/shared/lib/errors";
+import type { AuthProviderStatus, AuthStatusData } from "@/entities/config";import { toAppError, type AppError } from "@/shared/lib/errors";
 import {
   OAUTH_LOGIN_PROVIDERS,
   OAUTH_STATUS_PROVIDER,
@@ -38,7 +37,12 @@ export type ConnectorsStatusState = "idle" | "loading" | "ready" | "error";
 export function connectorPresence(
   entries: readonly AuthProviderStatus[],
   provider: OAuthLoginProvider,
+  access?: Record<string, { mode?: string; ready?: boolean } | undefined> | null,
 ): ConnectorPresence {
+  const mode = access?.[provider]?.mode;
+  if (mode) {
+    return mode === "none" ? "not_connected" : "connected";
+  }
   const entry = entries.find(
     (item) => item.provider === OAUTH_STATUS_PROVIDER[provider],
   );
@@ -55,6 +59,27 @@ export function isConnectorBusy(phase: ConnectorPhase): boolean {
 
 function envelopeError(code: string, message: string): AppError {
   return { code, message, retryable: false };
+}
+
+/** Parse the optional data-access summary defensively; older engines omit it. */
+function normalizeAccess(
+  data: AuthStatusData | null,
+): Record<string, { mode?: string; ready?: boolean }> | null {
+  const raw = data?.access;
+  if (!raw || typeof raw !== "object") {
+    return null;
+  }
+  const parsed: Record<string, { mode?: string; ready?: boolean }> = {};
+  for (const [provider, value] of Object.entries(raw)) {
+    if (!value || typeof value !== "object") {
+      continue;
+    }
+    parsed[provider] = {
+      mode: typeof value.mode === "string" ? value.mode : undefined,
+      ready: value.ready === true,
+    };
+  }
+  return Object.keys(parsed).length > 0 ? parsed : null;
 }
 
 /**
@@ -90,6 +115,8 @@ export class ConnectorsStore {
   entries: AuthProviderStatus[] = [];
   /** `null` until `auth status` answers; `available: false` for engine < 0.14.0. */
   oauth: OAuthReadinessReport | null = null;
+  /** Engine >= 0.15.2: data-access mode per provider (token/service account/oauth). */
+  access: Record<string, { mode?: string; ready?: boolean }> | null = null;
   statusError: AppError | null = null;
   active: OAuthLoginProvider | null = null;
   phase: ConnectorPhase = "idle";
@@ -118,7 +145,7 @@ export class ConnectorsStore {
   }
 
   presence(provider: OAuthLoginProvider): ConnectorPresence {
-    return connectorPresence(this.entries, provider);
+    return connectorPresence(this.entries, provider, this.access);
   }
 
   /** OAuth readiness for one provider; `null` when the engine did not report it. */
@@ -156,6 +183,7 @@ export class ConnectorsStore {
     this.statusState = "idle";
     this.entries = [];
     this.oauth = null;
+    this.access = null;
     this.statusError = null;
     this.resetFlow();
   }
@@ -169,6 +197,7 @@ export class ConnectorsStore {
     if (!configPath) {
       this.entries = [];
       this.oauth = null;
+      this.access = null;
       this.statusState = "idle";
       this.statusError = null;
       return false;
@@ -178,6 +207,7 @@ export class ConnectorsStore {
       this.statusError = null;
       this.entries = [];
       this.oauth = null;
+      this.access = null;
     }
     const result = await loadAuthStatus(configPath);
     if (generation !== this.generation) {
@@ -186,6 +216,7 @@ export class ConnectorsStore {
     if (!result.ok) {
       this.entries = [];
       this.oauth = null;
+      this.access = null;
       this.statusError = toAppError(result.error, "AUTH_STATUS");
       this.statusState = "error";
       return false;
@@ -193,6 +224,7 @@ export class ConnectorsStore {
     const data = result.data as AuthStatusData | null;
     this.entries = data?.providers ?? [];
     this.oauth = normalizeOAuthReadiness(data);
+    this.access = normalizeAccess(data);
     this.statusError = null;
     this.statusState = "ready";
     return true;

@@ -256,12 +256,19 @@ export interface AuthProviderStatus {
   expires_at?: string | null;
 }
 
+export interface AuthAccess {
+  mode?: string;
+  ready?: boolean;
+}
+
 export interface AuthStatusData {
   providers: AuthProviderStatus[];
   present: string[];
   missing: string[];
   /** Engine >= 0.14.0: OAuth readiness per provider; parsed defensively. */
   oauth?: unknown;
+  /** Engine >= 0.15.2: how each provider is authenticated for data access. */
+  access?: Record<string, AuthAccess | undefined>;
 }
 
 export interface DoctorCheck {

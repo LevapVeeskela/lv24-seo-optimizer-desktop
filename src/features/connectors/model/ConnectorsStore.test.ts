@@ -73,6 +73,76 @@ describe("ConnectorsStore", () => {
     vi.mocked(runAuthLogin).mockResolvedValue(ok({ provider: "gsc" }));
   });
 
+  it("uses the engine access summary when the provider has a token or service account", async () => {
+    vi.mocked(loadAuthStatus).mockResolvedValue(
+      ok({
+        providers: [
+          {
+            provider: "gsc_oauth",
+            secret: "",
+            present: false,
+            source: "missing",
+            expires_at: null,
+          },
+          {
+            provider: "yandex_oauth",
+            secret: "",
+            present: false,
+            source: "missing",
+            expires_at: null,
+          },
+          {
+            provider: "metrika_oauth",
+            secret: "",
+            present: false,
+            source: "missing",
+            expires_at: null,
+          },
+        ],
+        present: [],
+        missing: ["gsc_oauth", "yandex_oauth", "metrika_oauth"],
+        access: {
+          gsc: { mode: "service_account", ready: true },
+          yandex: { mode: "token", ready: true },
+          metrika: { mode: "token", ready: true },
+        },
+        oauth: {
+          yandex: {
+            state: "oauth_client_missing",
+            detail: "OAuth client_id is not configured",
+            next_action: "create an app",
+            expires_at: null,
+            scopes_recorded: false,
+            limitations: [],
+          },
+        },
+      }),
+    );
+    const store = new ConnectorsStore();
+    await store.load(CONFIG);
+
+    expect(store.presence("gsc")).toBe("connected");
+    expect(store.presence("yandex")).toBe("connected");
+    expect(store.presence("metrika")).toBe("connected");
+    // OAuth is still optional/not configured; presence and OAuth are separate.
+    expect(store.setupRequired("yandex")).toBe(true);
+  });
+
+  it("falls back to the OAuth entry when the engine has no access summary", async () => {
+    vi.mocked(loadAuthStatus).mockResolvedValue(
+      status([
+        { provider: "gsc_oauth", present: true },
+        { provider: "yandex_oauth", present: false },
+      ]),
+    );
+    const store = new ConnectorsStore();
+    await store.load(CONFIG);
+
+    expect(store.access).toBeNull();
+    expect(store.presence("gsc")).toBe("connected");
+    expect(store.presence("yandex")).toBe("not_connected");
+  });
+
   it("reports connected, not connected and unknown from auth status", async () => {
     vi.mocked(loadAuthStatus).mockResolvedValue(
       status([
