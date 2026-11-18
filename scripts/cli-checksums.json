@@ -11,7 +11,7 @@
   "targets": {
     "x86_64-pc-windows-msvc": {
       "path": "lv24-seo/lv24-seo.exe",
-      "sha256": "cd70636a4f490c3ab592fb3b16ac2456d9cf9e57f08c676e05b84110ff361922",
+      "sha256": "698c268a2fc898633644e74a0683bcb5aa06da8f22bc251a263b573691cd57f7",
       "size": 14607761
     },
     "x86_64-unknown-linux-gnu": {
