@@ -35,6 +35,27 @@
         "detail": "not configured (optional)",
         "id": "gsc_auth",
         "ok": true
+      },
+      {
+        "code": "oauth_client_missing",
+        "detail": "OAuth client_id is not configured; register an app at https://console.cloud.google.com/apis/credentials and set [auth.gsc] client_id (or LV24_SEO_GSC_CLIENT_ID)",
+        "id": "gsc_oauth",
+        "next_action": "create an OAuth app at https://console.cloud.google.com/apis/credentials, then set [auth.gsc] client_id or LV24_SEO_GSC_CLIENT_ID",
+        "ok": false
+      },
+      {
+        "code": "oauth_client_missing",
+        "detail": "OAuth client_id is not configured; register an app at https://oauth.yandex.ru/ and set [auth.yandex] client_id (or LV24_SEO_YANDEX_CLIENT_ID) (provider not configured; OAuth is optional)",
+        "id": "yandex_oauth",
+        "next_action": "create an OAuth app at https://oauth.yandex.ru/, then set [auth.yandex] client_id or LV24_SEO_YANDEX_CLIENT_ID",
+        "ok": false
+      },
+      {
+        "code": "oauth_client_missing",
+        "detail": "OAuth client_id is not configured; register an app at https://oauth.yandex.ru/ and set [auth.yandex] client_id (or LV24_SEO_YANDEX_CLIENT_ID) (provider not configured; OAuth is optional)",
+        "id": "metrika_oauth",
+        "next_action": "create an OAuth app at https://oauth.yandex.ru/, then set [auth.yandex] client_id or LV24_SEO_YANDEX_CLIENT_ID",
+        "ok": false
       }
     ],
     "healthy": true
@@ -44,7 +65,7 @@
     "data_dir": "<DATA_DIR>",
     "data_dir_declared": false,
     "data_dir_source": "working directory",
-    "version": "0.13.1"
+    "version": "0.14.0"
   },
   "ok": true,
   "warnings": [

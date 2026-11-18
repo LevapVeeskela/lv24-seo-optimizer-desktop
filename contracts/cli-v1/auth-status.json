@@ -15,6 +15,47 @@
       "smtp",
       "telegram"
     ],
+    "oauth": {
+      "gsc": {
+        "access_token_present": false,
+        "client_id_present": false,
+        "client_secret_present": false,
+        "detail": "OAuth client_id is not configured; register an app at https://console.cloud.google.com/apis/credentials and set [auth.gsc] client_id (or LV24_SEO_GSC_CLIENT_ID)",
+        "expires_at": null,
+        "limitations": [],
+        "next_action": "create an OAuth app at https://console.cloud.google.com/apis/credentials, then set [auth.gsc] client_id or LV24_SEO_GSC_CLIENT_ID",
+        "provider": "gsc",
+        "refresh_token_present": false,
+        "scopes_recorded": false,
+        "state": "oauth_client_missing"
+      },
+      "metrika": {
+        "access_token_present": false,
+        "client_id_present": false,
+        "client_secret_present": false,
+        "detail": "OAuth client_id is not configured; register an app at https://oauth.yandex.ru/ and set [auth.yandex] client_id (or LV24_SEO_YANDEX_CLIENT_ID)",
+        "expires_at": null,
+        "limitations": [],
+        "next_action": "create an OAuth app at https://oauth.yandex.ru/, then set [auth.yandex] client_id or LV24_SEO_YANDEX_CLIENT_ID",
+        "provider": "metrika",
+        "refresh_token_present": false,
+        "scopes_recorded": false,
+        "state": "oauth_client_missing"
+      },
+      "yandex": {
+        "access_token_present": false,
+        "client_id_present": false,
+        "client_secret_present": false,
+        "detail": "OAuth client_id is not configured; register an app at https://oauth.yandex.ru/ and set [auth.yandex] client_id (or LV24_SEO_YANDEX_CLIENT_ID)",
+        "expires_at": null,
+        "limitations": [],
+        "next_action": "create an OAuth app at https://oauth.yandex.ru/, then set [auth.yandex] client_id or LV24_SEO_YANDEX_CLIENT_ID",
+        "provider": "yandex",
+        "refresh_token_present": false,
+        "scopes_recorded": false,
+        "state": "oauth_client_missing"
+      }
+    },
     "present": [],
     "providers": [
       {
@@ -111,7 +152,7 @@
     ]
   },
   "meta": {
-    "version": "0.13.1"
+    "version": "0.14.0"
   },
   "ok": true,
   "warnings": []

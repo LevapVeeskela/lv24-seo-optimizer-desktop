@@ -12,7 +12,8 @@ The read-only diagnostics surface adds `gsc_inspect`, `gsc_sitemaps`, `yandex_in
 `bing_joins`, six `metrika_*` reads and `cwv_audits`/`cwv_history`. Each has a short argument
 allow-list, rejects `allowWrite`, a confirm token and every field owned by another command, and
 requires the active project config. They never write provider or local state. They are implemented in `0.9.0` and require engine `0.11.0`; they are not part of the published
-`0.8.0` feature set. The OAuth Connect card is implemented in `0.9.1` and requires engine `0.13.1`.
+`0.8.0` feature set. The OAuth Connect card is implemented in `0.9.1` and requires engine `0.13.1`;
+the read-only Indexing automation card is implemented in `0.9.2` and requires engine `0.13.1`.
 `0.7.0` added the gated `sitemap_submit` and `indexnow_submit` commands (engine `0.9.0`), one
 external-URL allow-list for `open_bing_sitescan`, and a per-session in-memory write secret.
 `0.6.0` added exact-process cancellation for the six long local jobs (`run_cancel`) and made

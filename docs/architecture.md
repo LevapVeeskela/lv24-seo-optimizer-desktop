@@ -1,17 +1,18 @@
 # Architecture
 
-Status: **implementation contract for `0.9.1` (current release, 2026-11-18; `0.9.0` is the previous
+Status: **implementation contract for `0.9.2` (current release, 2026-11-18; `0.9.1` is the previous
 published line).** The Rust command bridge and product screens are implemented in this repository.
 Where this document describes a control, it is the requirement that implementation must satisfy. The
-pinned engine is `lv24-seo 0.13.1`. `0.9.1` adds the OAuth Connect card (Google Search Console,
-Yandex Webmaster and Metrika) and raises `MIN_ENGINE_VERSION` to `0.13.1`. It keeps the `0.9.0`
-read-only diagnostics commands, the `0.8.0` gated `bing_submit` and read-only
-`bing_sitemaps`/`bing_issues`/`bing_quota`, the `0.7.0` gated `sitemap_submit`/`indexnow_submit` and
-the `open_bing_sitescan` opener, the `0.6.0` cancellable background runs (`run_cancel`),
-window-wide run banner and the schedule-install `--allow-write` opt-in that engine `0.8.0` requires.
+pinned engine is `lv24-seo 0.14.0`. `0.9.2` adds the read-only Indexing automation card and raises
+`MIN_ENGINE_VERSION` to `0.14.0`. It keeps the `0.9.1` OAuth Connect card (Google Search Console,
+Yandex Webmaster and Metrika), the `0.9.0` read-only diagnostics commands, the `0.8.0` gated
+`bing_submit` and read-only `bing_sitemaps`/`bing_issues`/`bing_quota`, the `0.7.0` gated
+`sitemap_submit`/`indexnow_submit` and the `open_bing_sitescan` opener, the `0.6.0` cancellable
+background runs (`run_cancel`), window-wide run banner and the schedule-install `--allow-write`
+opt-in that engine `0.8.0` requires.
 
 The read-only diagnostics commands listed in section 4 are implemented in `0.9.0` and require engine
-`lv24-seo 0.11.0`; the bundle requires `0.13.1` for the OAuth connectors.
+`lv24-seo 0.11.0`; the bundle requires `0.14.0` for the OAuth readiness diagnostics.
 
 ## 1. Shape
 
