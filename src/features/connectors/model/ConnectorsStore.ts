@@ -97,6 +97,8 @@ export class ConnectorsStore {
   code = "";
   error: AppError | null = null;
   openError: AppError | null = null;
+  /** True while the system browser is being asked to open the consent URL. */
+  opening = false;
   private generation = 0;
 
   constructor() {
@@ -124,6 +126,19 @@ export class ConnectorsStore {
     return this.oauth?.entries[provider] ?? null;
   }
 
+  /** True when the local OAuth app is missing or misconfigured; connecting cannot work yet. */
+  setupRequired(provider: OAuthLoginProvider): boolean {
+    const readiness = this.readiness(provider);
+    if (readiness === null) {
+      return false;
+    }
+    return (
+      readiness.state === "oauth_client_missing" ||
+      readiness.state === "oauth_client_secret_missing" ||
+      readiness.state === "oauth_redirect_invalid"
+    );
+  }
+
   /** Drop the in-flight OAuth flow (workspace switch) but keep status entries. */
   resetFlow(): void {
     this.active = null;
@@ -132,6 +147,7 @@ export class ConnectorsStore {
     this.code = "";
     this.error = null;
     this.openError = null;
+    this.opening = false;
   }
 
   /** Drop every grant and in-flight state (workspace switch / teardown). */
@@ -266,16 +282,19 @@ export class ConnectorsStore {
   }
 
   async openAuthorizationUrl(): Promise<boolean> {
-    if (!this.authorizationUrl || this.busy) {
+    if (!this.authorizationUrl || this.busy || this.opening) {
       return false;
     }
     this.openError = null;
+    this.opening = true;
     try {
       await openOAuthUrl(this.authorizationUrl);
       return true;
     } catch (error) {
       this.openError = toAppError(error, "OPEN_URL");
       return false;
+    } finally {
+      this.opening = false;
     }
   }
 }

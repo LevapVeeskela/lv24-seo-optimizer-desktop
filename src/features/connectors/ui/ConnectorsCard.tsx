@@ -246,7 +246,7 @@ export const ConnectorsCard = observer(function ConnectorsCard({
                   <Button
                     variant={presence === "connected" ? "secondary" : "primary"}
                     loading={phase === "starting"}
-                    disabled={blocked || store.busy}
+                    disabled={blocked || store.busy || store.setupRequired(id)}
                     onClick={() => void store.connect(id, configPath)}
                   >
                     {t("connectors.connect")}
@@ -283,7 +283,7 @@ export const ConnectorsCard = observer(function ConnectorsCard({
                   <div className="form-actions">
                     <Button
                       variant="secondary"
-                      disabled={blocked || store.busy}
+                      disabled={blocked || store.busy || store.opening}
                       onClick={() => void store.openAuthorizationUrl()}
                     >
                       {t("connectors.openYandex")}

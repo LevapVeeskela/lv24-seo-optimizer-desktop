@@ -231,6 +231,28 @@ describe("ConnectorsStore", () => {
     expect(store.phase).toBe("awaiting-code");
   });
 
+  it("does not open a second consent tab while the first open is in flight", async () => {
+    vi.mocked(runAuthLogin).mockResolvedValue(
+      ok({ provider: "yandex", flow: "oauth", authorization_url: YANDEX_URL }),
+    );
+    const store = new ConnectorsStore();
+    await store.connect("yandex", CONFIG);
+
+    let resolveOpen!: (value: string) => void;
+    vi.mocked(openOAuthUrl).mockReturnValue(
+      new Promise((resolve) => {
+        resolveOpen = resolve;
+      }),
+    );
+    const first = store.openAuthorizationUrl();
+    await expect(store.openAuthorizationUrl()).resolves.toBe(false);
+    expect(openOAuthUrl).toHaveBeenCalledTimes(1);
+
+    resolveOpen("opened");
+    await expect(first).resolves.toBe(true);
+    expect(store.opening).toBe(false);
+  });
+
   it("disables a second run while the first one is active", async () => {
     let resolveLogin!: (value: Envelope<AuthLoginData>) => void;
     vi.mocked(runAuthLogin).mockReturnValue(
@@ -311,6 +333,9 @@ describe("ConnectorsStore", () => {
     expect(store.readiness("yandex")?.nextAction).toBe("create an app");
     // A provider the engine skipped is not "ready".
     expect(store.readiness("metrika")).toBeNull();
+    expect(store.setupRequired("gsc")).toBe(false);
+    expect(store.setupRequired("yandex")).toBe(true);
+    expect(store.setupRequired("metrika")).toBe(false);
 
     store.reset();
 
