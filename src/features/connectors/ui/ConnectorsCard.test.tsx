@@ -58,6 +58,32 @@ function statusData(): AuthStatusData {
   };
 }
 
+function oauthEntry(
+  state: string,
+  overrides: Record<string, unknown> = {},
+): Record<string, unknown> {
+  return {
+    provider: "gsc",
+    state,
+    detail: `${state} detail`,
+    client_id_present: true,
+    client_secret_present: true,
+    access_token_present: true,
+    refresh_token_present: true,
+    expires_at: "2026-11-18T12:00:00+00:00",
+    scopes_recorded: true,
+    next_action: "",
+    limitations: [],
+    ...overrides,
+  };
+}
+
+function statusWithOAuth(
+  oauth: Record<string, unknown>,
+): AuthStatusData {
+  return { ...statusData(), oauth };
+}
+
 function render(store: ConnectorsStore, blocked = false): string {
   return renderToStaticMarkup(
     <I18nProvider locale="en" onLocaleChange={() => {}}>
@@ -175,5 +201,155 @@ describe("ConnectorsCard", () => {
 
     expect(html).toContain("Connectors need a workspace");
     expect(html).toContain("disabled");
+  });
+
+  it("renders readiness state, detail, next action, expiry and scopes", async () => {
+    vi.mocked(loadAuthStatus).mockResolvedValue(
+      ok(
+        statusWithOAuth({
+          gsc: oauthEntry("oauth_ready", {
+            detail:
+              "Google Search Console OAuth client, secret, token, scopes and redirect are ready",
+          }),
+          yandex: oauthEntry("oauth_token_expired", {
+            detail:
+              "access token expired at 2026-11-17T00:00:00+00:00; refresh token present (refresh available)",
+            next_action:
+              "run a read command (the token refreshes automatically) or `lv24-seo auth login --provider yandex`",
+            expires_at: "2026-11-17T00:00:00+00:00",
+          }),
+          metrika: oauthEntry("oauth_scope_unknown", {
+            detail:
+              "token scopes were never recorded; run a login or a refresh once to record them",
+            next_action:
+              "run `lv24-seo auth login --provider metrika` or a read command (a refresh records the granted scopes)",
+            expires_at: null,
+            scopes_recorded: false,
+            limitations: [
+              "token scopes were never recorded, so scope coverage is unknown, not passed",
+            ],
+          }),
+        }),
+      ),
+    );
+    const store = new ConnectorsStore();
+    await store.load(CONFIG);
+
+    const html = render(store);
+
+    expect(html).toContain(">Ready<");
+    expect(html).toContain("Token expired");
+    expect(html).toContain("Scopes unknown");
+    expect(html).toContain(
+      "refresh token present (refresh available)",
+    );
+    expect(html).toContain(
+      "A stored refresh token renews the access token on the next read",
+    );
+    expect(html).toContain("Next step");
+    expect(html).toContain(
+      "lv24-seo auth login --provider metrika",
+    );
+    expect(html).toContain("Scopes recorded");
+    expect(html).toContain("Yes");
+    expect(html).toContain("No");
+    expect(html).toContain("Limitations");
+    expect(html).toContain(
+      "token scopes were never recorded, so scope coverage is unknown, not passed",
+    );
+    // The expiry cell is localized; the engine's own detail stays verbatim.
+    expect(html).toMatch(/<dd>[^<]*2026[^<]*<\/dd>/);
+    expect(html).not.toMatch(/<dd>2026-11-17T00:00:00/);
+    expect(html).toContain("<dd>—</dd>");
+  });
+
+  it("shows a neutral notice when the engine has no oauth diagnostics", async () => {
+    const store = new ConnectorsStore();
+    await store.load(CONFIG);
+
+    const html = render(store);
+
+    expect(html).toContain("Readiness unavailable");
+    expect(html).toContain("OAuth readiness needs engine 0.14.0 or newer");
+    expect(html).not.toContain(">Ready<");
+    // The presence rows keep working.
+    expect(html).toContain("Connected");
+    expect(html.match(/Not connected/g)).toHaveLength(2);
+  });
+
+  it("keeps an unknown readiness state neutral, never Ready", async () => {
+    vi.mocked(loadAuthStatus).mockResolvedValue(
+      ok(
+        statusWithOAuth({
+          gsc: oauthEntry("oauth_from_the_future"),
+          yandex: oauthEntry("oauth_ready"),
+          metrika: oauthEntry("oauth_ready"),
+        }),
+      ),
+    );
+    const store = new ConnectorsStore();
+    await store.load(CONFIG);
+
+    const html = render(store);
+
+    expect(html.match(/>Ready</g)).toHaveLength(2);
+    expect(html).toContain("Readiness unavailable");
+    expect(html).toContain("OAuth readiness needs engine 0.14.0 or newer");
+  });
+
+  it("treats a provider missing from oauth as unavailable", async () => {
+    vi.mocked(loadAuthStatus).mockResolvedValue(
+      ok(
+        statusWithOAuth({
+          gsc: oauthEntry("oauth_ready"),
+          yandex: oauthEntry("oauth_ready"),
+        }),
+      ),
+    );
+    const store = new ConnectorsStore();
+    await store.load(CONFIG);
+
+    const html = render(store);
+
+    expect(html.match(/>Ready</g)).toHaveLength(2);
+    expect(html).toContain("Readiness unavailable");
+  });
+
+  it("never renders a token or secret seeded in auth status", async () => {
+    vi.mocked(loadAuthStatus).mockResolvedValue(
+      ok({
+        providers: [
+          {
+            provider: "gsc_oauth",
+            secret: "SECRET-PRESENCE",
+            present: true,
+            source: "keyring",
+            expires_at: null,
+          },
+        ],
+        present: ["gsc_oauth"],
+        missing: ["yandex_oauth", "metrika_oauth"],
+        oauth: {
+          gsc: oauthEntry("oauth_ready", {
+            access_token: "SECRET-ACCESS",
+            refresh_token: "SECRET-REFRESH",
+            client_secret: "SECRET-CLIENT",
+          }),
+          yandex: oauthEntry("oauth_token_expired", {
+            access_token: "SECRET-YANDEX",
+            refresh_token: "SECRET-YANDEX-REFRESH",
+          }),
+          metrika: oauthEntry("oauth_scope_unknown", {
+            access_token: "SECRET-METRIKA",
+          }),
+        },
+      }),
+    );
+    const store = new ConnectorsStore();
+    await store.load(CONFIG);
+
+    const html = render(store);
+
+    expect(html).not.toContain("SECRET");
   });
 });

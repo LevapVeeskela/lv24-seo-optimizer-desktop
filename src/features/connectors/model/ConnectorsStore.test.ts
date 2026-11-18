@@ -268,4 +268,62 @@ describe("ConnectorsStore", () => {
     expect(store.active).toBeNull();
     expect(store.code).toBe("");
   });
+
+  it("exposes OAuth readiness per provider and clears it on reset", async () => {
+    vi.mocked(loadAuthStatus).mockResolvedValue(
+      ok({
+        providers: [
+          {
+            provider: "gsc_oauth",
+            secret: "",
+            present: true,
+            source: "keyring",
+            expires_at: null,
+          },
+        ],
+        present: ["gsc_oauth"],
+        missing: ["yandex_oauth", "metrika_oauth"],
+        oauth: {
+          gsc: {
+            state: "oauth_ready",
+            detail: "ready",
+            next_action: "",
+            expires_at: null,
+            scopes_recorded: true,
+            limitations: [],
+          },
+          yandex: {
+            state: "oauth_client_missing",
+            detail: "missing",
+            next_action: "create an app",
+            expires_at: null,
+            scopes_recorded: false,
+            limitations: [],
+          },
+        },
+      }),
+    );
+    const store = new ConnectorsStore();
+    await store.load(CONFIG);
+
+    expect(store.oauth?.available).toBe(true);
+    expect(store.readiness("gsc")?.state).toBe("oauth_ready");
+    expect(store.readiness("yandex")?.nextAction).toBe("create an app");
+    // A provider the engine skipped is not "ready".
+    expect(store.readiness("metrika")).toBeNull();
+
+    store.reset();
+
+    expect(store.oauth).toBeNull();
+    expect(store.readiness("gsc")).toBeNull();
+  });
+
+  it("marks readiness unavailable when the engine predates oauth diagnostics", async () => {
+    const store = new ConnectorsStore();
+    await store.load(CONFIG);
+
+    expect(store.oauth).toEqual({ available: false, entries: {} });
+    expect(store.readiness("gsc")).toBeNull();
+    expect(store.statusState).toBe("ready");
+  });
 });

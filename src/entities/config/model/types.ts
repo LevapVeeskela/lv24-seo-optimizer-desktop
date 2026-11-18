@@ -260,6 +260,8 @@ export interface AuthStatusData {
   providers: AuthProviderStatus[];
   present: string[];
   missing: string[];
+  /** Engine >= 0.14.0: OAuth readiness per provider; parsed defensively. */
+  oauth?: unknown;
 }
 
 export interface DoctorCheck {
