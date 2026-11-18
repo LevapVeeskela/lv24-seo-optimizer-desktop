@@ -1,5 +1,31 @@
 {
   "data": {
+    "access": {
+      "bing": {
+        "mode": "none",
+        "ready": false
+      },
+      "crux": {
+        "mode": "none",
+        "ready": false
+      },
+      "gsc": {
+        "mode": "none",
+        "ready": false
+      },
+      "metrika": {
+        "mode": "none",
+        "ready": false
+      },
+      "psi": {
+        "mode": "none",
+        "ready": false
+      },
+      "yandex": {
+        "mode": "none",
+        "ready": false
+      }
+    },
     "missing": [
       "gsc",
       "gsc_oauth",
@@ -152,7 +178,7 @@
     ]
   },
   "meta": {
-    "version": "0.15.1"
+    "version": "0.15.2"
   },
   "ok": true,
   "warnings": []

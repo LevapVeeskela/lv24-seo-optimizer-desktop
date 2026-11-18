@@ -65,7 +65,7 @@
     "data_dir": "<DATA_DIR>",
     "data_dir_declared": false,
     "data_dir_source": "working directory",
-    "version": "0.15.1"
+    "version": "0.15.2"
   },
   "ok": true,
   "warnings": [
