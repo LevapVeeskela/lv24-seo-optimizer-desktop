@@ -215,6 +215,8 @@ export const ConnectorsCard = observer(function ConnectorsCard({
           const readinessReported = store.oauth?.available === true;
           const isActive = store.active === id;
           const phase = isActive ? store.phase : "idle";
+          const oauthOptional =
+            presence === "connected" && readiness?.state === "oauth_client_missing";
           const showYandexPanel =
             id !== "gsc" &&
             isActive &&
@@ -239,8 +241,12 @@ export const ConnectorsCard = observer(function ConnectorsCard({
                     {t(presenceLabel(presence))}
                   </Badge>
                   {readiness || readinessReported ? (
-                    <Badge tone={readinessTone(readiness)}>
-                      {t(readinessLabelKey(readiness))}
+                    <Badge tone={oauthOptional ? "neutral" : readinessTone(readiness)}>
+                      {t(
+                        oauthOptional
+                          ? "connectors.oauth.optional"
+                          : readinessLabelKey(readiness),
+                      )}
                     </Badge>
                   ) : null}
                   <Button
@@ -254,7 +260,9 @@ export const ConnectorsCard = observer(function ConnectorsCard({
                 </div>
               </div>
 
-              {readiness ? (
+              {oauthOptional ? (
+                <p className="muted small">{t("connectors.oauth.optionalHint")}</p>
+              ) : readiness ? (
                 <ReadinessDetails readiness={readiness} />
               ) : readinessReported ? (
                 <p className="muted small">

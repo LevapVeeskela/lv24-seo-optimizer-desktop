@@ -815,6 +815,8 @@ export const zh: Messages = {
   "connectors.oauth.redirectInvalid": "回调地址无效",
   "connectors.oauth.unavailable": "无法检查就绪状态",
   "connectors.oauth.unavailableHint": "OAuth 就绪诊断需要引擎 0.14.0 或更高版本；上方的连接状态仍然可用。",
+  "connectors.oauth.optional": "OAuth 未配置（可选）",
+  "connectors.oauth.optionalHint": "该数据源已通过保存的令牌或服务账号连接。OAuth 仅用于自动刷新令牌。",
   "connectors.oauth.expiredHint": "已保存的 refresh token 会在下次读取时续期 access token；没有 refresh token 时请重新连接。",
   "connectors.oauth.expiresAt": "令牌到期",
   "connectors.oauth.scopesRecorded": "已记录权限范围",

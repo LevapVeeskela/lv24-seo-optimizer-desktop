@@ -815,6 +815,8 @@ export const ru: Messages = {
   "connectors.oauth.redirectInvalid": "Неверный redirect",
   "connectors.oauth.unavailable": "Диагностика недоступна",
   "connectors.oauth.unavailableHint": "Диагностика OAuth требует движок 0.14.0 или новее; статус подключения выше продолжает работать.",
+  "connectors.oauth.optional": "OAuth не настроен (опционально)",
+  "connectors.oauth.optionalHint": "Провайдер уже подключён по сохранённому токену или сервисному аккаунту. OAuth нужен только для автообновления токена.",
   "connectors.oauth.expiredHint": "Сохранённый refresh token обновит access token при следующем чтении; без него запустите «Подключить» заново.",
   "connectors.oauth.expiresAt": "Токен истекает",
   "connectors.oauth.scopesRecorded": "Права записаны",

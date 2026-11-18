@@ -203,6 +203,30 @@ describe("ConnectorsCard", () => {
     expect(html).toContain("disabled");
   });
 
+  it("marks OAuth as optional when the provider already has a token", async () => {
+    vi.mocked(loadAuthStatus).mockResolvedValue(
+      ok(
+        statusWithOAuth({
+          gsc: oauthEntry("oauth_client_missing", {
+            detail: "OAuth client_id is not configured",
+            next_action: "create an OAuth app at https://console.cloud.google.com/apis/credentials",
+          }),
+        }),
+      ),
+    );
+    const store = new ConnectorsStore();
+    await store.load(CONFIG);
+
+    const html = render(store);
+
+    expect(html).toContain("OAuth not configured (optional)");
+    expect(html).toContain(
+      "This provider is already connected with a saved token or service account",
+    );
+    expect(html).not.toContain("Client ID missing");
+    expect(html).not.toContain("create an OAuth app at");
+  });
+
   it("renders readiness state, detail, next action, expiry and scopes", async () => {
     vi.mocked(loadAuthStatus).mockResolvedValue(
       ok(

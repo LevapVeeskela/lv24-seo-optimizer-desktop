@@ -744,6 +744,8 @@ export const en = {
   "connectors.oauth.redirectInvalid": "Redirect invalid",
   "connectors.oauth.unavailable": "Readiness unavailable",
   "connectors.oauth.unavailableHint": "OAuth readiness needs engine 0.14.0 or newer; the connection status above still works.",
+  "connectors.oauth.optional": "OAuth not configured (optional)",
+  "connectors.oauth.optionalHint": "This provider is already connected with a saved token or service account. OAuth is only needed for automatic token refresh.",
   "connectors.oauth.expiredHint": "A stored refresh token renews the access token on the next read; without one, run Connect again.",
   "connectors.oauth.expiresAt": "Token expires",
   "connectors.oauth.scopesRecorded": "Scopes recorded",
