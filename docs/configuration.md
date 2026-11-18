@@ -1,6 +1,6 @@
 # Configuration
 
-Status: **desktop configuration contract for `0.9.2` (current release, 2026-11-18; `0.9.1` is the
+Status: **desktop configuration contract for `0.9.3` (current release, 2026-11-18; `0.9.2` is the
 previous published line).** The
 settings screens implement this contract; the engine-side `seo.toml` semantics below are those of the
 pinned `lv24-seo 0.14.0`. When the desktop and the engine disagree, the engine is authoritative and the
