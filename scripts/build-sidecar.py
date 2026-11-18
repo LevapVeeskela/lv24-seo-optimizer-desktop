@@ -114,7 +114,7 @@ def _probe_skills(
         "d = distribution('lv24-seo')\n"
         "print(d.locate_file('lv24_seo_skills'))\n"
     )
-    command = [uv, "run", "--python", python, "--with", engine_spec]
+    command = [uv, "run", "--refresh-package", "lv24-seo", "--python", python, "--with", engine_spec]
     for spec in with_specs:
         command.extend(["--with", spec])
     command.extend(["python", "-c", code])
@@ -260,6 +260,8 @@ def main(argv: list[str] | None = None) -> int:
         command = [
             uv,
             "run",
+            "--refresh-package",
+            "lv24-seo",
             "--python",
             python,
             "--with",
