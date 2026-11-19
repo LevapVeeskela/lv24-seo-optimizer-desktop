@@ -18,12 +18,13 @@ use crate::error::{AppError, AppResult, ErrorInfo};
 use crate::paths;
 use crate::settings::{Settings, SettingsPatch, SettingsStore};
 
-/// 0.9.7 ships engine 0.15.2, whose `auth status` reports per-provider data access so saved
-/// tokens and service accounts show as connected; it also carries the four crawl rule packs
-/// (security headers, TLS, Schema.org, accessibility), the hidden Windows scheduled-job launcher,
-/// the OAuth readiness diagnostics and the Indexing card. An older sidecar returns a typed
+/// 0.9.9 ships engine 0.15.3, whose crawl fixes (TLS facts read before the body, CJK word counts)
+/// and report-email restyle change no CLI contract; `auth status` still reports per-provider data
+/// access so saved tokens and service accounts show as connected. It also carries the four crawl
+/// rule packs (security headers, TLS, Schema.org, accessibility), the hidden Windows scheduled-job
+/// launcher, the OAuth readiness diagnostics and the Indexing card. An older sidecar returns a typed
 /// command error instead of a fake success.
-pub const MIN_ENGINE_VERSION: &str = "0.15.2";
+pub const MIN_ENGINE_VERSION: &str = "0.15.3";
 
 /// Progress event emitted by the Rust updater while it downloads a release.
 pub const UPDATE_PROGRESS_EVENT: &str = "update://progress";
@@ -2776,9 +2777,10 @@ mod tests {
 
     #[test]
     fn engine_version_comparison_is_numeric() {
-        assert_eq!(MIN_ENGINE_VERSION, "0.15.2");
+        assert_eq!(MIN_ENGINE_VERSION, "0.15.3");
         assert!(version_at_least(MIN_ENGINE_VERSION, MIN_ENGINE_VERSION));
-        assert!(version_at_least("0.15.2", MIN_ENGINE_VERSION));
+        assert!(version_at_least("0.15.3", MIN_ENGINE_VERSION));
+        assert!(!version_at_least("0.15.2", MIN_ENGINE_VERSION));
         assert!(!version_at_least("0.14.1", MIN_ENGINE_VERSION));
         assert!(!version_at_least("0.14.0", MIN_ENGINE_VERSION));
         assert!(version_at_least("0.4.0", "0.4.0"));
