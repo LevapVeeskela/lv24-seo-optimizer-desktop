@@ -10,19 +10,18 @@ its checksums, its updater signatures or its engine version does not ship.
 
 ## 1. Release state
 
-`0.2.0` was the first multi-platform release; `0.9.9` is prepared for release (2026-11-20) and
-`0.9.8` is the latest published release (2026-11-18). `0.9.7`, `0.9.6`, `0.9.5`, `0.9.4`, `0.9.3`,
-`0.9.2`, `0.9.1`, `0.9.0`, `0.8.0`, `0.7.0`, `0.6.0`, `0.5.0`, `0.4.0`, `0.3.0` and `0.2.3` are kept
-for rollback:
+`0.2.0` was the first multi-platform release; `0.9.9` is the latest published release (2026-11-20)
+and `0.9.8` is the previous line. `0.9.7`, `0.9.6`, `0.9.5`, `0.9.4`, `0.9.3`, `0.9.2`, `0.9.1`,
+`0.9.0`, `0.8.0`, `0.7.0`, `0.6.0`, `0.5.0`, `0.4.0`, `0.3.0` and `0.2.3` are kept for rollback:
 
 - **Windows x64:** unsigned NSIS installer, signed updater `.exe`, portable ZIP.
 - **Linux x64:** AppImage (signed updater), deb and rpm (manual-only).
 - **macOS arm64/x64:** DMG plus signed `.app.tar.gz` updater archives.
 - **Common:** `latest.json` and `SHA256SUMS.txt`.
 
-Release notes: [`docs/releases/0.9.9.md`](releases/0.9.9.md) for the next release,
-[`docs/releases/0.9.8.md`](releases/0.9.8.md) for the current published one and
-[`docs/releases/0.9.7.md`](releases/0.9.7.md) for the previous line.
+Release notes: [`docs/releases/0.9.9.md`](releases/0.9.9.md) for the current release,
+[`docs/releases/0.9.8.md`](releases/0.9.8.md) for the previous line and
+[`docs/releases/0.9.7.md`](releases/0.9.7.md) for the one before that.
 
 Auto-update is enabled for Windows NSIS, macOS `.app` and Linux AppImage. deb, rpm, MSI and the
 portable ZIP are manual-only; the UI disables in-app installation for those bundle types and links
@@ -636,7 +635,7 @@ The release job:
    through `0.7.0 → 0.8.0` are verified end-to-end on Windows NSIS, including the Rust-side version
    re-check and a running sidecar stopped before the installer. The relaunched `0.8.0` build reports
    Desktop `0.8.0`, Engine `0.10.0` and loads the real `lv24.by` workspace. `0.8.0 → 0.9.0` was not
-   re-run for this line; `0.9.8 → 0.9.9` is the next update to verify after publish. The macOS `.app`
+   re-run for this line; `0.9.8 → 0.9.9` is the update to verify after publish. The macOS `.app`
    and Linux AppImage paths were not re-run for `0.8.0` either. Cancellation during download and
    `UPDATE_ENGINE_BUSY` when cleanup is blocked are covered by unit tests. Do not advertise
    auto-update for deb/rpm/MSI/portable.

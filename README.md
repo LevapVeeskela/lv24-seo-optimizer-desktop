@@ -9,9 +9,9 @@ scraping.
 [![Status: pre-release](https://img.shields.io/badge/status-pre--release-orange.svg)](#public-status)
 [![Engine: lv24-seo 0.15.3](https://img.shields.io/badge/engine-lv24--seo%200.15.3-informational.svg)](docs/releases/0.9.9.md)
 
-> **0.9.9 prepared (2026-11-20).** `0.9.9` is the next release; `0.9.8`, `0.9.7`, `0.9.6`, `0.9.5`,
-> `0.9.4`, `0.9.3`, `0.9.2`, `0.9.1`, `0.9.0`, `0.8.0`, `0.7.0`, `0.6.0`, `0.5.0`, `0.4.0` and
-> `0.3.0` remain available for rollback. Windows NSIS, macOS `.app` and Linux AppImage can
+> **0.9.9 released (2026-11-20).** `0.9.9` is the latest published line; `0.9.8`, `0.9.7`, `0.9.6`,
+> `0.9.5`, `0.9.4`, `0.9.3`, `0.9.2`, `0.9.1`, `0.9.0`, `0.8.0`, `0.7.0`, `0.6.0`, `0.5.0`,
+> `0.4.0` and `0.3.0` remain available for rollback. Windows NSIS, macOS `.app` and Linux AppImage can
 > auto-update from `0.2.0` onward; deb, rpm, MSI and the portable ZIP are manual-only. `0.1.0` has
 > no updater and must be upgraded manually once. `0.9.9` bundles `lv24-seo 0.15.3`, keeps the four
 > crawl rule packs and raises `MIN_ENGINE_VERSION` to `0.15.3`; the engine keeps TLS facts on
@@ -147,11 +147,11 @@ The full inputs, outputs and limits are in the engine's
 ## Install
 
 Download from [Releases](https://github.com/LevapVeeskela/lv24-seo-optimizer-desktop/releases).
-The latest published line is `0.9.8`; `0.9.9` is prepared and not published yet. Full notes, install
+The latest published line is `0.9.9`. Full notes, install
 steps and limitations:
-[`docs/releases/0.9.9.md`](docs/releases/0.9.9.md) for the next release,
-[`docs/releases/0.9.8.md`](docs/releases/0.9.8.md) for the current published one and
-[`docs/releases/0.9.7.md`](docs/releases/0.9.7.md) for the previous one. `0.9.8`, `0.9.7`, `0.9.6`,
+[`docs/releases/0.9.9.md`](docs/releases/0.9.9.md) for the current release,
+[`docs/releases/0.9.8.md`](docs/releases/0.9.8.md) for the previous one and
+[`docs/releases/0.9.7.md`](docs/releases/0.9.7.md) for the one before that. `0.9.8`, `0.9.7`, `0.9.6`,
 `0.9.5`, `0.9.4`, `0.9.3`, `0.9.2`, `0.9.1`, `0.9.0`, `0.8.0`, `0.7.0`, `0.6.0`, `0.5.0` and
 `0.4.0` remain available for rollback.
 
@@ -661,9 +661,9 @@ build from source and sign it with your own certificate. See [`docs/release.md`]
 | Cancellable background runs (`run_cancel`, run banner) | implemented in `0.6.0` |
 | React screens (onboarding, dashboard, crawl, logs, tasks, portfolio, settings, configuration, reports, recommendations, integrations, diagnostics, backup) | implemented |
 | Bundled onedir sidecar | all four targets built in CI and by the release workflow; the Windows x64 pin records the reviewed `0.15.3` build, Linux/macOS reviewed pins remain `null` and are covered by rebuild-aware CI checksum reports |
-| Published installers | `0.9.8`: Windows x64, Linux x64, macOS arm64/x64 (`0.9.9` is prepared, not published); `0.9.7`, `0.9.6`, `0.9.5`, `0.9.4`, `0.9.3`, `0.9.2`, `0.9.1`, `0.9.0`, `0.8.0`, `0.7.0`, `0.6.0`, `0.5.0`, `0.4.0` and `0.3.0` remain available for rollback |
+| Published installers | `0.9.9`: Windows x64, Linux x64, macOS arm64/x64; `0.9.8`, `0.9.7`, `0.9.6`, `0.9.5`, `0.9.4`, `0.9.3`, `0.9.2`, `0.9.1`, `0.9.0`, `0.8.0`, `0.7.0`, `0.6.0`, `0.5.0`, `0.4.0` and `0.3.0` remain available for rollback |
 | Install checks | `0.2.2`: macOS 27.2 arm64 DMG installed and launched with engine `0.5.2`; deb and AppImage (FUSE mount and extract-and-run fallback) on Ubuntu 24.04 and rpm on Fedora 45 installed and launched with engine `0.5.2`; Linux updater signatures verified against the embedded key |
-| Auto-update | Windows NSIS, macOS `.app`, Linux AppImage; `0.2.0 → 0.2.1` through `0.8.0 → 0.9.0` verified end-to-end on Windows NSIS; `0.9.8 → 0.9.9` is the next in-app update; the macOS/Linux `0.9.9` update paths still need a re-run on a machine with the previous release installed; deb/rpm/MSI/portable ZIP are manual |
+| Auto-update | Windows NSIS, macOS `.app`, Linux AppImage; `0.2.0 → 0.2.1` through `0.8.0 → 0.9.0` verified end-to-end on Windows NSIS; `0.9.8 → 0.9.9` is published and its Windows NSIS verification is pending; the macOS/Linux `0.9.9` update paths still need a re-run on a machine with the previous release installed; deb/rpm/MSI/portable ZIP are manual |
 | `lv24-seo stats --json` engine command | shipped since `lv24-seo 0.5.2`; bundled `0.15.3`; fixture committed |
 
 `0.1.0` remains available as a Windows-only preview. It has no updater; install `0.9.9` manually
