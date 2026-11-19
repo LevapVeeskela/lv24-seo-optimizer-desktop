@@ -36,7 +36,7 @@ function portableFixture() {
     engineDir,
     buildInfo,
     stageRoot: join(root, "release", "portable"),
-    zipPath: join(root, "release", "out", "LV24-SEO-Optimizer_0.9.8_x64-portable.zip"),
+    zipPath: join(root, "release", "out", "LV24-SEO-Optimizer_0.9.9_x64-portable.zip"),
   };
 }
 
@@ -78,7 +78,7 @@ describe("package-portable", () => {
     );
 
     const readme = readFileSync(join(stageDir, "README.txt"), "utf8");
-    expect(readme).toContain("LV24 SEO Optimizer Desktop 0.9.8");
+    expect(readme).toContain("LV24 SEO Optimizer Desktop 0.9.9");
     expect(readme).toContain("Engine: lv24-seo 0.5.2");
     expect(readme).toContain("Verify the SHA-256 checksum published with the release");
     expect(readme).toContain("\r\n");
