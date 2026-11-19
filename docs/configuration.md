@@ -1,7 +1,7 @@
 # Configuration
 
-Status: **desktop configuration contract for `0.9.9` (next release, prepared 2026-11-20; `0.9.8` is
-the current published line).** The
+Status: **desktop configuration contract for `0.9.9` (current release, 2026-11-20; `0.9.8` is
+the previous published line).** The
 settings screens implement this contract; the engine-side `seo.toml` semantics below are those of the
 pinned `lv24-seo 0.15.3`. When the desktop and the engine disagree, the engine is authoritative and the
 desktop must show its validation error instead of silently “fixing” the file. The desktop's
