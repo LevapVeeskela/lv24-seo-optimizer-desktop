@@ -634,11 +634,12 @@ The release job:
 6. Verify the in-app update on a machine with the previous release installed. `0.2.0 → 0.2.1`
    through `0.7.0 → 0.8.0` are verified end-to-end on Windows NSIS, including the Rust-side version
    re-check and a running sidecar stopped before the installer. The relaunched `0.8.0` build reports
-   Desktop `0.8.0`, Engine `0.10.0` and loads the real `lv24.by` workspace. `0.8.0 → 0.9.0` was not
-   re-run for this line; `0.9.8 → 0.9.9` is the update to verify after publish. The macOS `.app`
-   and Linux AppImage paths were not re-run for `0.8.0` either. Cancellation during download and
-   `UPDATE_ENGINE_BUSY` when cleanup is blocked are covered by unit tests. Do not advertise
-   auto-update for deb/rpm/MSI/portable.
+   Desktop `0.8.0`, Engine `0.10.0` and loads the real `lv24.by` workspace. `0.9.8 → 0.9.9` was
+   verified end-to-end on Windows NSIS on 2026-11-19: the app found 0.9.9, downloaded the signed
+   NSIS asset, installed and relaunched as Desktop `0.9.9` / Engine `0.15.3`; the second check
+   returned no update. The macOS `.app` and Linux AppImage paths were not re-run for this line.
+   Cancellation during download and `UPDATE_ENGINE_BUSY` when cleanup is blocked are covered by
+   unit tests. Do not advertise auto-update for deb/rpm/MSI/portable.
 7. Announce with the unsigned-build instructions, the manual-only cases and the checksum file.
 
 ### Post-release
