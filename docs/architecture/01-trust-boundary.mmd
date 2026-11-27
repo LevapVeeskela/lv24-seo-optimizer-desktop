@@ -1,0 +1,6 @@
+flowchart LR
+  webview["Webview (untrusted)"] -->|allow-listed IPC| shell["Rust shell (authorization)"]
+  shell -->|argv array and stdin| engine["lv24-seo child process"]
+  engine -->|HTTPS| providers["Provider APIs"]
+  shell -->|atomic replace| config[("seo.toml + backups")]
+  engine --> store[("SQLite history")]

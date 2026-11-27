@@ -1,4 +1,8 @@
-# Architecture
+# Architecture details
+
+Companion to [`ARCHITECTURE.md`](ARCHITECTURE.md): this file keeps the full command-by-command
+implementation contract, including the allow-lists and per-command argument rules. The canonical
+summary, diagrams and invariants are in `ARCHITECTURE.md`.
 
 Status: **implementation contract for `0.9.9` (current release, 2026-11-20; `0.9.8` is the previous
 published line).** The Rust command bridge and product screens are implemented in this
@@ -311,7 +315,7 @@ The AppImage step is the fallback that keeps an AppImage build from silently dro
 `resource_dir()` points somewhere other than the mounted engine tree.
 
 Nothing is downloaded automatically. The shell runs `lv24-seo version --json`, records the path,
-source and version, and compares the version with `MIN_ENGINE_VERSION` (`0.13.1`). An older engine is
+source and version, and compares the version with `MIN_ENGINE_VERSION` (`0.15.3`). An older engine is
 marked `compatible: false`; the UI treats the engine as offline and shows the standard offline
 notice. It does not silently downgrade or run the command. A newer engine passes the gate but is not
 the release-tested pin.

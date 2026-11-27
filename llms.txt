@@ -1,0 +1,30 @@
+# LV24 SEO Optimizer Desktop
+
+> A local, offline-first Tauri v2 desktop shell over the lv24-seo CLI engine; no cloud account,
+> telemetry, local HTTP API or provider logic of its own.
+
+## Docs
+
+- [Architecture](https://github.com/LevapVeeskela/lv24-seo-optimizer-desktop/blob/main/docs/ARCHITECTURE.md):
+  trust boundary, single JSON envelope, engine resolution and version gate, config writes, signed updates.
+- [Architecture details](https://github.com/LevapVeeskela/lv24-seo-optimizer-desktop/blob/main/docs/architecture-details.md):
+  command-by-command bridge contract and argument allow-lists.
+- [Configuration](https://github.com/LevapVeeskela/lv24-seo-optimizer-desktop/blob/main/docs/configuration.md):
+  settings model, patch/backup/atomic save, reserved fields.
+- [Security](https://github.com/LevapVeeskela/lv24-seo-optimizer-desktop/blob/main/docs/security.md):
+  secrets, path approvals, CSP and update trust.
+- [Release runbook](https://github.com/LevapVeeskela/lv24-seo-optimizer-desktop/blob/main/docs/release.md):
+  versioning, CI gates, manual release, assets and rollback.
+- [Current release 0.9.9](https://github.com/LevapVeeskela/lv24-seo-optimizer-desktop/blob/main/docs/releases/0.9.9.md):
+  bundled engine 0.15.3 and known limits.
+- [Documentation portal](https://seo.lv24.by/desktop/): desktop overview in English, Russian and Chinese.
+- [Agent entry](https://github.com/LevapVeeskela/lv24-seo-optimizer-desktop/blob/main/AGENTS.md):
+  commands, invariants, contract-drift rule, version checklist.
+
+## Optional
+
+- [Repository](https://github.com/LevapVeeskela/lv24-seo-optimizer-desktop): source, releases and issues.
+- [Engine repository](https://github.com/LevapVeeskela/lv24-seo-optimizer): provider adapters, crawl,
+  reports, SQLite schema and write gates.
+- [Engine MCP surface](https://github.com/LevapVeeskela/lv24-seo-optimizer/blob/main/docs/mcp.md):
+  12 tools, 3 resources, 3 prompts.

@@ -1,0 +1,6 @@
+flowchart LR
+  start["App startup"] --> resolve["Resolve engine candidate"]
+  resolve -->|found| gate{"Version >= 0.15.3?"}
+  resolve -->|not found| offline["Engine offline notice"]
+  gate -->|pass| ready["Compatible engine"]
+  gate -->|fail| offline

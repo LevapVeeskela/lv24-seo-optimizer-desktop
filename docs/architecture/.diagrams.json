@@ -1,0 +1,32 @@
+{
+  "version": 1,
+  "diagrams": {
+    "trust-boundary": {
+      "index": "01",
+      "title": "Trust boundary",
+      "slug": "trust-boundary",
+      "hash": "85625e0ec8367932",
+      "updatedAt": "2026-11-27",
+      "png": true,
+      "svg": true
+    },
+    "engine-resolution": {
+      "index": "02",
+      "title": "Engine resolution",
+      "slug": "engine-resolution",
+      "hash": "b17d62c268d5ecd4",
+      "updatedAt": "2026-11-27",
+      "png": true,
+      "svg": true
+    },
+    "update-pipeline": {
+      "index": "03",
+      "title": "Update pipeline",
+      "slug": "update-pipeline",
+      "hash": "3623f96d457d982d",
+      "updatedAt": "2026-11-27",
+      "png": true,
+      "svg": true
+    }
+  }
+}

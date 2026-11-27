@@ -1,0 +1,5 @@
+flowchart LR
+  check["Check latest.json"] -->|startup or manual| ui["User reviews and confirms"]
+  ui -->|confirm| rust["Rust verifies and installs"]
+  rust -->|ok| restart["App restarts updated"]
+  rust -->|mismatch| blocked["Block and link release page"]

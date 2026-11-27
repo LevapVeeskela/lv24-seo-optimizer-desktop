@@ -18,7 +18,7 @@ Desktop shell and sidecar work additionally needs Rust stable, Python 3.12 and
 
 ```bash
 npm run tauri dev
-python scripts/build-sidecar.py --engine-version 0.10.0
+python scripts/build-sidecar.py --engine-version 0.15.3
 node scripts/check-contracts.mjs
 cd src-tauri && cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test
 ```
@@ -86,7 +86,7 @@ cd src-tauri && cargo fmt --check && cargo clippy --all-targets -- -D warnings &
   minutes, paid storage, paid signing or paid third-party services.
 - The desktop workflow is manual (`workflow_dispatch`) and owner-gated. Do not add push, tag or
   release triggers that spend minutes unexpectedly.
-- The latest published line is `0.8.0` (2026-11-17); `0.7.0` is the previous line; older lines
+- The latest published line is `0.9.9` (2026-11-20); `0.9.8` is the previous line; older lines
   stay on Releases for rollback.
 - Artifact retention is 7 days.
 - Keep hard budgets and overage blocking enabled. A green local build is not proof that a remote

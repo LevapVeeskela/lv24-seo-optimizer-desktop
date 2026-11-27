@@ -312,7 +312,7 @@ lv24-seo doctor --json
 ```
 
 The desktop calls the same commands with an absolute `--config` and parses the envelope. See
-[`docs/architecture.md`](architecture.md#4-command-bridge) for the bridge contract.
+[`docs/architecture-details.md`](architecture-details.md#4-command-bridge) for the bridge contract.
 
 ## 11. Troubleshooting
 
